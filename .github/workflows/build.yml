@@ -25,17 +25,27 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build debug APK
-        run: gradle assembleDebug --no-daemon --stacktrace
+      - name: Decode signing keystore
+        env:
+          KS_B64: ${{ secrets.NEBULA_KEYSTORE_B64 }}
+        run: printf '%s' "$KS_B64" | base64 -d > "$RUNNER_TEMP/nebula-release.jks"
+
+      - name: Build release APK
+        env:
+          NEBULA_KEYSTORE_FILE: ${{ runner.temp }}/nebula-release.jks
+          NEBULA_STORE_PASSWORD: ${{ secrets.NEBULA_STORE_PASSWORD }}
+          NEBULA_KEY_ALIAS: ${{ secrets.NEBULA_KEY_ALIAS }}
+          NEBULA_KEY_PASSWORD: ${{ secrets.NEBULA_KEY_PASSWORD }}
+        run: gradle assembleRelease --no-daemon --stacktrace
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          APK=$(find app/build/outputs/apk -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.6.0.apk
+          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
+          cp "$APK" Nebula-1.7.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.6.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.6.0 Nebula-1.6.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.6.0" \
-            --notes "Search: catalogs that support it now show a search bar — type a team, league, or channel and hit search to find events fast. Install (phone): allow 'install unknown apps' and tap the APK. Install (TV): open the Downloader app and enter code 7664693 (or da.gd/nebulaapk) — or sideload via 'adb install'. Nebula.apk is a stable-named copy so releases/latest/download/Nebula.apk, code 7664693 and da.gd/nebulaapk always point at the newest build."
+          gh release delete v1.7.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.7.0 Nebula-1.7.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.7.0" \
+            --notes "One-tap in-app updates: the update card now downloads and installs the new version itself — no browser, no file managing. IMPORTANT: this build switches to a permanent signing key, so updating to v1.7.0 needs ONE last manual uninstall + reinstall. After that, every future update installs right over the top with no uninstall. Install (phone): allow 'install unknown apps' and tap the APK. Install (TV): Downloader code 7664693 (or da.gd/nebulaapk). Nebula.apk is a stable-named copy so releases/latest/download/Nebula.apk, code 7664693 and da.gd/nebulaapk always point at the newest build."

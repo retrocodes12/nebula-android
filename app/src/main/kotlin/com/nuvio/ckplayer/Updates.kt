@@ -1,10 +1,19 @@
 package com.nuvio.ckplayer
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 
-/** Checks GitHub Releases for a newer Nebula build than the one installed. */
+/** Checks GitHub Releases for a newer Nebula build, and downloads/installs it in-app. */
 object Updates {
     private const val LATEST_API = "https://api.github.com/repos/retrocodes12/nebula-android/releases/latest"
     const val APK_URL = "https://github.com/retrocodes12/nebula-android/releases/latest/download/Nebula.apk"
@@ -36,5 +45,61 @@ object Updates {
             if (rv != cv) return rv > cv
         }
         return false
+    }
+
+    /** Download the latest APK into cacheDir, reporting 0..100 progress. Returns the file, or null on failure. */
+    suspend fun downloadApk(context: Context, onProgress: (Int) -> Unit): File? = withContext(Dispatchers.IO) {
+        try {
+            val out = File(context.cacheDir, "nebula-update.apk")
+            val conn = (URL(APK_URL).openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = true
+                connectTimeout = 20000
+                readTimeout = 30000
+                setRequestProperty("User-Agent", "NebulaPlayer")
+            }
+            conn.connect()
+            if (conn.responseCode !in 200..299) { conn.disconnect(); return@withContext null }
+            val total = conn.contentLength.toLong()
+            conn.inputStream.use { input ->
+                out.outputStream().use { output ->
+                    val buf = ByteArray(64 * 1024)
+                    var readTotal = 0L
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        output.write(buf, 0, n)
+                        readTotal += n
+                        if (total > 0) onProgress(((readTotal * 100) / total).toInt().coerceIn(0, 100))
+                    }
+                }
+            }
+            conn.disconnect()
+            if (out.length() > 0L) out else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Hand the downloaded APK to the system installer (installs over the current app).
+     * Returns false when the app still needs the "install unknown apps" permission —
+     * in that case the relevant Settings screen is opened so the user can grant it, then retry.
+     */
+    fun installApk(context: Context, apk: File): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
+            runCatching {
+                context.startActivity(
+                    Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
+            return false
+        }
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.updates", apk)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return runCatching { context.startActivity(intent); true }.getOrDefault(false)
     }
 }
