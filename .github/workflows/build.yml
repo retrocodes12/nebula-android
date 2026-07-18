@@ -48,9 +48,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.7.0.apk
+          cp "$APK" Nebula-1.8.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.7.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.7.0 Nebula-1.7.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.7.0" \
-            --notes "One-tap in-app updates: the update card now downloads and installs the new version itself — no browser, no file managing. IMPORTANT: this build switches to a permanent signing key, so updating to v1.7.0 needs ONE last manual uninstall + reinstall. After that, every future update installs right over the top with no uninstall. Install (phone): allow 'install unknown apps' and tap the APK. Install (TV): Downloader code 7664693 (or da.gd/nebulaapk). Nebula.apk is a stable-named copy so releases/latest/download/Nebula.apk, code 7664693 and da.gd/nebulaapk always point at the newest build."
+          gh release delete v1.8.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.8.0 Nebula-1.8.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.8.0" \
+            --notes "Auto-download updates: the update card now downloads the new version in the background the moment it appears, so it's ready to install with one tap (no browser, no waiting). Signed with the same permanent key as v1.7.0, so this and every future update installs over the top — no uninstall. (Only if you're on a pre-v1.7.0 build do you need ONE manual uninstall + reinstall to move onto the permanent key.) Install (phone): allow 'install unknown apps' and tap the APK. Install (TV): Downloader code 7664693 (or da.gd/nebulaapk). Nebula.apk is a stable-named copy so releases/latest/download/Nebula.apk, code 7664693 and da.gd/nebulaapk always point at the newest build."

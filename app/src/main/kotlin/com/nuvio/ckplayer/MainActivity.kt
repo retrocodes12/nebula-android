@@ -93,6 +93,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
+import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -284,14 +285,29 @@ private fun thumbRatio(shape: String): Float = when (shape) {
     else -> 2f / 3f
 }
 
-/** "Update available" banner shown on Home; downloads + installs the new APK in-app. */
+/**
+ * "Update available" banner shown on Home. Auto-downloads the APK in the
+ * background as soon as it appears (cached per version), then Install is one tap.
+ */
 @Composable
 private fun UpdateCard(version: String, notes: String, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    var downloading by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf(0) }
+    var apk by remember { mutableStateOf<File?>(null) }
+    var phase by remember { mutableStateOf("idle") } // idle · downloading · ready · failed
     var message by remember { mutableStateOf<String?>(null) }
+
+    suspend fun download() {
+        phase = "downloading"; progress = 0; message = null
+        val f = Updates.downloadApk(ctx, version) { progress = it }
+        if (f != null) { apk = f; phase = "ready" } else { phase = "failed"; message = "Download failed — tap Retry" }
+    }
+    // Kick the download off automatically; reuse a completed one if already cached.
+    LaunchedEffect(version) {
+        val cached = Updates.cachedApk(ctx, version)
+        if (cached != null) { apk = cached; phase = "ready" } else download()
+    }
 
     Row(
         Modifier.fillMaxWidth()
@@ -303,10 +319,10 @@ private fun UpdateCard(version: String, notes: String, onDismiss: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text("Update available · v$version", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
             Text(
-                when {
-                    downloading -> "Downloading… $progress%"
-                    message != null -> message!!
-                    else -> notes.ifEmpty { "Tap Update to install the latest Nebula." }
+                message ?: when (phase) {
+                    "downloading" -> "Downloading… $progress%"
+                    "ready" -> "Ready — tap Install."
+                    else -> notes.ifEmpty { "A new version is available." }
                 },
                 color = Color(0xFFFFE0E0), fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 2.dp),
@@ -314,21 +330,24 @@ private fun UpdateCard(version: String, notes: String, onDismiss: () -> Unit) {
         }
         Button(
             onClick = {
-                if (downloading) return@Button
-                downloading = true; progress = 0; message = null
-                scope.launch {
-                    val apk = Updates.downloadApk(ctx) { progress = it }
-                    downloading = false
-                    when {
-                        apk == null -> message = "Download failed — tap Retry"
-                        !Updates.installApk(ctx, apk) -> message = "Allow installs, then tap Update again"
+                when (phase) {
+                    "downloading" -> {}
+                    "ready" -> {
+                        val f = apk
+                        if (f != null && !Updates.installApk(ctx, f)) message = "Allow installs, then tap Install"
                     }
+                    else -> scope.launch { download() }
                 }
             },
-            enabled = !downloading,
+            enabled = phase != "downloading",
             colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Red),
             shape = RoundedCornerShape(9.dp),
-        ) { Text(if (message != null) "Retry" else "Update", fontWeight = FontWeight.Bold) }
+        ) {
+            Text(
+                when (phase) { "ready" -> "Install"; "downloading" -> "···"; "failed" -> "Retry"; else -> "Update" },
+                fontWeight = FontWeight.Bold,
+            )
+        }
         IconButton(onClick = onDismiss) {
             Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = Color(0xFFFFD9D9))
         }
