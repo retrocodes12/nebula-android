@@ -47,10 +47,21 @@ object Updates {
         return false
     }
 
-    /** Download the latest APK into cacheDir, reporting 0..100 progress. Returns the file, or null on failure. */
-    suspend fun downloadApk(context: Context, onProgress: (Int) -> Unit): File? = withContext(Dispatchers.IO) {
+    private fun apkFile(context: Context, version: String) = File(context.cacheDir, "nebula-update-$version.apk")
+
+    /** A previously-completed download for this version, if one is cached. */
+    fun cachedApk(context: Context, version: String): File? =
+        apkFile(context, version).takeIf { it.exists() && it.length() > 0L }
+
+    /**
+     * Download this version's APK into cacheDir, reporting 0..100 progress.
+     * Writes to a .part file and promotes it only on success (so a cached file is
+     * always complete), and clears downloads for other versions. Returns the file or null.
+     */
+    suspend fun downloadApk(context: Context, version: String, onProgress: (Int) -> Unit): File? = withContext(Dispatchers.IO) {
         try {
-            val out = File(context.cacheDir, "nebula-update.apk")
+            val out = apkFile(context, version)
+            val tmp = File(context.cacheDir, "nebula-update-$version.part")
             val conn = (URL(APK_URL).openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = true
                 connectTimeout = 20000
@@ -61,7 +72,7 @@ object Updates {
             if (conn.responseCode !in 200..299) { conn.disconnect(); return@withContext null }
             val total = conn.contentLength.toLong()
             conn.inputStream.use { input ->
-                out.outputStream().use { output ->
+                tmp.outputStream().use { output ->
                     val buf = ByteArray(64 * 1024)
                     var readTotal = 0L
                     while (true) {
@@ -74,7 +85,12 @@ object Updates {
                 }
             }
             conn.disconnect()
-            if (out.length() > 0L) out else null
+            if (tmp.length() <= 0L) { tmp.delete(); return@withContext null }
+            context.cacheDir.listFiles()?.forEach {
+                if (it.name.startsWith("nebula-update-") && it != tmp) it.delete()
+            }
+            tmp.renameTo(out)
+            out
         } catch (e: Exception) {
             null
         }
