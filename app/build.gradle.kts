@@ -16,14 +16,17 @@ android {
         versionName = "1.7.0"
     }
 
+    // providers.environmentVariable (NOT System.getenv) so the value is read from
+    // the real build environment, not a reused Gradle daemon's stale one.
+    val keystorePath = providers.environmentVariable("NEBULA_KEYSTORE_FILE").orNull
+
     signingConfigs {
         create("release") {
-            val ks = System.getenv("NEBULA_KEYSTORE_FILE")
-            if (ks != null) {
-                storeFile = file(ks)
-                storePassword = System.getenv("NEBULA_STORE_PASSWORD")
-                keyAlias = System.getenv("NEBULA_KEY_ALIAS")
-                keyPassword = System.getenv("NEBULA_KEY_PASSWORD")
+            if (keystorePath != null) {
+                storeFile = file(keystorePath)
+                storePassword = providers.environmentVariable("NEBULA_STORE_PASSWORD").orNull
+                keyAlias = providers.environmentVariable("NEBULA_KEY_ALIAS").orNull
+                keyPassword = providers.environmentVariable("NEBULA_KEY_PASSWORD").orNull
             }
         }
     }
@@ -37,7 +40,7 @@ android {
             // One fixed release key in CI (from repo secrets) so every build shares
             // a signature and updates install over the top — no uninstall. Falls
             // back to debug signing for local builds without the keystore.
-            signingConfig = if (System.getenv("NEBULA_KEYSTORE_FILE") != null)
+            signingConfig = if (keystorePath != null)
                 signingConfigs.getByName("release")
             else
                 signingConfigs.getByName("debug")
