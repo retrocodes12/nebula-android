@@ -284,9 +284,15 @@ private fun thumbRatio(shape: String): Float = when (shape) {
     else -> 2f / 3f
 }
 
-/** "Update available" banner shown on Home when a newer release exists. */
+/** "Update available" banner shown on Home; downloads + installs the new APK in-app. */
 @Composable
-private fun UpdateCard(version: String, notes: String, onUpdate: () -> Unit, onDismiss: () -> Unit) {
+private fun UpdateCard(version: String, notes: String, onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var downloading by remember { mutableStateOf(false) }
+    var progress by remember { mutableStateOf(0) }
+    var message by remember { mutableStateOf<String?>(null) }
+
     Row(
         Modifier.fillMaxWidth()
             .background(Brush.horizontalGradient(listOf(RedDeep, Red)), RoundedCornerShape(14.dp))
@@ -297,16 +303,32 @@ private fun UpdateCard(version: String, notes: String, onUpdate: () -> Unit, onD
         Column(Modifier.weight(1f)) {
             Text("Update available · v$version", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
             Text(
-                notes.ifEmpty { "Tap Update to get the latest Nebula." },
+                when {
+                    downloading -> "Downloading… $progress%"
+                    message != null -> message!!
+                    else -> notes.ifEmpty { "Tap Update to install the latest Nebula." }
+                },
                 color = Color(0xFFFFE0E0), fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 2.dp),
             )
         }
         Button(
-            onClick = onUpdate,
+            onClick = {
+                if (downloading) return@Button
+                downloading = true; progress = 0; message = null
+                scope.launch {
+                    val apk = Updates.downloadApk(ctx) { progress = it }
+                    downloading = false
+                    when {
+                        apk == null -> message = "Download failed — tap Retry"
+                        !Updates.installApk(ctx, apk) -> message = "Allow installs, then tap Update again"
+                    }
+                }
+            },
+            enabled = !downloading,
             colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Red),
             shape = RoundedCornerShape(9.dp),
-        ) { Text("Update", fontWeight = FontWeight.Bold) }
+        ) { Text(if (message != null) "Retry" else "Update", fontWeight = FontWeight.Bold) }
         IconButton(onClick = onDismiss) {
             Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = Color(0xFFFFD9D9))
         }
@@ -346,7 +368,6 @@ private fun HomeScreen(onOpen: (Addon) -> Unit) {
                 UpdateCard(
                     version = rel.version,
                     notes = rel.notes,
-                    onUpdate = { runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(rel.apkUrl))) } },
                     onDismiss = {
                         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                             .putString("updateDismissed", rel.version).apply()
