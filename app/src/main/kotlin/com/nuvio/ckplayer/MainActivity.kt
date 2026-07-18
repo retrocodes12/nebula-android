@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -279,6 +280,35 @@ private fun thumbRatio(shape: String): Float = when (shape) {
     else -> 2f / 3f
 }
 
+/** "Update available" banner shown on Home when a newer release exists. */
+@Composable
+private fun UpdateCard(version: String, notes: String, onUpdate: () -> Unit, onDismiss: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .background(Brush.horizontalGradient(listOf(RedDeep, Red)), RoundedCornerShape(14.dp))
+            .padding(start = 14.dp, top = 12.dp, end = 6.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Update available · v$version", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            Text(
+                notes.ifEmpty { "Tap Update to get the latest Nebula." },
+                color = Color(0xFFFFE0E0), fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
+        Button(
+            onClick = onUpdate,
+            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Red),
+            shape = RoundedCornerShape(9.dp),
+        ) { Text("Update", fontWeight = FontWeight.Bold) }
+        IconButton(onClick = onDismiss) {
+            Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = Color(0xFFFFD9D9))
+        }
+    }
+}
+
 // ---------- home ----------
 @Composable
 private fun HomeScreen(onOpen: (Addon) -> Unit) {
@@ -288,12 +318,39 @@ private fun HomeScreen(onOpen: (Addon) -> Unit) {
     var url by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
     var statusErr by remember { mutableStateOf(false) }
+    var update by remember { mutableStateOf<Updates.Release?>(null) }
+
+    // Best-effort update check against GitHub Releases, once per Home entry.
+    LaunchedEffect(Unit) {
+        val current = runCatching {
+            ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
+        }.getOrNull().orEmpty()
+        if (current.isEmpty()) return@LaunchedEffect
+        val dismissed = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString("updateDismissed", "").orEmpty()
+        val rel = Updates.latest() ?: return@LaunchedEffect
+        if (Updates.isNewer(rel.version, current) && rel.version != dismissed) update = rel
+    }
 
     LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        update?.let { rel ->
+            item {
+                UpdateCard(
+                    version = rel.version,
+                    notes = rel.notes,
+                    onUpdate = { runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(rel.apkUrl))) } },
+                    onDismiss = {
+                        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                            .putString("updateDismissed", rel.version).apply()
+                        update = null
+                    },
+                )
+            }
+        }
         item {
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {

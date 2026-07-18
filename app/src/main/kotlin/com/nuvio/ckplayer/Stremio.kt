@@ -21,6 +21,9 @@ object Stremio {
         conn.readTimeout = 20000
         conn.instanceFollowRedirects = true
         conn.setRequestProperty("Accept", "*/*")
+        // A User-Agent is required by the GitHub API (update check) and also lets
+        // the addon recognise the Nebula app by UA.
+        conn.setRequestProperty("User-Agent", "NebulaPlayer")
         // Identify the Nebula app so the addon serves direct ClearKey DASH cards
         // (and skips the "Open in Nebula Player" launcher meant for other clients).
         conn.setRequestProperty("X-Nebula-Client", "android")
