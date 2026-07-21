@@ -29,7 +29,8 @@ data class ManifestInfo(
     }
 }
 data class MetaItem(val id: String, val type: String, val name: String, val poster: String?, val posterShape: String = "poster")
-data class StreamItem(val name: String, val title: String, val url: String)
+data class SubTrack(val url: String, val lang: String)
+data class StreamItem(val name: String, val title: String, val url: String, val subtitles: List<SubTrack> = emptyList())
 
 object Stremio {
 
@@ -136,7 +137,15 @@ object Stremio {
         for (i in 0 until arr.length()) {
             val s = arr.getJSONObject(i)
             val url = s.optString("url")
-            if (url.isNotEmpty()) out.add(StreamItem(s.optString("name"), s.optString("title"), url))
+            if (url.isEmpty()) continue
+            val subs = mutableListOf<SubTrack>()
+            val sarr = s.optJSONArray("subtitles")
+            if (sarr != null) for (k in 0 until sarr.length()) {
+                val o = sarr.optJSONObject(k) ?: continue
+                val su = o.optString("url")
+                if (su.isNotEmpty()) subs.add(SubTrack(su, o.optString("lang", "und")))
+            }
+            out.add(StreamItem(s.optString("name"), s.optString("title"), url, subs))
         }
         return out
     }
