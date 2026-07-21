@@ -56,6 +56,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -73,7 +74,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -136,13 +140,21 @@ class MainActivity : ComponentActivity() {
 
 // ---------- Nebula palette (matches the web/webOS player) ----------
 private val Red = Color(0xFFE50914)
+private val RedBright = Color(0xFFFF2633)
+private val RedDark = Color(0xFFB40510)
 private val RedDeep = Color(0xFF7A060D)
-private val Bg = Color(0xFF0A0A0C)
+private val Bg = Color(0xFF07070C)
 private val SurfaceC = Color(0xFF161619)
 private val Surface2 = Color(0xFF1E1E23)
-private val LineC = Color(0xFF2A2A31)
-private val MutedC = Color(0xFF9AA3AF)
-private val TextC = Color(0xFFF2F2F4)
+private val Glass = Color(0x14FFFFFF)   // glass card top
+private val Glass2 = Color(0x08FFFFFF)  // glass card bottom
+private val LineC = Color(0x17FFFFFF)   // hairline borders
+private val Line2 = Color(0x2BFFFFFF)   // brighter borders (inputs, icon rings)
+private val MutedC = Color(0xFF8F96A3)
+private val TextC = Color(0xFFF4F4F6)
+
+private val RedGrad = listOf(RedBright, RedDark)
+private val GlassGrad = listOf(Glass, Glass2)
 
 private val DarkColors = darkColorScheme(
     primary = Red,
@@ -235,16 +247,36 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 }
             }
 
-            when (val s = stack.last()) {
-                is Screen.Home -> HomeScreen(onOpen = { push(Screen.Catalog(it)) })
-                is Screen.Catalog -> CatalogScreen(
-                    s.addon,
-                    catalogStates.getOrPut(s.addon.manifestUrl) { CatalogUiState() },
-                    onBack = { pop() },
-                    onOpen = { push(Screen.Streams(s.addon, it)) },
-                )
-                is Screen.Streams -> StreamsScreen(s.addon, s.item, onBack = { pop() }, onPlay = { push(Screen.Play(it.url, it.name)) })
-                is Screen.Play -> PlayerScreen(s.url)
+            // Nebula backdrop: crimson glow top-left, violet glow bottom-right.
+            Box(
+                Modifier.fillMaxSize().drawBehind {
+                    drawRect(
+                        Brush.radialGradient(
+                            listOf(Color(0x30E50914), Color.Transparent),
+                            center = Offset(size.width * 0.05f, -size.height * 0.08f),
+                            radius = size.width * 1.1f,
+                        )
+                    )
+                    drawRect(
+                        Brush.radialGradient(
+                            listOf(Color(0x2E5E36EB), Color.Transparent),
+                            center = Offset(size.width * 1.02f, size.height * 1.08f),
+                            radius = size.width * 1.0f,
+                        )
+                    )
+                }
+            ) {
+                when (val s = stack.last()) {
+                    is Screen.Home -> HomeScreen(onOpen = { push(Screen.Catalog(it)) })
+                    is Screen.Catalog -> CatalogScreen(
+                        s.addon,
+                        catalogStates.getOrPut(s.addon.manifestUrl) { CatalogUiState() },
+                        onBack = { pop() },
+                        onOpen = { push(Screen.Streams(s.addon, it)) },
+                    )
+                    is Screen.Streams -> StreamsScreen(s.addon, s.item, onBack = { pop() }, onPlay = { push(Screen.Play(it.url, it.name)) })
+                    is Screen.Play -> PlayerScreen(s.url)
+                }
             }
         }
     }
@@ -266,6 +298,7 @@ private fun FocusCard(
     Box(
         modifier
             .scale(zoom)
+            .then(if (focused) Modifier.shadow(16.dp, shape, ambientColor = Red, spotColor = Red) else Modifier)
             .clip(shape)
             .border(2.dp, if (focused) Color.White else Color.Transparent, shape)
             .clickable(interactionSource = interaction, indication = null) { onClick() }
@@ -281,7 +314,7 @@ private fun BackBar(title: String, sub: String?, onBack: () -> Unit) {
     ) {
         FocusCard(shape = RoundedCornerShape(50), onClick = onBack) {
             Box(
-                Modifier.size(42.dp).background(SurfaceC, CircleShape).border(1.dp, LineC, CircleShape),
+                Modifier.size(42.dp).background(Color(0x14FFFFFF), CircleShape).border(1.dp, Line2, CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White, modifier = Modifier.size(22.dp))
@@ -298,11 +331,16 @@ private fun BackBar(title: String, sub: String?, onBack: () -> Unit) {
 private fun Chip(text: String, on: Boolean, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
+    val pill = RoundedCornerShape(999.dp)
     Box(
         Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(if (on) Red else Surface2)
-            .border(2.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(999.dp))
+            .clip(pill)
+            .background(if (on) Brush.linearGradient(RedGrad) else Brush.linearGradient(listOf(Color(0x12FFFFFF), Color(0x12FFFFFF))))
+            .border(
+                if (focused) 2.dp else 1.dp,
+                when { focused -> Color.White; on -> Color.Transparent; else -> LineC },
+                pill,
+            )
             .clickable(interactionSource = interaction, indication = null) { onClick() }
             .padding(horizontal = 16.dp, vertical = 9.dp)
     ) {
@@ -440,7 +478,12 @@ private fun HomeScreen(onOpen: (Addon) -> Unit) {
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("◆ ", color = Red, fontSize = 24.sp, fontWeight = FontWeight.Black)
-                    Text("Nebula", color = TextC, fontSize = 28.sp, fontWeight = FontWeight.Black)
+                    Text(
+                        "NEBULA", fontSize = 28.sp, fontWeight = FontWeight.Black, letterSpacing = 5.sp,
+                        style = LocalTextStyle.current.copy(
+                            brush = Brush.linearGradient(listOf(Color.White, Color(0xFFFFC2C6), RedBright))
+                        ),
+                    )
                 }
                 Text(
                     "Add a Stremio add-on, browse it, play. HLS · DASH · DASH+ClearKey.",
@@ -451,20 +494,20 @@ private fun HomeScreen(onOpen: (Addon) -> Unit) {
         item {
             Column(
                 Modifier.fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(SurfaceC, Color(0xFF101013))), RoundedCornerShape(16.dp))
-                    .border(1.dp, LineC, RoundedCornerShape(16.dp))
-                    .padding(16.dp)
+                    .background(Brush.linearGradient(GlassGrad), RoundedCornerShape(20.dp))
+                    .border(1.dp, LineC, RoundedCornerShape(20.dp))
+                    .padding(18.dp)
             ) {
-                Text("ADD-ON MANIFEST URL", color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.2.sp)
+                Text("ADD-ON MANIFEST URL", color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp)
                 OutlinedTextField(
                     value = url, onValueChange = { url = it },
                     placeholder = { Text("https://your-addon/…/manifest.json", color = MutedC) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Red,
-                        unfocusedBorderColor = LineC,
+                        focusedBorderColor = RedBright,
+                        unfocusedBorderColor = Line2,
                         cursorColor = Red,
                         focusedTextColor = TextC,
                         unfocusedTextColor = TextC,
@@ -486,9 +529,12 @@ private fun HomeScreen(onOpen: (Addon) -> Unit) {
                                 }.onFailure { status = "Could not load: ${it.message}"; statusErr = true }
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = Red),
-                        shape = RoundedCornerShape(10.dp),
-                    ) { Text("Add add-on", fontWeight = FontWeight.SemiBold) }
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .shadow(10.dp, RoundedCornerShape(12.dp), ambientColor = Red, spotColor = Red)
+                            .background(Brush.linearGradient(RedGrad), RoundedCornerShape(12.dp)),
+                    ) { Text("Add add-on", fontWeight = FontWeight.Bold) }
                 }
                 if (status.isNotEmpty()) {
                     Text(status, color = if (statusErr) Color(0xFFFF6B6B) else Color(0xFF7CFC7C), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
@@ -502,10 +548,10 @@ private fun HomeScreen(onOpen: (Addon) -> Unit) {
             item { Text("No add-ons yet — paste a manifest URL above.", color = MutedC, fontSize = 14.sp) }
         } else {
             items(addons, key = { it.manifestUrl }) { a ->
-                FocusCard(shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth(), onClick = { onOpen(a) }) {
+                FocusCard(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(), onClick = { onOpen(a) }) {
                     Row(
-                        Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(14.dp))
-                            .border(1.dp, LineC, RoundedCornerShape(14.dp)).padding(12.dp),
+                        Modifier.fillMaxWidth().background(Brush.linearGradient(GlassGrad), RoundedCornerShape(16.dp))
+                            .border(1.dp, LineC, RoundedCornerShape(16.dp)).padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
@@ -601,9 +647,9 @@ private fun CatalogScreen(addon: Addon, st: CatalogUiState, onBack: () -> Unit, 
                 },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { submitted = query.trim() }),
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(999.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Red, unfocusedBorderColor = LineC, cursorColor = Red,
+                    focusedBorderColor = RedBright, unfocusedBorderColor = Line2, cursorColor = Red,
                     focusedTextColor = TextC, unfocusedTextColor = TextC,
                 ),
                 modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
@@ -647,8 +693,9 @@ private fun CatalogScreen(addon: Addon, st: CatalogUiState, onBack: () -> Unit, 
                         Column(Modifier.padding(2.dp)) {
                             Box(
                                 Modifier.fillMaxWidth().aspectRatio(thumbRatio(m.posterShape))
-                                    .clip(RoundedCornerShape(11.dp))
-                                    .background(Brush.linearGradient(listOf(Color(0xFF23232B), Color(0xFF101015)))),
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Brush.linearGradient(listOf(Color(0xFF1C1C24), Color(0xFF0D0D12))))
+                                    .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(12.dp)),
                                 contentAlignment = Alignment.Center,
                             ) {
                                 if (m.poster != null) {
@@ -690,14 +737,19 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
         BackBar(item.name, status, onBack)
         LazyColumn(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
             items(streams) { s ->
-                FocusCard(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth(), onClick = { onPlay(s) }) {
+                FocusCard(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(), onClick = { onPlay(s) }) {
                     Row(
-                        Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(12.dp))
-                            .border(1.dp, LineC, RoundedCornerShape(12.dp)).padding(14.dp),
+                        Modifier.fillMaxWidth().background(Brush.linearGradient(GlassGrad), RoundedCornerShape(16.dp))
+                            .border(1.dp, LineC, RoundedCornerShape(16.dp)).padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
-                        Box(Modifier.size(40.dp).background(Red, CircleShape), contentAlignment = Alignment.Center) {
+                        Box(
+                            Modifier.size(42.dp)
+                                .shadow(8.dp, CircleShape, ambientColor = Red, spotColor = Red)
+                                .background(Brush.linearGradient(RedGrad), CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) {
                             Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(24.dp))
                         }
                         Column(Modifier.weight(1f)) {
