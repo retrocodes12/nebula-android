@@ -59,7 +59,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -77,11 +76,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -142,23 +137,15 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// ---------- Nebula palette (matches the web/webOS player) ----------
+// ---------- Nebula palette (matches the web/webOS player: flat, restrained) ----------
 private val Red = Color(0xFFE50914)
-private val RedBright = Color(0xFFFF2633)
-private val RedDark = Color(0xFFB40510)
-private val RedDeep = Color(0xFF7A060D)
-private val Bg = Color(0xFF07070C)
-private val SurfaceC = Color(0xFF161619)
-private val Surface2 = Color(0xFF1E1E23)
-private val Glass = Color(0x14FFFFFF)   // glass card top
-private val Glass2 = Color(0x08FFFFFF)  // glass card bottom
-private val LineC = Color(0x17FFFFFF)   // hairline borders
-private val Line2 = Color(0x2BFFFFFF)   // brighter borders (inputs, icon rings)
-private val MutedC = Color(0xFF8F96A3)
-private val TextC = Color(0xFFF4F4F6)
-
-private val RedGrad = listOf(RedBright, RedDark)
-private val GlassGrad = listOf(Glass, Glass2)
+private val Bg = Color(0xFF0B0B0F)
+private val SurfaceC = Color(0xFF16161C)
+private val Surface2 = Color(0xFF1E1E25)
+private val LineC = Color(0xFF26262E)
+private val Line2 = Color(0xFF33333C)
+private val MutedC = Color(0xFFA3A3AD)
+private val TextC = Color(0xFFFFFFFF)
 
 private val DarkColors = darkColorScheme(
     primary = Red,
@@ -289,25 +276,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 }
             }
 
-            // Nebula backdrop: crimson glow top-left, violet glow bottom-right.
-            Box(
-                Modifier.fillMaxSize().drawBehind {
-                    drawRect(
-                        Brush.radialGradient(
-                            listOf(Color(0x30E50914), Color.Transparent),
-                            center = Offset(size.width * 0.05f, -size.height * 0.08f),
-                            radius = size.width * 1.1f,
-                        )
-                    )
-                    drawRect(
-                        Brush.radialGradient(
-                            listOf(Color(0x2E5E36EB), Color.Transparent),
-                            center = Offset(size.width * 1.02f, size.height * 1.08f),
-                            radius = size.width * 1.0f,
-                        )
-                    )
-                }
-            ) {
+            Box(Modifier.fillMaxSize()) {
                 val current = stack.last()
                 Column(Modifier.fillMaxSize()) {
                     Box(Modifier.weight(1f)) {
@@ -361,7 +330,6 @@ private fun FocusCard(
     Box(
         modifier
             .scale(zoom)
-            .then(if (focused) Modifier.shadow(16.dp, shape, ambientColor = Red, spotColor = Red) else Modifier)
             .clip(shape)
             .border(2.dp, if (focused) Color.White else Color.Transparent, shape)
             .clickable(interactionSource = interaction, indication = null) { onClick() }
@@ -377,7 +345,7 @@ private fun BackBar(title: String, sub: String?, onBack: () -> Unit) {
     ) {
         FocusCard(shape = RoundedCornerShape(50), onClick = onBack) {
             Box(
-                Modifier.size(42.dp).background(Color(0x14FFFFFF), CircleShape).border(1.dp, Line2, CircleShape),
+                Modifier.size(42.dp).background(Surface2, CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White, modifier = Modifier.size(22.dp))
@@ -398,16 +366,12 @@ private fun Chip(text: String, on: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
             .clip(pill)
-            .background(if (on) Brush.linearGradient(RedGrad) else Brush.linearGradient(listOf(Color(0x12FFFFFF), Color(0x12FFFFFF))))
-            .border(
-                if (focused) 2.dp else 1.dp,
-                when { focused -> Color.White; on -> Color.Transparent; else -> LineC },
-                pill,
-            )
+            .background(if (on) Color.White else Surface2)
+            .border(2.dp, if (focused) Color.White else Color.Transparent, pill)
             .clickable(interactionSource = interaction, indication = null) { onClick() }
             .padding(horizontal = 16.dp, vertical = 9.dp)
     ) {
-        Text(text, color = if (on) Color.White else Color(0xFFCFD3DA), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        Text(text, color = if (on) Bg else Color(0xFFC9C9D1), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -419,7 +383,7 @@ private fun MetaCard(m: MetaItem, modifier: Modifier = Modifier, onClick: () -> 
             Box(
                 Modifier.fillMaxWidth().aspectRatio(thumbRatio(m.posterShape))
                     .clip(RoundedCornerShape(11.dp))
-                    .background(Brush.linearGradient(listOf(Color(0xFF1C1C24), Color(0xFF0D0D12))))
+                    .background(SurfaceC)
                     .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(11.dp)),
                 contentAlignment = Alignment.Center,
             ) {
@@ -474,7 +438,7 @@ private fun BottomBar(current: Screen, onTab: (Screen) -> Unit) {
 private fun TabItem(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, on: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
-    val tint = if (on) RedBright else if (focused) Color.White else MutedC
+    val tint = if (on) Color.White else if (focused) Color.White else MutedC
     Column(
         modifier
             .clip(RoundedCornerShape(12.dp))
@@ -531,7 +495,7 @@ private fun UpdateCard(version: String, notes: String, onDismiss: () -> Unit) {
 
     Row(
         Modifier.fillMaxWidth()
-            .background(Brush.horizontalGradient(listOf(RedDeep, Red)), RoundedCornerShape(14.dp))
+            .background(Red, RoundedCornerShape(14.dp))
             .padding(start = 14.dp, top = 12.dp, end = 6.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -626,12 +590,7 @@ private fun HomeScreen(
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
             Text("◆ ", color = Red, fontSize = 22.sp, fontWeight = FontWeight.Black)
-            Text(
-                "NEBULA", fontSize = 24.sp, fontWeight = FontWeight.Black, letterSpacing = 5.sp,
-                style = LocalTextStyle.current.copy(
-                    brush = Brush.linearGradient(listOf(Color.White, Color(0xFFFFC2C6), RedBright))
-                ),
-            )
+            Text("NEBULA", color = TextC, fontSize = 24.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
         }
         update?.let { rel ->
             UpdateCard(
@@ -647,7 +606,7 @@ private fun HomeScreen(
         when {
             !st.hasAddons -> Column(
                 Modifier.fillMaxWidth().padding(top = 36.dp)
-                    .background(Brush.linearGradient(GlassGrad), RoundedCornerShape(20.dp))
+                    .background(SurfaceC, RoundedCornerShape(20.dp))
                     .border(1.dp, LineC, RoundedCornerShape(20.dp)).padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
@@ -659,12 +618,9 @@ private fun HomeScreen(
                 )
                 Button(
                     onClick = onGoAddons,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .shadow(10.dp, RoundedCornerShape(12.dp), ambientColor = Red, spotColor = Red)
-                        .background(Brush.linearGradient(RedGrad), RoundedCornerShape(12.dp)),
-                ) { Text("＋ Add an add-on", fontWeight = FontWeight.Bold) }
+                    colors = ButtonDefaults.buttonColors(containerColor = Red),
+                    shape = RoundedCornerShape(8.dp),
+                ) { Text("Add an add-on", fontWeight = FontWeight.SemiBold) }
             }
             st.rows.isEmpty() && st.loading -> {
                 val a = shimmerAlpha()
@@ -747,7 +703,7 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit) {
             keyboardActions = KeyboardActions(onSearch = { st.submitted = st.query.trim() }),
             shape = RoundedCornerShape(999.dp),
             colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = RedBright, unfocusedBorderColor = Line2, cursorColor = Red,
+                focusedBorderColor = Color.White, unfocusedBorderColor = Line2, cursorColor = Red,
                 focusedTextColor = TextC, unfocusedTextColor = TextC,
             ),
             modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -800,7 +756,7 @@ private fun AddonsScreen(onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit) {
         item {
             Column(
                 Modifier.fillMaxWidth()
-                    .background(Brush.linearGradient(GlassGrad), RoundedCornerShape(20.dp))
+                    .background(SurfaceC, RoundedCornerShape(20.dp))
                     .border(1.dp, LineC, RoundedCornerShape(20.dp))
                     .padding(18.dp)
             ) {
@@ -812,7 +768,7 @@ private fun AddonsScreen(onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit) {
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = RedBright,
+                        focusedBorderColor = Color.White,
                         unfocusedBorderColor = Line2,
                         cursorColor = Red,
                         focusedTextColor = TextC,
@@ -835,12 +791,9 @@ private fun AddonsScreen(onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit) {
                                 }.onFailure { status = "Could not load: ${it.message}"; statusErr = true }
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .shadow(10.dp, RoundedCornerShape(12.dp), ambientColor = Red, spotColor = Red)
-                            .background(Brush.linearGradient(RedGrad), RoundedCornerShape(12.dp)),
-                    ) { Text("Add add-on", fontWeight = FontWeight.Bold) }
+                        colors = ButtonDefaults.buttonColors(containerColor = Red),
+                        shape = RoundedCornerShape(8.dp),
+                    ) { Text("Add add-on", fontWeight = FontWeight.SemiBold) }
                 }
                 if (status.isNotEmpty()) {
                     Text(status, color = if (statusErr) Color(0xFFFF6B6B) else Color(0xFF7CFC7C), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
@@ -856,7 +809,7 @@ private fun AddonsScreen(onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit) {
             items(addons, key = { it.manifestUrl }) { a ->
                 FocusCard(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(), onClick = { onOpen(a) }) {
                     Row(
-                        Modifier.fillMaxWidth().background(Brush.linearGradient(GlassGrad), RoundedCornerShape(16.dp))
+                        Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(16.dp))
                             .border(1.dp, LineC, RoundedCornerShape(16.dp)).padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -869,7 +822,7 @@ private fun AddonsScreen(onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit) {
                         } else {
                             Box(
                                 Modifier.size(48.dp)
-                                    .background(Brush.linearGradient(listOf(Red, RedDeep)), RoundedCornerShape(10.dp)),
+                                    .background(Red, RoundedCornerShape(10.dp)),
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Text(a.name.take(1).uppercase(), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Black)
@@ -964,7 +917,7 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
                 keyboardActions = KeyboardActions(onSearch = { submitted = query.trim() }),
                 shape = RoundedCornerShape(999.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = RedBright, unfocusedBorderColor = Line2, cursorColor = Red,
+                    focusedBorderColor = Color.White, unfocusedBorderColor = Line2, cursorColor = Red,
                     focusedTextColor = TextC, unfocusedTextColor = TextC,
                 ),
                 modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
@@ -1025,15 +978,13 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
             items(streams) { s ->
                 FocusCard(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(), onClick = { onPlay(s) }) {
                     Row(
-                        Modifier.fillMaxWidth().background(Brush.linearGradient(GlassGrad), RoundedCornerShape(16.dp))
+                        Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(16.dp))
                             .border(1.dp, LineC, RoundedCornerShape(16.dp)).padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         Box(
-                            Modifier.size(42.dp)
-                                .shadow(8.dp, CircleShape, ambientColor = Red, spotColor = Red)
-                                .background(Brush.linearGradient(RedGrad), CircleShape),
+                            Modifier.size(42.dp).background(Red, CircleShape),
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(24.dp))
