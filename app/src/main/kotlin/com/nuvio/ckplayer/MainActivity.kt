@@ -40,6 +40,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
@@ -159,6 +160,26 @@ private sealed interface Screen {
     data class Play(val url: String, val title: String) : Screen
 }
 
+/**
+ * Catalog screen state, hoisted to AppRoot: only the top of the nav stack is
+ * composed, so anything remembered inside CatalogScreen dies the moment a
+ * stream screen is pushed — search results, picked genre, and scroll position
+ * were all lost on Back. Held here they survive until the catalog is popped.
+ */
+private class CatalogUiState {
+    var catalogs by mutableStateOf<List<CatalogRef>>(emptyList())
+    var current by mutableStateOf<CatalogRef?>(null)
+    var genre by mutableStateOf<String?>(null)
+    var query by mutableStateOf("")
+    var submitted by mutableStateOf("")
+    var items by mutableStateOf<List<MetaItem>>(emptyList())
+    var loading by mutableStateOf(true)
+    var status by mutableStateOf("Loading…")
+    // what (catalog, genre, query) the current items were fetched for; null after a failure so re-entering retries
+    var loadedFor: Triple<CatalogRef?, String?, String>? = null
+    val gridState = LazyGridState()
+}
+
 /** A play request arriving from a nebula://play deep link. */
 data class PlayReq(val mpd: String, val title: String)
 
@@ -195,9 +216,16 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
     MaterialTheme(colorScheme = DarkColors) {
         Surface(Modifier.fillMaxSize(), color = Bg) {
             var stack by remember { mutableStateOf(listOf<Screen>(Screen.Home)) }
+            val catalogStates = remember { HashMap<String, CatalogUiState>() }
             fun push(s: Screen) { stack = stack + s }
             fun pop() { if (stack.size > 1) stack = stack.dropLast(1) }
             BackHandler(enabled = stack.size > 1) { pop() }
+
+            // Drop catalog state once its screen is no longer anywhere in the stack.
+            LaunchedEffect(stack) {
+                val live = stack.filterIsInstance<Screen.Catalog>().map { it.addon.manifestUrl }.toSet()
+                catalogStates.keys.retainAll(live)
+            }
 
             // A deep-link play request jumps straight to the player; Back returns Home.
             LaunchedEffect(playReq) {
@@ -209,7 +237,12 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
 
             when (val s = stack.last()) {
                 is Screen.Home -> HomeScreen(onOpen = { push(Screen.Catalog(it)) })
-                is Screen.Catalog -> CatalogScreen(s.addon, onBack = { pop() }, onOpen = { push(Screen.Streams(s.addon, it)) })
+                is Screen.Catalog -> CatalogScreen(
+                    s.addon,
+                    catalogStates.getOrPut(s.addon.manifestUrl) { CatalogUiState() },
+                    onBack = { pop() },
+                    onOpen = { push(Screen.Streams(s.addon, it)) },
+                )
                 is Screen.Streams -> StreamsScreen(s.addon, s.item, onBack = { pop() }, onPlay = { push(Screen.Play(it.url, it.name)) })
                 is Screen.Play -> PlayerScreen(s.url)
             }
@@ -512,36 +545,41 @@ private fun HomeScreen(onOpen: (Addon) -> Unit) {
 
 // ---------- catalog ----------
 @Composable
-private fun CatalogScreen(addon: Addon, onBack: () -> Unit, onOpen: (MetaItem) -> Unit) {
-    var catalogs by remember { mutableStateOf<List<CatalogRef>>(emptyList()) }
-    var current by remember { mutableStateOf<CatalogRef?>(null) }
-    var genre by remember { mutableStateOf<String?>(null) }
-    var query by remember { mutableStateOf("") }
-    var submitted by remember { mutableStateOf("") }
-    var items by remember { mutableStateOf<List<MetaItem>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
-    var status by remember { mutableStateOf("Loading…") }
+private fun CatalogScreen(addon: Addon, st: CatalogUiState, onBack: () -> Unit, onOpen: (MetaItem) -> Unit) {
+    var catalogs by st::catalogs
+    var current by st::current
+    var genre by st::genre
+    var query by st::query
+    var submitted by st::submitted
+    var items by st::items
+    var loading by st::loading
+    var status by st::status
 
     LaunchedEffect(addon) {
+        if (catalogs.isNotEmpty()) return@LaunchedEffect
         runCatching { Stremio.loadManifest(addon.manifestUrl).second }
             .onSuccess { catalogs = it; current = it.firstOrNull(); if (it.isEmpty()) { status = "No catalogs."; loading = false } }
             .onFailure { status = "Failed: ${it.message}"; loading = false }
     }
     LaunchedEffect(current, genre, submitted) {
         val q = submitted.trim()
+        // Re-entering the screen (back from streams) relaunches this effect; if the
+        // items on hand already match the wanted state, keep them instead of refetching.
+        val want = Triple(current, genre, q)
+        if (st.loadedFor == want) return@LaunchedEffect
         if (q.isNotEmpty()) {
             val sc = if (current?.search == true) current else catalogs.firstOrNull { it.search }
             if (sc == null) { items = emptyList(); status = "Search isn’t available here."; loading = false; return@LaunchedEffect }
             loading = true; status = "Searching…"; items = emptyList()
             runCatching { Stremio.loadCatalog(addon.base, sc, null, q) }
-                .onSuccess { items = it; status = if (it.isEmpty()) "No matches for “$q”." else "${it.size} result${if (it.size > 1) "s" else ""} for “$q”"; loading = false }
-                .onFailure { status = "Failed: ${it.message}"; loading = false }
+                .onSuccess { items = it; status = if (it.isEmpty()) "No matches for “$q”." else "${it.size} result${if (it.size > 1) "s" else ""} for “$q”"; loading = false; st.loadedFor = want }
+                .onFailure { status = "Failed: ${it.message}"; loading = false; st.loadedFor = null }
         } else {
             val c = current ?: return@LaunchedEffect
             loading = true; status = "Loading…"; items = emptyList()
             runCatching { Stremio.loadCatalog(addon.base, c, genre) }
-                .onSuccess { items = it; status = if (it.isEmpty()) "No items." else "${it.size} items"; loading = false }
-                .onFailure { status = "Failed: ${it.message}"; loading = false }
+                .onSuccess { items = it; status = if (it.isEmpty()) "No items." else "${it.size} items"; loading = false; st.loadedFor = want }
+                .onFailure { status = "Failed: ${it.message}"; loading = false; st.loadedFor = null }
         }
     }
 
@@ -599,6 +637,7 @@ private fun CatalogScreen(addon: Addon, onBack: () -> Unit, onOpen: (MetaItem) -
         } else {
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 140.dp),
+                state = st.gridState,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
                 contentPadding = PaddingValues(bottom = 20.dp),
