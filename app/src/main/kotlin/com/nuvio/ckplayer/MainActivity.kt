@@ -116,7 +116,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        pendingPlay.value = parsePlayIntent(intent)
+        // only honor the launch intent on a fresh start — a recreated activity
+        // (process restore, config change) must not jump back into the player
+        pendingPlay.value = if (savedInstanceState == null) parsePlayIntent(intent) else null
         setContent { AppRoot(pendingPlay.value) { pendingPlay.value = null } }
     }
 
@@ -214,6 +216,8 @@ private class CatalogUiState {
     var status by mutableStateOf("Loading…")
     // what (catalog, genre, query) the current items were fetched for; null after a failure so re-entering retries
     var loadedFor: Triple<CatalogRef?, String?, String>? = null
+    // the See-all target already applied, so re-entering doesn't reset a user's catalog switch
+    var appliedInitial: CatalogRef? = null
     val gridState = LazyGridState()
 }
 
@@ -295,7 +299,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                             )
                             is Screen.Addons -> AddonsScreen(
                                 onOpen = { push(Screen.Catalog(it)) },
-                                onAddonsChanged = { homeState.invalidate() },
+                                onAddonsChanged = { manifestCache.clear(); homeState.invalidate() },
                             )
                             is Screen.Catalog -> CatalogScreen(
                                 s.addon, s.initial,
@@ -369,7 +373,7 @@ private fun Chip(text: String, on: Boolean, onClick: () -> Unit) {
         Modifier
             .clip(pill)
             .background(if (on) Color.White else Surface2)
-            .border(2.dp, if (focused) Color.White else Color.Transparent, pill)
+            .border(2.dp, if (focused) (if (on) Bg else Color.White) else Color.Transparent, pill)
             .clickable(interactionSource = interaction, indication = null) { onClick() }
             .padding(horizontal = 16.dp, vertical = 9.dp)
     ) {
@@ -577,13 +581,15 @@ private fun HomeScreen(
         for (a in addons) {
             runCatching {
                 val cats = manifestFor(a.manifestUrl).catalogs
+                val seenCat = HashSet<String>()
                 for (c in cats.take(3)) {
+                    if (!seenCat.add(c.type + "/" + c.id)) continue
                     runCatching {
                         val items = Stremio.loadCatalog(a.base, c, null).take(15)
                         if (items.isNotEmpty()) { rows.add(CatRow(a, c, items)); st.rows = rows.toList() }
-                    }
+                    }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
                 }
-            }
+            }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
         }
         st.builtAt = System.currentTimeMillis()
         st.loading = false
@@ -681,7 +687,7 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit) {
                 val sc = cats.firstOrNull { it.search } ?: return@runCatching
                 val items = Stremio.loadCatalog(a.base, sc, null, q)
                 if (items.isNotEmpty()) { out.add(CatRow(a, sc, items)); st.sections = out.toList() }
-            }
+            }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
         }
         st.searchedFor = q
         st.searching = false
@@ -864,14 +870,19 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
 
     LaunchedEffect(addon, initial) {
         if (catalogs.isNotEmpty()) {
-            // arriving via a "See all" that targets a different catalog of this addon
-            val want = initial?.let { i -> catalogs.firstOrNull { it.type == i.type && it.id == i.id } }
-            if (want != null && current != want) { current = want; genre = null; query = ""; submitted = "" }
+            // arriving via a "See all" that targets a different catalog of this addon —
+            // apply it once, so coming back from a stream keeps the user's own switch
+            if (initial != null && initial != st.appliedInitial) {
+                st.appliedInitial = initial
+                val want = catalogs.firstOrNull { it.type == initial.type && it.id == initial.id }
+                if (want != null && current != want) { current = want; genre = null; query = ""; submitted = "" }
+            }
             return@LaunchedEffect
         }
         runCatching { Stremio.loadManifest(addon.manifestUrl).catalogs }
             .onSuccess {
                 catalogs = it
+                st.appliedInitial = initial
                 current = initial?.let { i -> it.firstOrNull { c -> c.type == i.type && c.id == i.id } } ?: it.firstOrNull()
                 if (it.isEmpty()) { status = "No catalogs."; loading = false }
             }
@@ -989,7 +1000,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
                     val n = out.sumOf { it.second.size }
                     status = "$n stream${if (n > 1) "s" else ""}" + (if (out.size > 1) " from ${out.size} add-ons" else "")
                 }
-            }.onFailure { failures++ }
+            }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; failures++ }
         }
         if (sections.isEmpty()) {
             status = if (failures == order.size) "Failed to load streams." else "No playable streams right now."
@@ -998,8 +1009,8 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
         BackBar(item.name, status, onBack)
         LazyColumn(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
-            sections.forEach { (addonName, streams) ->
-                if (sections.size > 1) item(key = "head/$addonName") {
+            sections.forEachIndexed { sectionIndex, (addonName, streams) ->
+                if (sections.size > 1) item(key = "head/$sectionIndex") {
                     Text(
                         addonName, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold,
                         modifier = Modifier.padding(top = 6.dp),
