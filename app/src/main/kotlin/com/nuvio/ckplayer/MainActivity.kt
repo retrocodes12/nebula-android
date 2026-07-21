@@ -50,11 +50,13 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -162,7 +164,7 @@ private sealed interface Screen {
     data object Addons : Screen
     data class Catalog(val addon: Addon, val initial: CatalogRef? = null) : Screen
     data class Streams(val addon: Addon, val item: MetaItem) : Screen
-    data class Play(val url: String, val title: String) : Screen
+    data class Play(val url: String, val title: String, val subs: List<SubTrack> = emptyList()) : Screen
 }
 
 /** One catalog's worth of content, tagged with where it came from. */
@@ -301,8 +303,8 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 onBack = { pop() },
                                 onOpen = { push(Screen.Streams(s.addon, it)) },
                             )
-                            is Screen.Streams -> StreamsScreen(s.addon, s.item, onBack = { pop() }, onPlay = { push(Screen.Play(it.url, it.name)) })
-                            is Screen.Play -> PlayerScreen(s.url)
+                            is Screen.Streams -> StreamsScreen(s.addon, s.item, onBack = { pop() }, onPlay = { push(Screen.Play(it.url, it.name, it.subtitles)) })
+                            is Screen.Play -> PlayerScreen(s.url, s.subs)
                         }
                     }
                     if (current == Screen.Home || current == Screen.Search || current == Screen.Addons) {
@@ -1033,11 +1035,12 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
 // ---------- player (unchanged behavior) ----------
 @OptIn(UnstableApi::class)
 @Composable
-private fun PlayerScreen(url: String) {
+private fun PlayerScreen(url: String, subs: List<SubTrack> = emptyList()) {
     val context = LocalContext.current
     val activity = context as? Activity
     var error by remember { mutableStateOf<String?>(null) }
     var videoQualityCount by remember { mutableStateOf(0) }
+    var audioTrackCount by remember { mutableStateOf(0) }
     var controllerVisible by remember { mutableStateOf(true) }
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
     var skipFlash by remember { mutableStateOf<Triple<Int, Int, Long>?>(null) } // zone (-1/+1), total secs, stamp
@@ -1076,6 +1079,19 @@ private fun PlayerScreen(url: String) {
                 }
                 Regex("\\.m3u8", RegexOption.IGNORE_CASE).containsMatchIn(url) -> b.setMimeType(MimeTypes.APPLICATION_M3U8)
             }
+            if (subs.isNotEmpty()) {
+                b.setSubtitleConfigurations(
+                    subs.map { st ->
+                        MediaItem.SubtitleConfiguration.Builder(Uri.parse(st.url))
+                            .setLanguage(st.lang)
+                            .setMimeType(
+                                if (Regex("\\.srt(\\?|#|$)", RegexOption.IGNORE_CASE).containsMatchIn(st.url))
+                                    MimeTypes.APPLICATION_SUBRIP else MimeTypes.TEXT_VTT
+                            )
+                            .build()
+                    }
+                )
+            }
             exo.setMediaItem(b.build())
             exo.prepare()
         }.onFailure { error = it.message }
@@ -1085,15 +1101,18 @@ private fun PlayerScreen(url: String) {
         val l = object : Player.Listener {
             override fun onPlayerError(e: PlaybackException) { error = "Playback error ${e.errorCodeName} (${e.errorCode})" }
             override fun onTracksChanged(tracks: Tracks) {
-                var n = 0
+                var v = 0
+                var au = 0
                 for (g in tracks.groups) {
-                    if (g.type == C.TRACK_TYPE_VIDEO) {
-                        for (i in 0 until g.length) {
-                            if (g.isTrackSupported(i) && g.getTrackFormat(i).height > 0) n++
+                    when (g.type) {
+                        C.TRACK_TYPE_VIDEO -> for (i in 0 until g.length) {
+                            if (g.isTrackSupported(i) && g.getTrackFormat(i).height > 0) v++
                         }
+                        C.TRACK_TYPE_AUDIO -> if (g.length > 0) au++
                     }
                 }
-                videoQualityCount = n
+                videoQualityCount = v
+                audioTrackCount = au
             }
         }
         exo.addListener(l)
@@ -1112,6 +1131,7 @@ private fun PlayerScreen(url: String) {
                 PlayerView(ctx).apply {
                     player = exo
                     useController = true
+                    setShowSubtitleButton(true)
                     setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
                     setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { v ->
                         controllerVisible = (v == View.VISIBLE)
@@ -1172,25 +1192,41 @@ private fun PlayerScreen(url: String) {
                     }
             )
         }
-        // Quality picker — only when the stream actually has more than one video quality.
-        if (videoQualityCount >= 2) {
-            IconButton(
-                onClick = {
-                    runCatching {
-                        TrackSelectionDialogBuilder(context, "Quality", exo, C.TRACK_TYPE_VIDEO)
-                            .setAllowAdaptiveSelections(true)
-                            .setShowDisableOption(false)
-                            .build()
-                            .show()
-                    }
-                },
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(12.dp)
-                    .size(44.dp)
-                    .background(Color(0xB3000000), CircleShape)
-            ) {
-                Text("⚙", color = Color.White, fontSize = 20.sp)
+        // Quality + audio pickers — only when the stream actually offers a choice.
+        Column(
+            Modifier.align(Alignment.TopEnd).padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            if (videoQualityCount >= 2) {
+                IconButton(
+                    onClick = {
+                        runCatching {
+                            TrackSelectionDialogBuilder(context, "Quality", exo, C.TRACK_TYPE_VIDEO)
+                                .setAllowAdaptiveSelections(true)
+                                .setShowDisableOption(false)
+                                .build()
+                                .show()
+                        }
+                    },
+                    modifier = Modifier.size(44.dp).background(Color(0xB3000000), CircleShape)
+                ) {
+                    Icon(Icons.Filled.Settings, contentDescription = "Quality", tint = Color.White, modifier = Modifier.size(22.dp))
+                }
+            }
+            if (audioTrackCount >= 2) {
+                IconButton(
+                    onClick = {
+                        runCatching {
+                            TrackSelectionDialogBuilder(context, "Audio", exo, C.TRACK_TYPE_AUDIO)
+                                .setShowDisableOption(false)
+                                .build()
+                                .show()
+                        }
+                    },
+                    modifier = Modifier.size(44.dp).background(Color(0xB3000000), CircleShape)
+                ) {
+                    Icon(Icons.Filled.Audiotrack, contentDescription = "Audio", tint = Color.White, modifier = Modifier.size(22.dp))
+                }
             }
         }
         // Transient ±10s indicator on the tapped side.
