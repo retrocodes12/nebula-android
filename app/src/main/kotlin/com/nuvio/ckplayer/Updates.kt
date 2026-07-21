@@ -30,6 +30,8 @@ object Updates {
                 .lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }
                 ?.take(140).orEmpty()
             Release(version, notes, APK_URL)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             null
         }
@@ -89,8 +91,10 @@ object Updates {
             context.cacheDir.listFiles()?.forEach {
                 if (it.name.startsWith("nebula-update-") && it != tmp) it.delete()
             }
-            tmp.renameTo(out)
+            if (!tmp.renameTo(out)) return@withContext null
             out
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             null
         }
