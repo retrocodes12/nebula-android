@@ -1,11 +1,16 @@
 package com.nuvio.ckplayer
 
 import android.app.Activity
+import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.util.Rational
 import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -54,6 +59,7 @@ import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -93,12 +99,14 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
@@ -139,7 +147,69 @@ class MainActivity : ComponentActivity() {
         val title = (data.getQueryParameter("t") ?: data.getQueryParameter("title") ?: "Nebula Sports").trim()
         return PlayReq(mpd, title)
     }
+
+    // ---------- picture-in-picture ----------
+    fun pipSupported(): Boolean =
+        packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+
+    private fun pipAspect(): Rational {
+        val vs = activePipPlayer.value?.videoSize
+        var w = vs?.width ?: 0
+        var h = vs?.height ?: 0
+        if (w <= 0 || h <= 0) { w = 16; h = 9 }
+        // Android rejects PiP aspect ratios outside roughly 1:2.39 – 2.39:1
+        val ratio = w.toFloat() / h
+        return when {
+            ratio > 2.35f -> Rational(235, 100)
+            ratio < 0.43f -> Rational(43, 100)
+            else -> Rational(w, h)
+        }
+    }
+
+    fun enterPip(): Boolean {
+        if (!pipSupported() || activePipPlayer.value == null) return false
+        return runCatching {
+            enterPictureInPictureMode(
+                PictureInPictureParams.Builder().setAspectRatio(pipAspect()).build()
+            )
+        }.getOrDefault(false)
+    }
+
+    /** Keep the OS-level PiP params current: real aspect ratio + (API 31+) auto-enter on Home while playing. */
+    fun refreshPipParams() {
+        if (!pipSupported()) return
+        runCatching {
+            val b = PictureInPictureParams.Builder().setAspectRatio(pipAspect())
+            if (Build.VERSION.SDK_INT >= 31) {
+                b.setAutoEnterEnabled(activePipPlayer.value?.isPlaying == true)
+            }
+            setPictureInPictureParams(b.build())
+        }
+    }
+
+    // Home press while a video plays → keep it going in a floating window.
+    // API 31+ auto-enters via setAutoEnterEnabled; this covers API 26–30.
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (Build.VERSION.SDK_INT < 31 && activePipPlayer.value?.isPlaying == true) enterPip()
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        inPipMode.value = isInPictureInPictureMode
+        // Left PiP while the activity stayed stopped = the floating window was dismissed
+        // (not expanded back to full screen) — pause instead of playing on invisibly.
+        if (!isInPictureInPictureMode && lifecycle.currentState == Lifecycle.State.CREATED) {
+            activePipPlayer.value?.pause()
+        }
+    }
 }
+
+/** The ExoPlayer currently on screen (wired by PlayerScreen) so the activity can drive PiP. */
+private val activePipPlayer = mutableStateOf<ExoPlayer?>(null)
+
+/** True while the app is in picture-in-picture; PlayerScreen hides all chrome. */
+private val inPipMode = mutableStateOf(false)
 
 // ---------- Nebula palette (matches the web/webOS player: flat, restrained) ----------
 private val Red = Color(0xFFE50914)
@@ -1125,15 +1195,29 @@ private fun PlayerScreen(url: String, subs: List<SubTrack> = emptyList()) {
                 videoQualityCount = v
                 audioTrackCount = au
             }
+            override fun onIsPlayingChanged(isPlaying: Boolean) { (activity as? MainActivity)?.refreshPipParams() }
+            override fun onVideoSizeChanged(videoSize: VideoSize) { (activity as? MainActivity)?.refreshPipParams() }
         }
         exo.addListener(l)
+        activePipPlayer.value = exo
+        (activity as? MainActivity)?.refreshPipParams()
         onDispose {
             exo.removeListener(l); exo.release()
+            if (activePipPlayer.value === exo) activePipPlayer.value = null
+            // Clears (API 31+) auto-enter so backing out of the player can't PiP the browse UI.
+            (activity as? MainActivity)?.refreshPipParams()
             activity?.let {
                 it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                 setImmersive(it, false)
             }
         }
+    }
+
+    // In picture-in-picture only the video shows — no controller, gestures, or overlay buttons.
+    val pip = inPipMode.value
+    LaunchedEffect(pip) {
+        playerViewRef?.useController = !pip
+        if (pip) playerViewRef?.hideController()
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
@@ -1163,7 +1247,7 @@ private fun PlayerScreen(url: String, subs: List<SubTrack> = emptyList()) {
         // Touch gestures (phones): double-tap left/right = ±10s, horizontal swipe = seek,
         // plain tap = show controls. Mounted only while the controller is hidden so the
         // controller's own buttons stay tappable; remote/D-pad (TV) is unaffected.
-        if (!controllerVisible) {
+        if (!controllerVisible && !pip) {
             Box(
                 Modifier
                     .fillMaxSize()
@@ -1203,11 +1287,20 @@ private fun PlayerScreen(url: String, subs: List<SubTrack> = emptyList()) {
                     }
             )
         }
-        // Quality + audio pickers — only when the stream actually offers a choice.
-        Column(
+        // PiP + quality + audio pickers — pickers only when the stream offers a choice.
+        if (!pip) Column(
             Modifier.align(Alignment.TopEnd).padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            val mainActivity = activity as? MainActivity
+            if (mainActivity?.pipSupported() == true) {
+                IconButton(
+                    onClick = { mainActivity.enterPip() },
+                    modifier = Modifier.size(44.dp).background(Color(0xB3000000), CircleShape)
+                ) {
+                    Icon(Icons.Filled.PictureInPictureAlt, contentDescription = "Picture-in-picture", tint = Color.White, modifier = Modifier.size(22.dp))
+                }
+            }
             if (videoQualityCount >= 2) {
                 IconButton(
                     onClick = {

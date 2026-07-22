@@ -26,6 +26,7 @@
             android:exported="true"
             android:launchMode="singleTop"
             android:screenOrientation="fullUser"
+            android:supportsPictureInPicture="true"
             android:theme="@style/Theme.App">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
