@@ -12,8 +12,8 @@ android {
         applicationId = "com.nuvio.ckplayer"
         minSdk = 26
         targetSdk = 34
-        versionCode = 20
-        versionName = "1.15.1"
+        versionCode = 21
+        versionName = "1.16.0"
     }
 
     // Read signing config from Gradle -P properties (passed explicitly on the CI
@@ -81,5 +81,6 @@ dependencies {
     implementation("androidx.media3:media3-ui:$media3")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("io.coil-kt:coil-compose:2.6.0")
 }
