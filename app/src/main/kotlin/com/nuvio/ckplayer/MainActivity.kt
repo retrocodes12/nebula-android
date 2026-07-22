@@ -58,6 +58,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
@@ -294,6 +295,26 @@ private class CatalogUiState {
 /** A play request arriving from a nebula://play deep link. */
 data class PlayReq(val mpd: String, val title: String)
 
+/**
+ * Watch-party UI state, file-level (like manifestCache) so it survives the nav
+ * stack: AppRoot owns the session + events, PlayerScreen drives sync through it.
+ */
+private class PartyUi {
+    var session: PartySession? = null
+    var code by mutableStateOf<String?>(null)
+    var isHost by mutableStateOf(false)
+    var count by mutableStateOf(1)
+    var status by mutableStateOf<String?>(null)
+    @Volatile var lastState: PartyState? = null
+    var lastSeekAt = 0L
+    fun active() = code != null
+    fun reset() {
+        session?.leave(); session = null
+        code = null; isHost = false; count = 1; lastState = null
+    }
+}
+private val partyUi = PartyUi()
+
 // ---------- add-on persistence ----------
 private const val PREFS = "ckplayer"
 private fun loadAddons(ctx: Context): List<Addon> {
@@ -330,9 +351,67 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
             val catalogStates = remember { HashMap<String, CatalogUiState>() }
             val homeState = remember { HomeUiState() }
             val searchState = remember { SearchUiState() }
+            val ctx = LocalContext.current
+            val scope = rememberCoroutineScope()
             fun push(s: Screen) { stack = stack + s }
-            fun pop() { if (stack.size > 1) stack = stack.dropLast(1) }
+            fun pop() {
+                if (stack.size > 1) {
+                    // a viewer backing out of playback leaves the party (the host keeps it alive)
+                    if (stack.last() is Screen.Play && partyUi.active() && !partyUi.isHost) {
+                        partyUi.reset(); partyUi.status = "Left the party"
+                    }
+                    stack = stack.dropLast(1)
+                }
+            }
             fun setTab(s: Screen) { stack = listOf(s) }
+
+            // ---- watch party wiring ----
+            fun partyEvent(ev: PartyEvent) {
+                when (ev) {
+                    is PartyEvent.Created -> {
+                        partyUi.code = ev.code; partyUi.isHost = true; partyUi.count = 1
+                        partyUi.status = "Party started — code ${ev.code}. Friends: Add-ons tab, Join party."
+                    }
+                    is PartyEvent.Joined -> {
+                        partyUi.code = ev.code; partyUi.isHost = false; partyUi.count = ev.count
+                        partyUi.lastState = ev.state
+                        partyUi.status = "Joined party ${ev.code}"
+                        ev.stream?.let { st -> stack = listOf(Screen.Home, Screen.Play(st.url, st.title, st.subs)) }
+                    }
+                    is PartyEvent.State -> partyUi.lastState = ev.state
+                    is PartyEvent.StreamSwitch -> {
+                        if (!partyUi.isHost) {
+                            partyUi.lastState = null
+                            partyUi.status = "Host switched streams"
+                            stack = listOf(Screen.Home, Screen.Play(ev.stream.url, ev.stream.title, ev.stream.subs))
+                        }
+                    }
+                    is PartyEvent.Peers -> partyUi.count = ev.count
+                    PartyEvent.Promoted -> { partyUi.isHost = true; partyUi.status = "You are now the party host" }
+                    is PartyEvent.Ended -> { partyUi.reset(); partyUi.status = ev.reason }
+                    is PartyEvent.Error -> partyUi.status = ev.message
+                    PartyEvent.Disconnected -> { partyUi.reset(); partyUi.status = "Party connection lost" }
+                }
+            }
+            fun partyStart(stream: PartyStreamDesc) {
+                partyUi.reset()
+                partyUi.status = "Starting party…"
+                partyUi.session = PartySession(scope) { partyEvent(it) }.also { it.create(stream) }
+            }
+            fun partyJoin(codeRaw: String) {
+                val code = codeRaw.trim().replace(" ", "").uppercase()
+                if (code.length < 4) { partyUi.status = "Enter the party code first"; return }
+                partyUi.reset()
+                partyUi.status = "Joining party…"
+                partyUi.session = PartySession(scope) { partyEvent(it) }.also { it.join(code) }
+            }
+            fun partyLeave() { partyUi.reset(); partyUi.status = "Left the party" }
+            LaunchedEffect(partyUi.status) {
+                partyUi.status?.let {
+                    android.widget.Toast.makeText(ctx, it, android.widget.Toast.LENGTH_SHORT).show()
+                    partyUi.status = null
+                }
+            }
             // Back pops the stack; from a non-Home tab root it returns to Home.
             BackHandler(enabled = stack.size > 1 || stack.last() != Screen.Home) {
                 if (stack.size > 1) pop() else setTab(Screen.Home)
@@ -370,6 +449,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                             is Screen.Addons -> AddonsScreen(
                                 onOpen = { push(Screen.Catalog(it)) },
                                 onAddonsChanged = { manifestCache.clear(); homeState.invalidate() },
+                                onJoinParty = { partyJoin(it) },
                             )
                             is Screen.Catalog -> CatalogScreen(
                                 s.addon, s.initial,
@@ -378,7 +458,11 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 onOpen = { push(Screen.Streams(s.addon, it)) },
                             )
                             is Screen.Streams -> StreamsScreen(s.addon, s.item, onBack = { pop() }, onPlay = { push(Screen.Play(it.url, it.name, it.subtitles)) })
-                            is Screen.Play -> PlayerScreen(s.url, s.subs)
+                            is Screen.Play -> PlayerScreen(
+                                s.url, s.title, s.subs,
+                                onPartyStart = { partyStart(it) },
+                                onPartyLeave = { partyLeave() },
+                            )
                         }
                     }
                     if (current == Screen.Home || current == Screen.Search || current == Screen.Addons) {
@@ -809,13 +893,14 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit) {
 
 // ---------- add-ons (manage sources) ----------
 @Composable
-private fun AddonsScreen(onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit) {
+private fun AddonsScreen(onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit, onJoinParty: (String) -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var addons by remember { mutableStateOf(loadAddons(ctx)) }
     var url by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
     var statusErr by remember { mutableStateOf(false) }
+    var partyCode by remember { mutableStateOf("") }
 
     LazyColumn(
         Modifier.fillMaxSize(),
@@ -876,6 +961,41 @@ private fun AddonsScreen(onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit) {
                 if (status.isNotEmpty()) {
                     Text(status, color = if (statusErr) Color(0xFFFF6B6B) else Color(0xFF7CFC7C), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
                 }
+            }
+        }
+        item {
+            Column(
+                Modifier.fillMaxWidth()
+                    .background(SurfaceC, RoundedCornerShape(20.dp))
+                    .border(1.dp, LineC, RoundedCornerShape(20.dp))
+                    .padding(18.dp)
+            ) {
+                Text("WATCH PARTY", color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp)
+                Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = partyCode, onValueChange = { partyCode = it },
+                        placeholder = { Text("Party code", color = MutedC) },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color.White,
+                            unfocusedBorderColor = Line2,
+                            cursorColor = Red,
+                            focusedTextColor = TextC,
+                            unfocusedTextColor = TextC,
+                        ),
+                    )
+                    Button(
+                        onClick = { onJoinParty(partyCode) },
+                        colors = ButtonDefaults.buttonColors(containerColor = Red),
+                        shape = RoundedCornerShape(8.dp),
+                    ) { Text("Join", fontWeight = FontWeight.SemiBold) }
+                }
+                Text(
+                    "To start one: play a stream, then tap the party button in the player. Friends enter your code here and watch in sync.",
+                    color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp),
+                )
             }
         }
         item {
@@ -1116,9 +1236,16 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
 // ---------- player (unchanged behavior) ----------
 @OptIn(UnstableApi::class)
 @Composable
-private fun PlayerScreen(url: String, subs: List<SubTrack> = emptyList()) {
+private fun PlayerScreen(
+    url: String,
+    title: String = "Nebula",
+    subs: List<SubTrack> = emptyList(),
+    onPartyStart: (PartyStreamDesc) -> Unit = {},
+    onPartyLeave: () -> Unit = {},
+) {
     val context = LocalContext.current
     val activity = context as? Activity
+    var hostDirty by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var videoQualityCount by remember { mutableStateOf(0) }
     var audioTrackCount by remember { mutableStateOf(0) }
@@ -1195,8 +1322,14 @@ private fun PlayerScreen(url: String, subs: List<SubTrack> = emptyList()) {
                 videoQualityCount = v
                 audioTrackCount = au
             }
-            override fun onIsPlayingChanged(isPlaying: Boolean) { (activity as? MainActivity)?.refreshPipParams() }
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                (activity as? MainActivity)?.refreshPipParams()
+                if (partyUi.active() && partyUi.isHost) hostDirty = true
+            }
             override fun onVideoSizeChanged(videoSize: VideoSize) { (activity as? MainActivity)?.refreshPipParams() }
+            override fun onPositionDiscontinuity(old: Player.PositionInfo, new: Player.PositionInfo, reason: Int) {
+                if (reason == Player.DISCONTINUITY_REASON_SEEK && partyUi.active() && partyUi.isHost) hostDirty = true
+            }
         }
         exo.addListener(l)
         activePipPlayer.value = exo
@@ -1218,6 +1351,58 @@ private fun PlayerScreen(url: String, subs: List<SubTrack> = emptyList()) {
     LaunchedEffect(pip) {
         playerViewRef?.useController = !pip
         if (pip) playerViewRef?.hideController()
+    }
+
+    // A party host arriving on a new stream takes the whole room along (mirrors the web player).
+    LaunchedEffect(Unit) {
+        if (partyUi.active() && partyUi.isHost) {
+            partyUi.session?.sendStream(PartyStreamDesc(url, title, subs))
+        }
+    }
+    // Watch-party sync loop: hosts broadcast state, viewers glide to the host's position.
+    LaunchedEffect(Unit) {
+        var n = 0
+        while (true) {
+            delay(1000)
+            n++
+            if (!partyUi.active()) continue
+            if (partyUi.isHost) {
+                if (hostDirty || n % 4 == 0) {
+                    hostDirty = false
+                    val live = exo.isCurrentMediaItemLive
+                    val pos = if (live) exo.currentLiveOffset.coerceAtLeast(0L) / 1000.0
+                              else exo.currentPosition.coerceAtLeast(0L) / 1000.0
+                    partyUi.session?.sendState(exo.isPlaying, pos, live)
+                }
+                continue
+            }
+            val s = partyUi.lastState ?: continue
+            if (!s.playing) {
+                if (exo.isPlaying) exo.pause()
+                exo.setPlaybackSpeed(1f)
+                if (!s.live && abs(exo.currentPosition / 1000.0 - s.pos) > 1) exo.seekTo((s.pos * 1000).toLong())
+                continue
+            }
+            if (!exo.isPlaying && exo.playbackState == Player.STATE_READY) exo.play()
+            val err: Double = if (s.live) {
+                if (!exo.isCurrentMediaItemLive) continue
+                exo.currentLiveOffset.coerceAtLeast(0L) / 1000.0 - s.pos
+            } else {
+                s.pos + (System.currentTimeMillis() - s.atLocal) / 1000.0 - exo.currentPosition / 1000.0
+            }
+            when {
+                abs(err) > 1.25 -> {
+                    if (System.currentTimeMillis() - partyUi.lastSeekAt > 4000) {
+                        partyUi.lastSeekAt = System.currentTimeMillis()
+                        exo.seekTo((exo.currentPosition + err * 1000).toLong().coerceAtLeast(0L))
+                    }
+                    exo.setPlaybackSpeed(1f)
+                }
+                err > 0.4 -> exo.setPlaybackSpeed(1.06f)
+                err < -0.4 -> exo.setPlaybackSpeed(0.94f)
+                abs(err) < 0.15 -> exo.setPlaybackSpeed(1f)
+            }
+        }
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
@@ -1287,11 +1472,35 @@ private fun PlayerScreen(url: String, subs: List<SubTrack> = emptyList()) {
                     }
             )
         }
-        // PiP + quality + audio pickers — pickers only when the stream offers a choice.
+        // Party badge: room code + member count, always visible while in a party.
+        if (!pip && partyUi.active()) {
+            Text(
+                "${partyUi.code} · ${partyUi.count}",
+                color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Black,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(12.dp)
+                    .background(Color.White, RoundedCornerShape(6.dp))
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
+            )
+        }
+        // PiP + party + quality + audio pickers — pickers only when the stream offers a choice.
         if (!pip) Column(
             Modifier.align(Alignment.TopEnd).padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            IconButton(
+                onClick = {
+                    if (partyUi.active()) onPartyLeave()
+                    else onPartyStart(PartyStreamDesc(url, title, subs))
+                },
+                modifier = Modifier.size(44.dp).background(if (partyUi.active()) Color.White else Color(0xB3000000), CircleShape)
+            ) {
+                Icon(
+                    Icons.Filled.Groups, contentDescription = if (partyUi.active()) "Leave party" else "Start watch party",
+                    tint = if (partyUi.active()) Color.Black else Color.White, modifier = Modifier.size(24.dp)
+                )
+            }
             val mainActivity = activity as? MainActivity
             if (mainActivity?.pipSupported() == true) {
                 IconButton(
