@@ -18,19 +18,28 @@ data class ManifestInfo(
     val hasStreams: Boolean,
     val streamTypes: List<String>?,
     val streamIdPrefixes: List<String>?,
+    val hasMeta: Boolean = false,
+    val metaTypes: List<String>? = null,
+    val metaIdPrefixes: List<String>? = null,
 ) {
     /** Stremio semantics: stream resource + matching type + matching id prefix (absent = match all). */
-    fun canStream(type: String, id: String): Boolean {
-        if (!hasStreams) return false
-        if (!streamTypes.isNullOrEmpty() && type !in streamTypes) return false
-        val p = streamIdPrefixes
-        if (!p.isNullOrEmpty()) return p.any { id.startsWith(it) }
+    fun canStream(type: String, id: String): Boolean = matches(hasStreams, streamTypes, streamIdPrefixes, type, id)
+    fun canMeta(type: String, id: String): Boolean = matches(hasMeta, metaTypes, metaIdPrefixes, type, id)
+    private fun matches(has: Boolean, types: List<String>?, prefixes: List<String>?, type: String, id: String): Boolean {
+        if (!has) return false
+        if (!types.isNullOrEmpty() && type !in types) return false
+        if (!prefixes.isNullOrEmpty()) return prefixes.any { id.startsWith(it) }
         return true
     }
 }
 data class MetaItem(val id: String, val type: String, val name: String, val poster: String?, val posterShape: String = "poster")
 data class SubTrack(val url: String, val lang: String)
 data class StreamItem(val name: String, val title: String, val url: String, val subtitles: List<SubTrack> = emptyList())
+/** One episode of a series (a Stremio meta `videos` entry). */
+data class Episode(
+    val id: String, val season: Int, val episode: Int?,
+    val name: String, val overview: String?, val thumbnail: String?,
+)
 
 object Stremio {
 
@@ -96,20 +105,60 @@ object Stremio {
         var hasStreams = false
         var sTypes: List<String>? = null
         var sPrefixes: List<String>? = null
+        var hasMeta = false
+        var mTypes: List<String>? = null
+        var mPrefixes: List<String>? = null
         val topTypes = strList(j.optJSONArray("types"))
         val topPrefixes = strList(j.optJSONArray("idPrefixes"))
         val res = j.optJSONArray("resources")
         if (res != null) for (i in 0 until res.length()) {
             when (val r = res.opt(i)) {
                 "stream" -> { hasStreams = true; sTypes = topTypes; sPrefixes = topPrefixes }
-                is JSONObject -> if (r.optString("name") == "stream") {
-                    hasStreams = true
-                    sTypes = strList(r.optJSONArray("types")) ?: topTypes
-                    sPrefixes = strList(r.optJSONArray("idPrefixes")) ?: topPrefixes
+                "meta" -> { hasMeta = true; mTypes = topTypes; mPrefixes = topPrefixes }
+                is JSONObject -> when (r.optString("name")) {
+                    "stream" -> {
+                        hasStreams = true
+                        sTypes = strList(r.optJSONArray("types")) ?: topTypes
+                        sPrefixes = strList(r.optJSONArray("idPrefixes")) ?: topPrefixes
+                    }
+                    "meta" -> {
+                        hasMeta = true
+                        mTypes = strList(r.optJSONArray("types")) ?: topTypes
+                        mPrefixes = strList(r.optJSONArray("idPrefixes")) ?: topPrefixes
+                    }
                 }
             }
         }
-        return ManifestInfo(addon, cats, hasStreams, sTypes, sPrefixes)
+        return ManifestInfo(addon, cats, hasStreams, sTypes, sPrefixes, hasMeta, mTypes, mPrefixes)
+    }
+
+    /** Fetch a series' episode list (the meta `videos` array). Empty if none. */
+    suspend fun loadSeriesVideos(base: String, type: String, id: String): List<Episode> {
+        val u = "$base/meta/${enc(type)}/${enc(id)}.json"
+        val meta = JSONObject(httpGetText(u)).optJSONObject("meta") ?: return emptyList()
+        val vids = meta.optJSONArray("videos") ?: return emptyList()
+        val out = mutableListOf<Episode>()
+        for (i in 0 until vids.length()) {
+            val v = vids.optJSONObject(i) ?: continue
+            val vid = v.optString("id")
+            if (vid.isEmpty()) continue
+            val ep = when {
+                v.has("episode") && !v.isNull("episode") -> v.optInt("episode")
+                v.has("number") && !v.isNull("number") -> v.optInt("number")
+                else -> null
+            }
+            out.add(
+                Episode(
+                    id = vid,
+                    season = if (v.has("season") && !v.isNull("season")) v.optInt("season") else 1,
+                    episode = ep,
+                    name = v.optString("name").ifEmpty { v.optString("title").ifEmpty { "Episode ${ep ?: ""}".trim() } },
+                    overview = v.optString("overview").ifEmpty { v.optString("description").ifEmpty { null } },
+                    thumbnail = v.optString("thumbnail").ifEmpty { null },
+                )
+            )
+        }
+        return out
     }
 
     suspend fun loadCatalog(base: String, c: CatalogRef, genre: String?, query: String? = null): List<MetaItem> {
