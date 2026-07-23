@@ -236,6 +236,7 @@ private sealed interface Screen {
     data object Search : Screen
     data object Addons : Screen
     data class Catalog(val addon: Addon, val initial: CatalogRef? = null) : Screen
+    data class Episodes(val addon: Addon, val item: MetaItem) : Screen
     data class Streams(val addon: Addon, val item: MetaItem) : Screen
     data class Play(val url: String, val title: String, val subs: List<SubTrack> = emptyList()) : Screen
 }
@@ -431,6 +432,11 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 }
             }
 
+            // Series open into an episode picker first; everything else goes straight to streams.
+            fun openMeta(a: Addon, item: MetaItem) {
+                if (item.type == "series") push(Screen.Episodes(a, item)) else push(Screen.Streams(a, item))
+            }
+
             Box(Modifier.fillMaxSize()) {
                 val current = stack.last()
                 Column(Modifier.fillMaxSize()) {
@@ -438,13 +444,13 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                         when (val s = current) {
                             is Screen.Home -> HomeScreen(
                                 homeState,
-                                onOpen = { a, item -> push(Screen.Streams(a, item)) },
+                                onOpen = { a, item -> openMeta(a, item) },
                                 onSeeAll = { a, c -> push(Screen.Catalog(a, c)) },
                                 onGoAddons = { setTab(Screen.Addons) },
                             )
                             is Screen.Search -> SearchScreen(
                                 searchState,
-                                onOpen = { a, item -> push(Screen.Streams(a, item)) },
+                                onOpen = { a, item -> openMeta(a, item) },
                             )
                             is Screen.Addons -> AddonsScreen(
                                 onOpen = { push(Screen.Catalog(it)) },
@@ -455,7 +461,17 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 s.addon, s.initial,
                                 catalogStates.getOrPut(s.addon.manifestUrl) { CatalogUiState() },
                                 onBack = { pop() },
-                                onOpen = { push(Screen.Streams(s.addon, it)) },
+                                onOpen = { openMeta(s.addon, it) },
+                            )
+                            is Screen.Episodes -> EpisodesScreen(
+                                s.addon, s.item,
+                                onBack = { pop() },
+                                onPlayEpisode = { ep ->
+                                    val label = s.item.name + " · S${ep.season}" + (ep.episode?.let { "E$it" } ?: "")
+                                    push(Screen.Streams(s.addon, MetaItem(ep.id, "series", label, null)))
+                                },
+                                // no episode data anywhere → replace this screen with the flat stream list
+                                onFallback = { stack = stack.dropLast(1) + Screen.Streams(s.addon, s.item) },
                             )
                             is Screen.Streams -> StreamsScreen(s.addon, s.item, onBack = { pop() }, onPlay = { push(Screen.Play(it.url, it.name, it.subtitles)) })
                             is Screen.Play -> PlayerScreen(
@@ -1166,6 +1182,86 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
 }
 
 // ---------- streams ----------
+// Series episode picker: fetch the series' meta `videos`, group by season, and
+// let the user pick an episode (whose streams are then loaded like any item).
+@Composable
+private fun EpisodesScreen(
+    addon: Addon,
+    item: MetaItem,
+    onBack: () -> Unit,
+    onPlayEpisode: (Episode) -> Unit,
+    onFallback: () -> Unit,
+) {
+    val ctx = LocalContext.current
+    var episodes by remember { mutableStateOf<List<Episode>>(emptyList()) }
+    var status by remember { mutableStateOf("Loading episodes…") }
+    var selectedSeason by remember { mutableStateOf<Int?>(null) }
+
+    LaunchedEffect(item.id) {
+        val order = listOf(addon) + loadAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
+        var found: List<Episode> = emptyList()
+        for (a in order) {
+            val ok = runCatching {
+                // origin add-on is always asked; others only if they advertise meta for this type/id
+                if (a.manifestUrl != addon.manifestUrl && !manifestFor(a.manifestUrl).canMeta(item.type, item.id)) return@runCatching false
+                val vids = Stremio.loadSeriesVideos(a.base, item.type, item.id)
+                if (vids.isNotEmpty()) { found = vids; true } else false
+            }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrDefault(false)
+            if (ok) break
+        }
+        if (found.isEmpty()) { onFallback(); return@LaunchedEffect }
+        episodes = found
+        status = "${found.size} episodes"
+        selectedSeason = found.map { it.season }.distinct().sortedWith(compareBy({ it == 0 }, { it })).firstOrNull()
+    }
+
+    val bySeason = episodes.groupBy { it.season }
+    val seasons = bySeason.keys.sortedWith(compareBy({ it == 0 }, { it }))
+    val current = selectedSeason ?: seasons.firstOrNull()
+    val eps = (bySeason[current] ?: emptyList()).sortedBy { it.episode ?: 0 }
+
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
+        BackBar(item.name, status, onBack)
+        if (seasons.size > 1) {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 12.dp)) {
+                items(seasons, key = { it }) { s ->
+                    Chip(if (s == 0) "Specials" else "Season $s", s == current) { selectedSeason = s }
+                }
+            }
+        }
+        LazyColumn(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
+            items(eps, key = { it.id }) { ep ->
+                FocusCard(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(), onClick = { onPlayEpisode(ep) }) {
+                    Row(
+                        Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(16.dp))
+                            .border(1.dp, LineC, RoundedCornerShape(16.dp)).padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        val thumbMod = Modifier.width(112.dp).height(63.dp).clip(RoundedCornerShape(8.dp)).background(Color.Black)
+                        if (ep.thumbnail != null) {
+                            AsyncImage(model = ep.thumbnail, contentDescription = null, contentScale = ContentScale.Crop, modifier = thumbMod)
+                        } else {
+                            Box(thumbMod, contentAlignment = Alignment.Center) {
+                                Text(ep.episode?.toString() ?: "•", color = MutedC, fontWeight = FontWeight.Black, fontSize = 18.sp)
+                            }
+                        }
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                (ep.episode?.let { "$it. " } ?: "") + ep.name,
+                                color = TextC, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                            )
+                            if (!ep.overview.isNullOrEmpty()) {
+                                Text(ep.overview, color = MutedC, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // Stremio semantics: catalog add-ons and stream add-ons are separate. Ask the
 // add-on the item came from PLUS every other installed add-on whose manifest
 // serves streams for this type/id, and show the answers grouped per add-on.
