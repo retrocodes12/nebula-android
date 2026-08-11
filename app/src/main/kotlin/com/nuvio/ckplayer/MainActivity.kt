@@ -64,6 +64,7 @@ import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -238,8 +239,47 @@ private sealed interface Screen {
     data class Catalog(val addon: Addon, val initial: CatalogRef? = null) : Screen
     data class Episodes(val addon: Addon, val item: MetaItem) : Screen
     data class Streams(val addon: Addon, val item: MetaItem) : Screen
-    data class Play(val url: String, val title: String, val subs: List<SubTrack> = emptyList()) : Screen
+    data class Play(
+        val url: String,
+        val title: String,
+        val subs: List<SubTrack> = emptyList(),
+        // What is being played, for resume + Continue watching. Null for a deep
+        // link or a party stream: nothing to resume, nothing worth remembering.
+        val type: String? = null,
+        val id: String? = null,
+        val contentName: String? = null,
+        val poster: String? = null,
+        val addonUrl: String? = null,
+    ) : Screen
 }
+
+/**
+ * The episode list the player walks for "next episode". File-level (like
+ * partyUi) because only the top of the nav stack is composed, so it cannot live
+ * inside the episode picker that produced it.
+ */
+private class SeriesChain {
+    var type: String = "series"
+    var name: String = ""
+    var addon: Addon? = null
+    var episodes: List<Episode> = emptyList()
+    var index: Int = -1
+    fun set(type: String, name: String, addon: Addon?, vids: List<Episode>) {
+        this.type = type
+        this.name = name
+        this.addon = addon
+        // playing order: seasons ascending, specials (0) last
+        episodes = vids.sortedWith(compareBy({ it.season == 0 }, { it.season }, { it.episode ?: 0 }))
+        index = -1
+    }
+    fun next(): Episode? = if (index >= 0) episodes.getOrNull(index + 1) else null
+    fun label(ep: Episode): String =
+        (if (name.isNotEmpty()) "$name · " else "") +
+            "S${ep.season}" + (ep.episode?.let { "E$it" } ?: "") +
+            (if (ep.name.isNotEmpty()) " · ${ep.name}" else "")
+    fun clear() { episodes = emptyList(); index = -1; name = ""; addon = null }
+}
+private val seriesChain = SeriesChain()
 
 /** One catalog's worth of content, tagged with where it came from. */
 private class CatRow(val addon: Addon, val catalog: CatalogRef, val items: List<MetaItem>)
@@ -258,7 +298,12 @@ private class HomeUiState {
     var sig: String? = null
     var builtAt = 0L
     val listState = LazyListState()
+    // Continue watching is read straight from local storage, so it paints
+    // instantly and survives every add-on being unreachable.
+    var continueRows by mutableStateOf<List<ProgressRec>>(emptyList())
+    var continueKey by mutableStateOf(0)
     fun invalidate() { sig = null; refreshKey++ }
+    fun invalidateContinue() { continueKey++ }
 }
 
 /** Search tab state, hoisted for the same reason. */
@@ -288,6 +333,10 @@ private class CatalogUiState {
     var status by mutableStateOf("Loading…")
     // what (catalog, genre, query) the current items were fetched for; null after a failure so re-entering retries
     var loadedFor: Triple<CatalogRef?, String?, String>? = null
+    // paging: how many the add-on has handed over, and whether there is more
+    var fetched by mutableStateOf(0)
+    var pageDone by mutableStateOf(false)
+    var paging by mutableStateOf(false)
     // the See-all target already applied, so re-entering doesn't reset a user's catalog switch
     var appliedInitial: CatalogRef? = null
     val gridState = LazyGridState()
@@ -333,6 +382,31 @@ private fun loadAddons(ctx: Context): List<Addon> {
         }
     }.getOrDefault(emptyList())
 }
+/**
+ * Resuming an episode from Continue watching bypasses the picker, so rebuild the
+ * chain in the background — otherwise "next episode" would be dead there.
+ * Stremio episode ids are "<seriesId>:<season>:<episode>".
+ */
+private suspend fun hydrateSeriesChain(ctx: Context, addon: Addon, type: String, episodeId: String) {
+    val seriesId = episodeId.substringBefore(':')
+    if (seriesId.isEmpty() || seriesId == episodeId) return
+    val order = listOf(addon) + loadAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
+    for (a in order) {
+        val vids = runCatching {
+            if (a.manifestUrl != addon.manifestUrl && !manifestFor(a.manifestUrl).canMeta(type, seriesId)) {
+                return@runCatching emptyList()
+            }
+            Stremio.loadSeriesVideos(a.base, type, seriesId)
+        }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+            .getOrDefault(emptyList())
+        if (vids.isNotEmpty()) {
+            seriesChain.set(type, seriesChain.name, addon, vids)
+            seriesChain.index = seriesChain.episodes.indexOfFirst { it.id == episodeId }
+            return
+        }
+    }
+}
+
 private fun saveAddons(ctx: Context, list: List<Addon>) {
     val arr = JSONArray()
     list.forEach {
@@ -434,7 +508,41 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
 
             // Series open into an episode picker first; everything else goes straight to streams.
             fun openMeta(a: Addon, item: MetaItem) {
-                if (item.type == "series") push(Screen.Episodes(a, item)) else push(Screen.Streams(a, item))
+                if (item.type == "series") {
+                    push(Screen.Episodes(a, item))
+                } else {
+                    seriesChain.clear()          // a movie must not inherit a stale chain
+                    push(Screen.Streams(a, item))
+                }
+            }
+
+            /** Resume something from the Continue watching row. */
+            fun openProgress(r: ProgressRec) {
+                val addons = loadAddons(ctx)
+                val a = addons.firstOrNull { it.manifestUrl == r.addonUrl } ?: addons.firstOrNull() ?: return
+                seriesChain.clear()
+                push(Screen.Streams(a, MetaItem(r.id, r.type, r.name, r.poster, r.shape)))
+                if (r.type == "series") scope.launch { hydrateSeriesChain(ctx, a, r.type, r.id) }
+            }
+
+            /** Play a specific episode of the current chain, replacing the player in
+                place so Back doesn't have to walk back through every episode. */
+            fun playEpisode(ep: Episode) {
+                val a = seriesChain.addon ?: return
+                val label = seriesChain.label(ep)
+                seriesChain.index = seriesChain.episodes.indexOfFirst { it.id == ep.id }
+                scope.launch {
+                    val s = runCatching { Stremio.loadStreams(a.base, seriesChain.type, ep.id) }
+                        .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+                        .getOrDefault(emptyList()).firstOrNull()
+                    val rest = stack.dropLast(1)
+                    stack = rest + if (s != null) {
+                        Screen.Play(s.url, s.name, s.subtitles, seriesChain.type, ep.id, label, null, a.manifestUrl)
+                    } else {
+                        // nothing auto-playable — fall back to the picker
+                        Screen.Streams(a, MetaItem(ep.id, seriesChain.type, label, null))
+                    }
+                }
             }
 
             Box(Modifier.fillMaxSize()) {
@@ -447,6 +555,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 onOpen = { a, item -> openMeta(a, item) },
                                 onSeeAll = { a, c -> push(Screen.Catalog(a, c)) },
                                 onGoAddons = { setTab(Screen.Addons) },
+                                onResume = { r -> openProgress(r) },
                             )
                             is Screen.Search -> SearchScreen(
                                 searchState,
@@ -467,15 +576,33 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 s.addon, s.item,
                                 onBack = { pop() },
                                 onPlayEpisode = { ep ->
-                                    val label = s.item.name + " · S${ep.season}" + (ep.episode?.let { "E$it" } ?: "")
-                                    push(Screen.Streams(s.addon, MetaItem(ep.id, "series", label, null)))
+                                    seriesChain.index = seriesChain.episodes.indexOfFirst { it.id == ep.id }
+                                    val label = seriesChain.label(ep)
+                                    push(Screen.Streams(s.addon, MetaItem(ep.id, "series", label, s.item.poster)))
                                 },
                                 // no episode data anywhere → replace this screen with the flat stream list
                                 onFallback = { stack = stack.dropLast(1) + Screen.Streams(s.addon, s.item) },
                             )
-                            is Screen.Streams -> StreamsScreen(s.addon, s.item, onBack = { pop() }, onPlay = { push(Screen.Play(it.url, it.name, it.subtitles)) })
+                            is Screen.Streams -> StreamsScreen(
+                                s.addon, s.item,
+                                onBack = { pop() },
+                                onPlay = {
+                                    push(
+                                        Screen.Play(
+                                            it.url, it.name, it.subtitles,
+                                            s.item.type, s.item.id, s.item.name,
+                                            s.item.poster, s.addon.manifestUrl,
+                                        )
+                                    )
+                                },
+                            )
                             is Screen.Play -> PlayerScreen(
                                 s.url, s.title, s.subs,
+                                contentType = s.type, contentId = s.id, contentName = s.contentName,
+                                poster = s.poster, addonUrl = s.addonUrl,
+                                nextEpisode = seriesChain.next(),
+                                onPlayNext = { ep -> playEpisode(ep) },
+                                onProgressSaved = { homeState.invalidateContinue() },
                                 onPartyStart = { partyStart(it) },
                                 onPartyLeave = { partyLeave() },
                             )
@@ -580,6 +707,57 @@ private fun MetaCard(m: MetaItem, modifier: Modifier = Modifier, onClick: () -> 
                 maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp,
                 modifier = Modifier.padding(top = 7.dp, start = 2.dp, end = 2.dp),
             )
+        }
+    }
+}
+
+/** A Continue watching card: poster, how much is left, and a resume bar. */
+@Composable
+private fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick: () -> Unit, onRemove: () -> Unit) {
+    Box(modifier) {
+        FocusCard(shape = RoundedCornerShape(12.dp), onClick = onClick) {
+            Column(Modifier.padding(2.dp)) {
+                Box(
+                    Modifier.fillMaxWidth().aspectRatio(thumbRatio(r.shape))
+                        .clip(RoundedCornerShape(11.dp))
+                        .background(SurfaceC)
+                        .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(11.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (r.poster != null) {
+                        AsyncImage(
+                            model = r.poster, contentDescription = r.name,
+                            contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        Text(
+                            r.name.filter { it.isLetterOrDigit() }.take(2).uppercase().ifEmpty { "••" },
+                            color = Color(0xFF3A3A45), fontSize = 22.sp, fontWeight = FontWeight.Black,
+                        )
+                    }
+                    val pct = if (r.dur > 0) (r.pos.toFloat() / r.dur).coerceIn(0f, 1f) else 0f
+                    Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(4.dp).background(Color(0x8C000000))) {
+                        Box(Modifier.fillMaxWidth(pct).fillMaxSize().background(Red))
+                    }
+                }
+                Text(
+                    r.name, color = Color(0xFFE8E8EA), fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp,
+                    modifier = Modifier.padding(top = 7.dp, start = 2.dp, end = 2.dp),
+                )
+                val left = r.dur - r.pos
+                if (left > 0) Text(
+                    fmtTime(left) + " left", color = MutedC, fontSize = 11.sp,
+                    maxLines = 1, modifier = Modifier.padding(top = 2.dp, start = 2.dp),
+                )
+            }
+        }
+        IconButton(
+            onClick = onRemove,
+            modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(28.dp)
+                .background(Color(0x9E000000), RoundedCornerShape(6.dp)),
+        ) {
+            Icon(Icons.Filled.Close, contentDescription = "Remove from Continue watching", tint = MutedC, modifier = Modifier.size(16.dp))
         }
     }
 }
@@ -721,9 +899,14 @@ private fun HomeScreen(
     onOpen: (Addon, MetaItem) -> Unit,
     onSeeAll: (Addon, CatalogRef) -> Unit,
     onGoAddons: () -> Unit,
+    onResume: (ProgressRec) -> Unit = {},
 ) {
     val ctx = LocalContext.current
     var update by remember { mutableStateOf<Updates.Release?>(null) }
+
+    // Re-read on every entry (this screen leaves composition when one is pushed),
+    // so finishing an episode is reflected the moment you come back.
+    LaunchedEffect(st.continueKey) { st.continueRows = Progress.continueList(ctx) }
 
     // Best-effort update check against GitHub Releases, once per Home entry.
     LaunchedEffect(Unit) {
@@ -800,7 +983,7 @@ private fun HomeScreen(
                     shape = RoundedCornerShape(8.dp),
                 ) { Text("Add an add-on", fontWeight = FontWeight.SemiBold) }
             }
-            st.rows.isEmpty() && st.loading -> {
+            st.rows.isEmpty() && st.loading && st.continueRows.isEmpty() -> {
                 val a = shimmerAlpha()
                 Column {
                     repeat(2) {
@@ -815,12 +998,30 @@ private fun HomeScreen(
                     }
                 }
             }
-            st.rows.isEmpty() -> Column(Modifier.padding(top = 30.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            st.rows.isEmpty() && st.continueRows.isEmpty() -> Column(Modifier.padding(top = 30.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("Couldn’t reach your add-ons right now.", color = MutedC, fontSize = 14.sp,
                     modifier = Modifier.padding(bottom = 10.dp))
                 Chip("Retry", false) { st.invalidate() }
             }
             else -> LazyColumn(state = st.listState, contentPadding = PaddingValues(bottom = 16.dp)) {
+                if (st.continueRows.isNotEmpty()) item(key = "continue") {
+                    Column {
+                        RowHeader("Continue watching", null, null)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            items(st.continueRows, key = { Progress.key(it.type, it.id) }) { r ->
+                                ContinueCard(
+                                    r,
+                                    Modifier.width(if (r.shape == "landscape") 210.dp else 124.dp),
+                                    onClick = { onResume(r) },
+                                    onRemove = {
+                                        Progress.clear(ctx, r.type, r.id)
+                                        st.continueRows = Progress.continueList(ctx)
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
                 items(st.rows, key = { it.addon.manifestUrl + "/" + it.catalog.type + "/" + it.catalog.id }) { r ->
                     val multi = st.rows.count { it.addon.manifestUrl == r.addon.manifestUrl } > 1
                     Column {
@@ -833,6 +1034,14 @@ private fun HomeScreen(
                                 MetaCard(m, Modifier.width(if (m.posterShape == "landscape") 210.dp else 124.dp)) { onOpen(r.addon, m) }
                             }
                         }
+                    }
+                }
+                // add-ons unreachable but Continue watching kept the screen useful
+                if (st.rows.isEmpty() && !st.loading) item(key = "retry") {
+                    Column(Modifier.fillMaxWidth().padding(top = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("Couldn’t reach your add-ons right now.", color = MutedC, fontSize = 14.sp,
+                            modifier = Modifier.padding(bottom = 10.dp))
+                        Chip("Retry", false) { st.invalidate() }
                     }
                 }
             }
@@ -853,10 +1062,26 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit) {
         st.sections = emptyList()
         for (a in loadAddons(ctx)) {
             runCatching {
-                val cats = manifestFor(a.manifestUrl).catalogs
-                val sc = cats.firstOrNull { it.search } ?: return@runCatching
-                val items = Stremio.loadCatalog(a.base, sc, null, q)
-                if (items.isNotEmpty()) { out.add(CatRow(a, sc, items)); st.sections = out.toList() }
+                // An add-on usually advertises search on several catalogs (Cinemeta
+                // has one for movies and one for series) — query them all, or a
+                // search for a show only ever returns films.
+                val cats = manifestFor(a.manifestUrl).catalogs.filter { it.search }.take(4)
+                if (cats.isEmpty()) return@runCatching
+                val merged = mutableListOf<MetaItem>()
+                val seen = HashSet<String>()
+                for (sc in cats) {
+                    val items = runCatching { Stremio.loadCatalog(a.base, sc, null, q) }
+                        .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+                        .getOrDefault(emptyList())
+                    for (m in items) if (seen.add(m.type + ":" + m.id)) merged.add(m)
+                    if (merged.isNotEmpty()) {
+                        // one section per add-on, refreshed as its catalogs answer
+                        val row = CatRow(a, cats.first(), merged.toList())
+                        val idx = out.indexOfFirst { it.addon.manifestUrl == a.manifestUrl }
+                        if (idx >= 0) out[idx] = row else out.add(row)
+                        st.sections = out.toList()
+                    }
+                }
             }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
         }
         st.searchedFor = q
@@ -1110,10 +1335,48 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
         } else {
             val c = current ?: return@LaunchedEffect
             loading = true; status = "Loading…"; items = emptyList()
+            st.fetched = 0; st.pageDone = false
             runCatching { Stremio.loadCatalog(addon.base, c, genre) }
-                .onSuccess { items = it; status = if (it.isEmpty()) "No items." else "${it.size} items"; loading = false; st.loadedFor = want }
-                .onFailure { status = "Failed: ${it.message}"; loading = false; st.loadedFor = null }
+                .onSuccess {
+                    items = it
+                    st.fetched = it.size
+                    // stop paging on an empty page, or when the catalog never advertised `skip`
+                    st.pageDone = it.isEmpty() || !c.skip
+                    status = if (it.isEmpty()) "No items." else "${it.size} items" + (if (st.pageDone) "" else " — scroll for more")
+                    loading = false; st.loadedFor = want
+                }
+                .onFailure { status = "Failed: ${it.message}"; loading = false; st.loadedFor = null; st.pageDone = true }
         }
+    }
+
+    // Catalogs arrive a page at a time; `skip` walks them. Everything past the
+    // first page used to be unreachable.
+    val reachedEnd by remember {
+        androidx.compose.runtime.derivedStateOf {
+            val last = st.gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            last >= 0 && last >= st.gridState.layoutInfo.totalItemsCount - 12
+        }
+    }
+    LaunchedEffect(reachedEnd, st.pageDone, st.paging, submitted, current, genre) {
+        if (!reachedEnd || st.pageDone || st.paging || loading) return@LaunchedEffect
+        if (submitted.trim().isNotEmpty()) return@LaunchedEffect      // search results aren't paged
+        val c = current ?: return@LaunchedEffect
+        if (items.size >= 1000) { st.pageDone = true; return@LaunchedEffect }   // ceiling for TV memory
+        st.paging = true
+        runCatching { Stremio.loadCatalog(addon.base, c, genre, null, st.fetched) }
+            .onSuccess { page ->
+                st.fetched += page.size
+                val seen = items.mapTo(HashSet()) { it.type + ":" + it.id }
+                val fresh = page.filter { seen.add(it.type + ":" + it.id) }
+                if (fresh.isNotEmpty()) items = items + fresh
+                st.pageDone = page.isEmpty() || fresh.isEmpty()
+                status = "${items.size} items" + (if (st.pageDone) "" else " — scroll for more")
+            }
+            .onFailure {
+                if (it is kotlinx.coroutines.CancellationException) throw it
+                st.pageDone = true
+            }
+        st.paging = false
     }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
@@ -1211,6 +1474,8 @@ private fun EpisodesScreen(
         }
         if (found.isEmpty()) { onFallback(); return@LaunchedEffect }
         episodes = found
+        // hand the chain to the player so it can offer the next episode
+        seriesChain.set(item.type, item.name, addon, found)
         status = "${found.size} episodes"
         selectedSeason = found.map { it.season }.distinct().sortedWith(compareBy({ it == 0 }, { it })).firstOrNull()
     }
@@ -1238,12 +1503,27 @@ private fun EpisodesScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        val thumbMod = Modifier.width(112.dp).height(63.dp).clip(RoundedCornerShape(8.dp)).background(Color.Black)
-                        if (ep.thumbnail != null) {
-                            AsyncImage(model = ep.thumbnail, contentDescription = null, contentScale = ContentScale.Crop, modifier = thumbMod)
-                        } else {
-                            Box(thumbMod, contentAlignment = Alignment.Center) {
-                                Text(ep.episode?.toString() ?: "•", color = MutedC, fontWeight = FontWeight.Black, fontSize = 18.sp)
+                        // watched tick / part-way bar, from the local progress store
+                        val pr = Progress.get(ctx, item.type, ep.id)
+                        Box {
+                            val thumbMod = Modifier.width(112.dp).height(63.dp).clip(RoundedCornerShape(8.dp)).background(Color.Black)
+                            if (ep.thumbnail != null) {
+                                AsyncImage(model = ep.thumbnail, contentDescription = null, contentScale = ContentScale.Crop, modifier = thumbMod)
+                            } else {
+                                Box(thumbMod, contentAlignment = Alignment.Center) {
+                                    Text(ep.episode?.toString() ?: "•", color = MutedC, fontWeight = FontWeight.Black, fontSize = 18.sp)
+                                }
+                            }
+                            if (pr?.done == true) {
+                                Box(
+                                    Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp)
+                                        .background(Color(0xD10B0B0F), CircleShape),
+                                    contentAlignment = Alignment.Center,
+                                ) { Text("✓", color = Color(0xFF46D369), fontSize = 11.sp, fontWeight = FontWeight.Black) }
+                            } else if (pr != null && pr.pos > 0 && pr.dur > 0) {
+                                Box(Modifier.align(Alignment.BottomStart).width(112.dp).height(4.dp).background(Color(0x8C000000))) {
+                                    Box(Modifier.fillMaxWidth((pr.pos.toFloat() / pr.dur).coerceIn(0f, 1f)).fillMaxSize().background(Red))
+                                }
                             }
                         }
                         Column(Modifier.weight(1f)) {
@@ -1336,6 +1616,14 @@ private fun PlayerScreen(
     url: String,
     title: String = "Nebula",
     subs: List<SubTrack> = emptyList(),
+    contentType: String? = null,
+    contentId: String? = null,
+    contentName: String? = null,
+    poster: String? = null,
+    addonUrl: String? = null,
+    nextEpisode: Episode? = null,
+    onPlayNext: (Episode) -> Unit = {},
+    onProgressSaved: () -> Unit = {},
     onPartyStart: (PartyStreamDesc) -> Unit = {},
     onPartyLeave: () -> Unit = {},
 ) {
@@ -1368,6 +1656,30 @@ private fun PlayerScreen(
     }
     LaunchedEffect(skipFlash) { if (skipFlash != null) { delay(800); skipFlash = null } }
 
+    // ---- resume point ----
+    var upnextOpen by remember { mutableStateOf(false) }
+    var upnextCounting by remember { mutableStateOf(false) }
+    var upnextLeft by remember { mutableStateOf(8) }
+    var upnextDismissed by remember { mutableStateOf(false) }
+
+    /** Write the current position into the store. Live streams have nothing to resume. */
+    fun snapshotProgress(done: Boolean = false) {
+        val id = contentId ?: return
+        val type = contentType ?: return
+        if (exo.isCurrentMediaItemLive) return
+        val dur = exo.duration
+        if (dur == C.TIME_UNSET || dur <= 0) return
+        Progress.note(
+            context,
+            ProgressRec(
+                type = type, id = id, name = contentName ?: title, poster = poster,
+                addonUrl = addonUrl.orEmpty(),
+                pos = exo.currentPosition.coerceAtLeast(0L), dur = dur, done = done,
+            ),
+        )
+        onProgressSaved()
+    }
+
     LaunchedEffect(url) {
         runCatching {
             val b = MediaItem.Builder().setUri(url)
@@ -1396,9 +1708,46 @@ private fun PlayerScreen(
                     }
                 )
             }
-            exo.setMediaItem(b.build())
+            // Resume where this exact item was left off; handing the offset to
+            // ExoPlayer starts buffering there rather than loading at 0 and seeking.
+            val resume = if (contentType != null && contentId != null) {
+                Progress.resumeAt(context, contentType, contentId)
+            } else 0L
+            if (resume > 0) exo.setMediaItem(b.build(), resume) else exo.setMediaItem(b.build())
             exo.prepare()
+            if (resume > 0) {
+                android.widget.Toast.makeText(
+                    context, "Resumed from ${fmtTime(resume)}", android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
         }.onFailure { error = it.message }
+    }
+
+    // Keep the resume point roughly current while playing.
+    if (contentId != null) LaunchedEffect(contentId) {
+        while (true) {
+            delay(5000)
+            if (exo.isPlaying) snapshotProgress()
+        }
+    }
+
+    // Offer the next episode in the last 25s; the countdown itself starts on ENDED.
+    if (nextEpisode != null) LaunchedEffect(nextEpisode.id) {
+        while (true) {
+            delay(500)
+            if (upnextDismissed || upnextOpen) continue
+            if (exo.isCurrentMediaItemLive || !exo.isPlaying) continue
+            val dur = exo.duration
+            if (dur == C.TIME_UNSET || dur <= 0) continue
+            val remain = dur - exo.currentPosition
+            if (remain in 500..25_000) upnextOpen = true
+        }
+    }
+    LaunchedEffect(upnextCounting) {
+        if (!upnextCounting) return@LaunchedEffect
+        upnextLeft = 8
+        while (upnextLeft > 0) { delay(1000); upnextLeft-- }
+        nextEpisode?.let { onPlayNext(it) }
     }
 
     DisposableEffect(Unit) {
@@ -1426,11 +1775,18 @@ private fun PlayerScreen(
             override fun onPositionDiscontinuity(old: Player.PositionInfo, new: Player.PositionInfo, reason: Int) {
                 if (reason == Player.DISCONTINUITY_REASON_SEEK && partyUi.active() && partyUi.isHost) hostDirty = true
             }
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state != Player.STATE_ENDED) return
+                snapshotProgress(done = true)          // ticks it off the episode list
+                if (nextEpisode != null && !upnextDismissed) { upnextOpen = true; upnextCounting = true }
+            }
         }
         exo.addListener(l)
         activePipPlayer.value = exo
         (activity as? MainActivity)?.refreshPipParams()
         onDispose {
+            // last word on the resume point before the player goes away
+            runCatching { snapshotProgress() }
             exo.removeListener(l); exo.release()
             if (activePipPlayer.value === exo) activePipPlayer.value = null
             // Clears (API 31+) auto-enter so backing out of the player can't PiP the browse UI.
@@ -1635,6 +1991,51 @@ private fun PlayerScreen(
                     modifier = Modifier.size(44.dp).background(Color(0xB3000000), CircleShape)
                 ) {
                     Icon(Icons.Filled.Audiotrack, contentDescription = "Audio", tint = Color.White, modifier = Modifier.size(22.dp))
+                }
+            }
+            if (nextEpisode != null) {
+                IconButton(
+                    onClick = { upnextCounting = false; onPlayNext(nextEpisode) },
+                    modifier = Modifier.size(44.dp).background(Color(0xB3000000), CircleShape)
+                ) {
+                    Icon(Icons.Filled.SkipNext, contentDescription = "Next episode", tint = Color.White, modifier = Modifier.size(24.dp))
+                }
+            }
+        }
+        // Up next: offered near the end, counts down and autoplays once the episode ends.
+        if (upnextOpen && nextEpisode != null && !pip) {
+            Column(
+                Modifier.align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = 96.dp)
+                    .width(300.dp)
+                    .background(SurfaceC, RoundedCornerShape(14.dp))
+                    .border(1.dp, Line2, RoundedCornerShape(14.dp))
+                    .padding(16.dp),
+            ) {
+                Text("UP NEXT", color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                Text(
+                    "S${nextEpisode.season}" + (nextEpisode.episode?.let { "E$it" } ?: "") +
+                        (if (nextEpisode.name.isNotEmpty()) " · ${nextEpisode.name}" else ""),
+                    color = TextC, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { upnextCounting = false; onPlayNext(nextEpisode) },
+                        colors = ButtonDefaults.buttonColors(containerColor = Red),
+                        shape = RoundedCornerShape(8.dp),
+                    ) {
+                        Text(
+                            if (upnextCounting) "Play now ($upnextLeft)" else "Play now",
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    Button(
+                        onClick = { upnextCounting = false; upnextOpen = false; upnextDismissed = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = Surface2),
+                        shape = RoundedCornerShape(8.dp),
+                    ) { Text("Dismiss", color = TextC) }
                 }
             }
         }
