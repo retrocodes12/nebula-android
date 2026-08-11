@@ -88,6 +88,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -222,47 +223,49 @@ private val inPipMode = mutableStateOf(false)
 // Editorial palette: warm cream ink on near-black, hairlines for structure,
 // red kept to the mark and to progress. Mirrors the shared HTML player.
 private val Red = Color(0xFFE50914)
-private val Bg = Color(0xFF0B0B0F)
-private val SurfaceC = Color(0xFF15141A)
-private val Surface2 = Color(0xFF1C1B22)
-private val LineC = Color(0xFF232228)
-private val Line2 = Color(0xFF33323C)
-private val MutedC = Color(0xFF807E88)
-private val TextC = Color(0xFFF2EDE4)
+private val Bg = Color(0xFF000000)
+private val SurfaceC = Color(0xFF1C1C1E)     // secondary system background
+private val Surface2 = Color(0xFF2C2C2E)     // tertiary
+private val LineC = Color(0x1AFFFFFF)        // hairline separator
+private val Line2 = Color(0x29FFFFFF)
+private val MutedC = Color(0x99EBEBF5)       // secondary label
+private val FaintC = Color(0x4DEBEBF5)       // tertiary label
+private val FillC = Color(0x3D767680)        // control fill
+private val TextC = Color(0xFFFFFFFF)
 
 // Three registers and nothing between: a display serif for titles, one
 // grotesque for the interface, a mono for every number and label.
-private val Serif = FontFamily(Font(R.font.serif))
-private val Sans = FontFamily(Font(R.font.archivo))
-private val Mono = FontFamily(Font(R.font.mono))
+private val Sans = FontFamily(Font(R.font.geist))
+private val Mono = FontFamily(Font(R.font.geistmono))
+private val Serif = Sans                     // display and UI share one family, as on Apple platforms
 
 /** Everything unstyled falls back to the interface grotesque, not the system face. */
 private val NebulaTypography = Typography().run {
     Typography(
-        displayLarge = displayLarge.copy(fontFamily = Serif),
-        displayMedium = displayMedium.copy(fontFamily = Serif),
-        displaySmall = displaySmall.copy(fontFamily = Serif),
-        headlineLarge = headlineLarge.copy(fontFamily = Serif),
-        headlineMedium = headlineMedium.copy(fontFamily = Serif),
-        headlineSmall = headlineSmall.copy(fontFamily = Serif),
+        displayLarge = displayLarge.copy(fontFamily = Sans),
+        displayMedium = displayMedium.copy(fontFamily = Sans),
+        displaySmall = displaySmall.copy(fontFamily = Sans),
+        headlineLarge = headlineLarge.copy(fontFamily = Sans),
+        headlineMedium = headlineMedium.copy(fontFamily = Sans),
+        headlineSmall = headlineSmall.copy(fontFamily = Sans),
         titleLarge = titleLarge.copy(fontFamily = Sans),
         titleMedium = titleMedium.copy(fontFamily = Sans),
         titleSmall = titleSmall.copy(fontFamily = Sans),
         bodyLarge = bodyLarge.copy(fontFamily = Sans),
         bodyMedium = bodyMedium.copy(fontFamily = Sans),
         bodySmall = bodySmall.copy(fontFamily = Sans),
-        labelLarge = labelLarge.copy(fontFamily = Mono),
-        labelMedium = labelMedium.copy(fontFamily = Mono),
-        labelSmall = labelSmall.copy(fontFamily = Mono),
+        labelLarge = labelLarge.copy(fontFamily = Sans),
+        labelMedium = labelMedium.copy(fontFamily = Sans),
+        labelSmall = labelSmall.copy(fontFamily = Sans),
     )
 }
 
-/** Uppercase, widely tracked, mono — the quiet register used for every label. */
-private fun labelStyle(size: Int = 11, color: Color = MutedC) = TextStyle(
-    fontFamily = Mono,
+/** Secondary label: same family, lighter colour, tight tracking. */
+private fun labelStyle(size: Int = 13, color: Color = MutedC) = TextStyle(
+    fontFamily = Sans,
     fontSize = size.sp,
-    fontWeight = FontWeight.Medium,
-    letterSpacing = (size * 0.2f).sp,
+    fontWeight = FontWeight.Normal,
+    letterSpacing = (-0.01 * size).sp,
     color = color,
 )
 
@@ -672,12 +675,13 @@ private fun FocusCard(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
-    val zoom by animateFloatAsState(if (focused) 1.05f else 1f, tween(140), label = "zoom")
+    val zoom by animateFloatAsState(if (focused) 1.09f else 1f, tween(300), label = "zoom")
+    val lift by animateFloatAsState(if (focused) 22f else 0f, tween(300), label = "lift")
     Box(
         modifier
             .scale(zoom)
+            .shadow(lift.dp, shape, clip = false)
             .clip(shape)
-            .border(2.dp, if (focused) Color.White else Color.Transparent, shape)
             .clickable(interactionSource = interaction, indication = null) { onClick() }
     ) { content() }
 }
@@ -698,8 +702,8 @@ private fun BackBar(title: String, sub: String?, onBack: () -> Unit) {
             }
         }
         Column(Modifier.weight(1f)) {
-            Text(title, color = TextC, fontSize = 30.sp, fontFamily = Serif, fontWeight = FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (!sub.isNullOrEmpty()) Text(sub.uppercase(), style = labelStyle(10), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(title, color = TextC, fontSize = 28.sp, fontFamily = Sans, fontWeight = FontWeight.Bold, letterSpacing = (-0.7).sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (!sub.isNullOrEmpty()) Text(sub, style = labelStyle(13), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -708,7 +712,7 @@ private fun BackBar(title: String, sub: String?, onBack: () -> Unit) {
 private fun Chip(text: String, on: Boolean, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
-    val pill = RoundedCornerShape(0.dp)
+    val pill = RoundedCornerShape(12.dp)
     Box(
         Modifier
             .clip(pill)
@@ -724,13 +728,13 @@ private fun Chip(text: String, on: Boolean, onClick: () -> Unit) {
 /** One poster/landscape card — used by the catalog grid, Home rows, and Search. */
 @Composable
 private fun MetaCard(m: MetaItem, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    FocusCard(shape = RoundedCornerShape(0.dp), modifier = modifier, onClick = onClick) {
+    FocusCard(shape = RoundedCornerShape(12.dp), modifier = modifier, onClick = onClick) {
         Column(Modifier.padding(2.dp)) {
             Box(
                 Modifier.fillMaxWidth().aspectRatio(thumbRatio(m.posterShape))
-                    .clip(RoundedCornerShape(0.dp))
+                    .clip(RoundedCornerShape(12.dp))
                     .background(SurfaceC)
-                    .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(0.dp)),
+                    .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(12.dp)),
                 contentAlignment = Alignment.Center,
             ) {
                 if (m.poster != null) {
@@ -758,13 +762,13 @@ private fun MetaCard(m: MetaItem, modifier: Modifier = Modifier, onClick: () -> 
 @Composable
 private fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick: () -> Unit, onRemove: () -> Unit) {
     Box(modifier) {
-        FocusCard(shape = RoundedCornerShape(0.dp), onClick = onClick) {
+        FocusCard(shape = RoundedCornerShape(12.dp), onClick = onClick) {
             Column(Modifier.padding(2.dp)) {
                 Box(
                     Modifier.fillMaxWidth().aspectRatio(thumbRatio(r.shape))
-                        .clip(RoundedCornerShape(0.dp))
+                        .clip(RoundedCornerShape(12.dp))
                         .background(SurfaceC)
-                        .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(0.dp)),
+                        .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(12.dp)),
                     contentAlignment = Alignment.Center,
                 ) {
                     if (r.poster != null) {
@@ -790,7 +794,7 @@ private fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick:
                 )
                 val left = r.dur - r.pos
                 if (left > 0) Text(
-                    (fmtTime(left) + " left").uppercase(), style = labelStyle(9),
+                    fmtTime(left) + " left", style = labelStyle(12, FaintC),
                     maxLines = 1, modifier = Modifier.padding(top = 2.dp, start = 2.dp),
                 )
             }
@@ -798,7 +802,7 @@ private fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick:
         IconButton(
             onClick = onRemove,
             modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(28.dp)
-                .background(Color(0x9E000000), RoundedCornerShape(0.dp)),
+                .background(Color(0x9E000000), RoundedCornerShape(12.dp)),
         ) {
             Icon(Icons.Filled.Close, contentDescription = "Remove from Continue watching", tint = MutedC, modifier = Modifier.size(16.dp))
         }
@@ -811,7 +815,7 @@ private fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick:
 
 /** A single shimmering block. */
 @Composable
-private fun SkelBox(modifier: Modifier, shape: RoundedCornerShape = RoundedCornerShape(0.dp)) {
+private fun SkelBox(modifier: Modifier, shape: RoundedCornerShape = RoundedCornerShape(12.dp)) {
     Box(modifier.clip(shape).background(Surface2.copy(alpha = shimmerAlpha())))
 }
 
@@ -819,14 +823,14 @@ private fun SkelBox(modifier: Modifier, shape: RoundedCornerShape = RoundedCorne
 @Composable
 private fun SkeletonRow(leadingWidth: Dp, leadingHeight: Dp, circle: Boolean) {
     Row(
-        Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(0.dp))
-            .border(1.dp, LineC, RoundedCornerShape(0.dp)).padding(14.dp),
+        Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(12.dp))
+            .border(1.dp, LineC, RoundedCornerShape(12.dp)).padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         SkelBox(
             Modifier.width(leadingWidth).height(leadingHeight),
-            if (circle) RoundedCornerShape(50) else RoundedCornerShape(0.dp),
+            if (circle) RoundedCornerShape(50) else RoundedCornerShape(12.dp),
         )
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(9.dp)) {
             SkelBox(Modifier.fillMaxWidth().height(13.dp))
@@ -839,7 +843,7 @@ private fun SkeletonRow(leadingWidth: Dp, leadingHeight: Dp, circle: Boolean) {
 @Composable
 private fun SkeletonCell(modifier: Modifier = Modifier) {
     Column(modifier) {
-        SkelBox(Modifier.fillMaxWidth().aspectRatio(16f / 9f), RoundedCornerShape(0.dp))
+        SkelBox(Modifier.fillMaxWidth().aspectRatio(16f / 9f), RoundedCornerShape(12.dp))
         SkelBox(Modifier.padding(top = 8.dp).fillMaxWidth(0.7f).height(12.dp))
     }
 }
@@ -848,9 +852,10 @@ private fun SkeletonCell(modifier: Modifier = Modifier) {
 @Composable
 private fun RowHeader(title: String, sub: String?, seeAll: (() -> Unit)?) {
     Row(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(title.uppercase(), style = labelStyle(12, TextC), maxLines = 1,
+        Text(title, color = TextC, fontSize = 20.sp, fontFamily = Sans, fontWeight = FontWeight.SemiBold,
+            letterSpacing = (-0.4).sp, maxLines = 1,
             overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-        if (sub != null) Text(sub.uppercase(), style = labelStyle(10), maxLines = 1,
+        if (sub != null) Text(sub, style = labelStyle(13), maxLines = 1,
             overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 10.dp).weight(1f))
         else Spacer(Modifier.weight(1f))
         if (seeAll != null) Chip("See all ›", false, seeAll)
@@ -877,9 +882,9 @@ private fun TabItem(label: String, icon: androidx.compose.ui.graphics.vector.Ima
     val tint = if (on) Color.White else if (focused) Color.White else MutedC
     Column(
         modifier
-            .clip(RoundedCornerShape(0.dp))
-            .border(1.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(0.dp))
-            .background(if (on) Color(0x24E50914) else Color.Transparent, RoundedCornerShape(0.dp))
+            .clip(RoundedCornerShape(12.dp))
+            .border(1.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(12.dp))
+            .background(if (on) Color(0x24E50914) else Color.Transparent, RoundedCornerShape(12.dp))
             .clickable(interactionSource = interaction, indication = null) { onClick() }
             .padding(vertical = 7.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -931,7 +936,7 @@ private fun UpdateCard(version: String, notes: String, onDismiss: () -> Unit) {
 
     Row(
         Modifier.fillMaxWidth()
-            .background(Red, RoundedCornerShape(0.dp))
+            .background(Red, RoundedCornerShape(12.dp))
             .padding(start = 14.dp, top = 12.dp, end = 6.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -961,7 +966,7 @@ private fun UpdateCard(version: String, notes: String, onDismiss: () -> Unit) {
             },
             enabled = phase != "downloading",
             colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Red),
-            shape = RoundedCornerShape(0.dp),
+            shape = RoundedCornerShape(12.dp),
         ) {
             Text(
                 when (phase) { "ready" -> "Install"; "downloading" -> "···"; "failed" -> "Retry"; else -> "Update" },
@@ -1032,9 +1037,9 @@ private fun HomeScreen(
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
-            Text("◆ ", color = Red, fontSize = 20.sp)
-            Text("NEBULA", color = TextC, fontSize = 15.sp, fontFamily = Mono,
-                fontWeight = FontWeight.Medium, letterSpacing = 4.sp)
+            Text("◆ ", color = Red, fontSize = 18.sp)
+            Text("Nebula", color = TextC, fontSize = 22.sp, fontFamily = Sans,
+                fontWeight = FontWeight.Bold, letterSpacing = (-0.6).sp)
         }
         update?.let { rel ->
             UpdateCard(
@@ -1050,8 +1055,8 @@ private fun HomeScreen(
         when {
             !st.hasAddons -> Column(
                 Modifier.fillMaxWidth().padding(top = 36.dp)
-                    .background(SurfaceC, RoundedCornerShape(0.dp))
-                    .border(1.dp, LineC, RoundedCornerShape(0.dp)).padding(24.dp),
+                    .background(SurfaceC, RoundedCornerShape(12.dp))
+                    .border(1.dp, LineC, RoundedCornerShape(12.dp)).padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text("Nothing here yet", color = TextC, fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -1063,7 +1068,7 @@ private fun HomeScreen(
                 Button(
                     onClick = onGoAddons,
                     colors = ButtonDefaults.buttonColors(containerColor = Red),
-                    shape = RoundedCornerShape(0.dp),
+                    shape = RoundedCornerShape(12.dp),
                 ) { Text("Add an add-on", fontWeight = FontWeight.SemiBold) }
             }
             st.rows.isEmpty() && st.loading && st.continueRows.isEmpty() -> {
@@ -1071,11 +1076,11 @@ private fun HomeScreen(
                 Column {
                     repeat(2) {
                         Box(Modifier.padding(top = 18.dp, bottom = 10.dp).width(180.dp).height(16.dp)
-                            .clip(RoundedCornerShape(0.dp)).background(Surface2.copy(alpha = a)))
+                            .clip(RoundedCornerShape(12.dp)).background(Surface2.copy(alpha = a)))
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             repeat(4) {
                                 Box(Modifier.width(210.dp).aspectRatio(16f / 9f)
-                                    .clip(RoundedCornerShape(0.dp)).background(Surface2.copy(alpha = a)))
+                                    .clip(RoundedCornerShape(12.dp)).background(Surface2.copy(alpha = a)))
                             }
                         }
                     }
@@ -1171,7 +1176,7 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit) {
         st.searching = false
     }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
-        Text("Search", color = TextC, fontSize = 44.sp, fontFamily = Serif, fontWeight = FontWeight.Normal, modifier = Modifier.padding(bottom = 12.dp))
+        Text("Search", color = TextC, fontSize = 34.sp, fontFamily = Sans, fontWeight = FontWeight.Bold, letterSpacing = (-1).sp, modifier = Modifier.padding(bottom = 12.dp))
         OutlinedTextField(
             value = st.query,
             onValueChange = { st.query = it },
@@ -1187,7 +1192,7 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit) {
             },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { st.submitted = st.query.trim() }),
-            shape = RoundedCornerShape(0.dp),
+            shape = RoundedCornerShape(12.dp),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = Color.White, unfocusedBorderColor = Line2, cursorColor = Red,
                 focusedTextColor = TextC, unfocusedTextColor = TextC,
@@ -1247,8 +1252,8 @@ private fun AddonsScreen(onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit, o
         item {
             Column(
                 Modifier.fillMaxWidth()
-                    .background(SurfaceC, RoundedCornerShape(0.dp))
-                    .border(1.dp, LineC, RoundedCornerShape(0.dp))
+                    .background(SurfaceC, RoundedCornerShape(12.dp))
+                    .border(1.dp, LineC, RoundedCornerShape(12.dp))
                     .padding(18.dp)
             ) {
                 Text("ADD-ON MANIFEST URL", color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp)
@@ -1257,7 +1262,7 @@ private fun AddonsScreen(onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit, o
                     placeholder = { Text("https://your-addon/…/manifest.json", color = MutedC) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    shape = RoundedCornerShape(0.dp),
+                    shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = Color.White,
                         unfocusedBorderColor = Line2,
@@ -1283,7 +1288,7 @@ private fun AddonsScreen(onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit, o
                             }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Red),
-                        shape = RoundedCornerShape(0.dp),
+                        shape = RoundedCornerShape(12.dp),
                     ) { Text("Add add-on", fontWeight = FontWeight.SemiBold) }
                 }
                 if (status.isNotEmpty()) {
@@ -1294,8 +1299,8 @@ private fun AddonsScreen(onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit, o
         item {
             Column(
                 Modifier.fillMaxWidth()
-                    .background(SurfaceC, RoundedCornerShape(0.dp))
-                    .border(1.dp, LineC, RoundedCornerShape(0.dp))
+                    .background(SurfaceC, RoundedCornerShape(12.dp))
+                    .border(1.dp, LineC, RoundedCornerShape(12.dp))
                     .padding(18.dp)
             ) {
                 Text("WATCH PARTY", color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp)
@@ -1305,7 +1310,7 @@ private fun AddonsScreen(onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit, o
                         placeholder = { Text("Party code", color = MutedC) },
                         singleLine = true,
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(0.dp),
+                        shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = Color.White,
                             unfocusedBorderColor = Line2,
@@ -1317,7 +1322,7 @@ private fun AddonsScreen(onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit, o
                     Button(
                         onClick = { onJoinParty(partyCode) },
                         colors = ButtonDefaults.buttonColors(containerColor = Red),
-                        shape = RoundedCornerShape(0.dp),
+                        shape = RoundedCornerShape(12.dp),
                     ) { Text("Join", fontWeight = FontWeight.SemiBold) }
                 }
                 Text(
@@ -1333,22 +1338,22 @@ private fun AddonsScreen(onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit, o
             item { Text("No add-ons yet — paste a manifest URL above.", color = MutedC, fontSize = 14.sp) }
         } else {
             items(addons, key = { it.manifestUrl }) { a ->
-                FocusCard(shape = RoundedCornerShape(0.dp), modifier = Modifier.fillMaxWidth(), onClick = { onOpen(a) }) {
+                FocusCard(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth(), onClick = { onOpen(a) }) {
                     Row(
-                        Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(0.dp))
-                            .border(1.dp, LineC, RoundedCornerShape(0.dp)).padding(14.dp),
+                        Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(12.dp))
+                            .border(1.dp, LineC, RoundedCornerShape(12.dp)).padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         if (a.logo != null) {
                             AsyncImage(
                                 model = a.logo, contentDescription = null, contentScale = ContentScale.Crop,
-                                modifier = Modifier.size(48.dp).clip(RoundedCornerShape(0.dp)).background(Color.Black),
+                                modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(Color.Black),
                             )
                         } else {
                             Box(
                                 Modifier.size(48.dp)
-                                    .background(Red, RoundedCornerShape(0.dp)),
+                                    .background(Red, RoundedCornerShape(12.dp)),
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Text(a.name.take(1).uppercase(), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Black)
@@ -1484,7 +1489,7 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
                 },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { submitted = query.trim() }),
-                shape = RoundedCornerShape(0.dp),
+                shape = RoundedCornerShape(12.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Color.White, unfocusedBorderColor = Line2, cursorColor = Red,
                     focusedTextColor = TextC, unfocusedTextColor = TextC,
@@ -1512,8 +1517,8 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
             ) {
                 items(12) {
                     Column {
-                        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(0.dp)).background(Surface2.copy(alpha = a)))
-                        Box(Modifier.padding(top = 8.dp).fillMaxWidth(0.7f).height(12.dp).clip(RoundedCornerShape(0.dp)).background(Surface2.copy(alpha = a)))
+                        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)).background(Surface2.copy(alpha = a)))
+                        Box(Modifier.padding(top = 8.dp).fillMaxWidth(0.7f).height(12.dp).clip(RoundedCornerShape(12.dp)).background(Surface2.copy(alpha = a)))
                     }
                 }
             }
@@ -1586,17 +1591,17 @@ private fun EpisodesScreen(
         LazyColumn(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
             if (episodes.isEmpty()) items(6) { SkeletonRow(112.dp, 63.dp, circle = false) }
             items(eps, key = { it.id }) { ep ->
-                FocusCard(shape = RoundedCornerShape(0.dp), modifier = Modifier.fillMaxWidth(), onClick = { onPlayEpisode(ep) }) {
+                FocusCard(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth(), onClick = { onPlayEpisode(ep) }) {
                     Row(
-                        Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(0.dp))
-                            .border(1.dp, LineC, RoundedCornerShape(0.dp)).padding(10.dp),
+                        Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(12.dp))
+                            .border(1.dp, LineC, RoundedCornerShape(12.dp)).padding(10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         // watched tick / part-way bar, from the local progress store
                         val pr = Progress.get(ctx, item.type, ep.id)
                         Box {
-                            val thumbMod = Modifier.width(112.dp).height(63.dp).clip(RoundedCornerShape(0.dp)).background(Color.Black)
+                            val thumbMod = Modifier.width(112.dp).height(63.dp).clip(RoundedCornerShape(12.dp)).background(Color.Black)
                             if (ep.thumbnail != null) {
                                 AsyncImage(model = ep.thumbnail, contentDescription = null, contentScale = ContentScale.Crop, modifier = thumbMod)
                             } else {
@@ -1677,10 +1682,10 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
                     )
                 }
             items(streams) { s ->
-                FocusCard(shape = RoundedCornerShape(0.dp), modifier = Modifier.fillMaxWidth(), onClick = { onPlay(s) }) {
+                FocusCard(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth(), onClick = { onPlay(s) }) {
                     Row(
-                        Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(0.dp))
-                            .border(1.dp, LineC, RoundedCornerShape(0.dp)).padding(14.dp),
+                        Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(12.dp))
+                            .border(1.dp, LineC, RoundedCornerShape(12.dp)).padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
@@ -1693,7 +1698,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
                         Column(Modifier.weight(1f)) {
                             Text(s.name.ifEmpty { "Stream" }, color = TextC, fontSize = 15.sp, fontFamily = Sans, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             val sub = s.title.replace("\n", " · ")
-                            if (sub.isNotEmpty()) Text(sub.uppercase(), style = labelStyle(10), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            if (sub.isNotEmpty()) Text(sub, style = labelStyle(13), maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
@@ -2026,7 +2031,7 @@ private fun PlayerScreen(
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(12.dp)
-                    .background(Color.White, RoundedCornerShape(0.dp))
+                    .background(Color.White, RoundedCornerShape(12.dp))
                     .padding(horizontal = 10.dp, vertical = 5.dp)
             )
         }
@@ -2102,11 +2107,11 @@ private fun PlayerScreen(
                 Modifier.align(Alignment.BottomEnd)
                     .padding(end = 16.dp, bottom = 96.dp)
                     .width(300.dp)
-                    .background(SurfaceC, RoundedCornerShape(0.dp))
-                    .border(1.dp, Line2, RoundedCornerShape(0.dp))
+                    .background(SurfaceC, RoundedCornerShape(12.dp))
+                    .border(1.dp, Line2, RoundedCornerShape(12.dp))
                     .padding(16.dp),
             ) {
-                Text("UP NEXT", style = labelStyle(10))
+                Text("Up Next", style = labelStyle(13))
                 Text(
                     "S${nextEpisode.season}" + (nextEpisode.episode?.let { "E$it" } ?: "") +
                         (if (nextEpisode.name.isNotEmpty()) " · ${nextEpisode.name}" else ""),
@@ -2118,7 +2123,7 @@ private fun PlayerScreen(
                     Button(
                         onClick = { upnextCounting = false; onPlayNext(nextEpisode) },
                         colors = ButtonDefaults.buttonColors(containerColor = Red),
-                        shape = RoundedCornerShape(0.dp),
+                        shape = RoundedCornerShape(12.dp),
                     ) {
                         Text(
                             if (upnextCounting) "Play now ($upnextLeft)" else "Play now",
@@ -2128,7 +2133,7 @@ private fun PlayerScreen(
                     Button(
                         onClick = { upnextCounting = false; upnextOpen = false; upnextDismissed = true },
                         colors = ButtonDefaults.buttonColors(containerColor = Surface2),
-                        shape = RoundedCornerShape(0.dp),
+                        shape = RoundedCornerShape(12.dp),
                     ) { Text("Dismiss", color = TextC) }
                 }
             }
@@ -2141,7 +2146,7 @@ private fun PlayerScreen(
                 modifier = Modifier
                     .align(if (f.first > 0) Alignment.CenterEnd else Alignment.CenterStart)
                     .padding(horizontal = 44.dp)
-                    .background(Color(0x8C000000), RoundedCornerShape(0.dp))
+                    .background(Color(0x8C000000), RoundedCornerShape(12.dp))
                     .padding(horizontal = 16.dp, vertical = 10.dp)
             )
         }
@@ -2152,7 +2157,7 @@ private fun PlayerScreen(
                 color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold,
                 modifier = Modifier
                     .align(Alignment.Center)
-                    .background(Color(0x8C000000), RoundedCornerShape(0.dp))
+                    .background(Color(0x8C000000), RoundedCornerShape(12.dp))
                     .padding(horizontal = 18.dp, vertical = 12.dp)
             )
         }
