@@ -95,6 +95,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -762,6 +763,45 @@ private fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick:
     }
 }
 
+// ---------- skeletons ----------
+// One shimmer for every placeholder shape, so a list that is loading reads the
+// same whether it is posters, streams or episodes.
+
+/** A single shimmering block. */
+@Composable
+private fun SkelBox(modifier: Modifier, shape: RoundedCornerShape = RoundedCornerShape(6.dp)) {
+    Box(modifier.clip(shape).background(Surface2.copy(alpha = shimmerAlpha())))
+}
+
+/** Placeholder shaped like a stream or episode row: leading block, two text lines. */
+@Composable
+private fun SkeletonRow(leadingWidth: Dp, leadingHeight: Dp, circle: Boolean) {
+    Row(
+        Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(16.dp))
+            .border(1.dp, LineC, RoundedCornerShape(16.dp)).padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        SkelBox(
+            Modifier.width(leadingWidth).height(leadingHeight),
+            if (circle) RoundedCornerShape(50) else RoundedCornerShape(8.dp),
+        )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            SkelBox(Modifier.fillMaxWidth().height(13.dp))
+            SkelBox(Modifier.fillMaxWidth(0.42f).height(13.dp))
+        }
+    }
+}
+
+/** Placeholder shaped like a poster/landscape card. */
+@Composable
+private fun SkeletonCell(modifier: Modifier = Modifier) {
+    Column(modifier) {
+        SkelBox(Modifier.fillMaxWidth().aspectRatio(16f / 9f), RoundedCornerShape(12.dp))
+        SkelBox(Modifier.padding(top = 8.dp).fillMaxWidth(0.7f).height(12.dp))
+    }
+}
+
 /** Row header on Home/Search: "Addon · Catalog" with a See-all pill. */
 @Composable
 private fun RowHeader(title: String, sub: String?, seeAll: (() -> Unit)?) {
@@ -1112,8 +1152,12 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit) {
             modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
         )
         when {
-            st.searching && st.sections.isEmpty() ->
-                Text("Searching…", color = MutedC, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
+            st.searching && st.sections.isEmpty() -> Column {
+                SkelBox(Modifier.padding(top = 18.dp, bottom = 10.dp).width(170.dp).height(15.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    repeat(4) { SkeletonCell(Modifier.width(210.dp)) }
+                }
+            }
             st.submitted.isNotBlank() && st.sections.isEmpty() ->
                 Text("No matches for “${st.submitted.trim()}”.", color = MutedC, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
             else -> LazyColumn(state = st.listState, contentPadding = PaddingValues(bottom = 16.dp)) {
@@ -1439,6 +1483,8 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
                 contentPadding = PaddingValues(bottom = 20.dp),
             ) {
                 items(items) { m -> MetaCard(m) { onOpen(m) } }
+                // a further page is in flight — tail the grid with placeholders
+                if (st.paging) items(6) { SkeletonCell() }
             }
         }
     }
@@ -1495,6 +1541,7 @@ private fun EpisodesScreen(
             }
         }
         LazyColumn(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
+            if (episodes.isEmpty()) items(6) { SkeletonRow(112.dp, 63.dp, circle = false) }
             items(eps, key = { it.id }) { ep ->
                 FocusCard(shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(), onClick = { onPlayEpisode(ep) }) {
                     Row(
@@ -1549,8 +1596,10 @@ private fun EpisodesScreen(
 private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPlay: (StreamItem) -> Unit) {
     var sections by remember { mutableStateOf<List<Pair<String, List<StreamItem>>>>(emptyList()) }
     var status by remember { mutableStateOf("Loading streams…") }
+    var loading by remember { mutableStateOf(true) }
     val ctx = LocalContext.current
     LaunchedEffect(item) {
+        loading = true
         val order = listOf(addon) + loadAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
         val out = mutableListOf<Pair<String, List<StreamItem>>>()
         var failures = 0
@@ -1571,10 +1620,12 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
         if (sections.isEmpty()) {
             status = if (failures == order.size) "Failed to load streams." else "No playable streams right now."
         }
+        loading = false
     }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
         BackBar(item.name, status, onBack)
         LazyColumn(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
+            if (loading && sections.isEmpty()) items(4) { SkeletonRow(42.dp, 42.dp, circle = true) }
             sections.forEachIndexed { sectionIndex, (addonName, streams) ->
                 if (sections.size > 1) item(key = "head/$sectionIndex") {
                     Text(
