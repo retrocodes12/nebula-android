@@ -9,7 +9,15 @@ import java.net.URL
 import java.net.URLEncoder
 
 data class Addon(val manifestUrl: String, val name: String, val base: String, val logo: String? = null)
-data class CatalogRef(val type: String, val id: String, val name: String, val genres: List<String>, val search: Boolean = false)
+data class CatalogRef(
+    val type: String,
+    val id: String,
+    val name: String,
+    val genres: List<String>,
+    val search: Boolean = false,
+    /** Advertises the `skip` extra — without it, paging would just refetch page 1. */
+    val skip: Boolean = false,
+)
 
 /** Parsed manifest: the addon, its catalogs, and whether/what it serves as streams. */
 data class ManifestInfo(
@@ -83,6 +91,7 @@ object Stremio {
             val c = arr.getJSONObject(i)
             val genres = mutableListOf<String>()
             var supportsSearch = false
+            var supportsSkip = false
             val extra = c.optJSONArray("extra")
             if (extra != null) for (k in 0 until extra.length()) {
                 val e = extra.getJSONObject(k)
@@ -92,13 +101,17 @@ object Stremio {
                         if (opts != null) for (o in 0 until opts.length()) genres.add(opts.getString(o))
                     }
                     "search" -> supportsSearch = true
+                    "skip" -> supportsSkip = true
                 }
             }
             val extraSupported = c.optJSONArray("extraSupported")
             if (extraSupported != null) for (k in 0 until extraSupported.length()) {
-                if (extraSupported.getString(k) == "search") supportsSearch = true
+                when (extraSupported.getString(k)) {
+                    "search" -> supportsSearch = true
+                    "skip" -> supportsSkip = true
+                }
             }
-            cats.add(CatalogRef(c.optString("type"), c.optString("id"), c.optString("name", c.optString("id")), genres, supportsSearch))
+            cats.add(CatalogRef(c.optString("type"), c.optString("id"), c.optString("name", c.optString("id")), genres, supportsSearch, supportsSkip))
         }
         // stream resource: either the plain string "stream" (scoped by top-level
         // types/idPrefixes) or an object with its own types/idPrefixes
@@ -161,10 +174,20 @@ object Stremio {
         return out
     }
 
-    suspend fun loadCatalog(base: String, c: CatalogRef, genre: String?, query: String? = null): List<MetaItem> {
+    suspend fun loadCatalog(
+        base: String,
+        c: CatalogRef,
+        genre: String?,
+        query: String? = null,
+        skip: Int = 0,
+    ): List<MetaItem> {
         var u = "$base/catalog/${enc(c.type)}/${enc(c.id)}"
-        if (!query.isNullOrEmpty()) u += "/search=${enc(query)}"
-        else if (!genre.isNullOrEmpty()) u += "/genre=${enc(genre)}"
+        // Stremio puts every extra in one path segment, joined with &
+        val extras = mutableListOf<String>()
+        if (!query.isNullOrEmpty()) extras.add("search=${enc(query)}")
+        else if (!genre.isNullOrEmpty()) extras.add("genre=${enc(genre)}")
+        if (skip > 0) extras.add("skip=$skip")
+        if (extras.isNotEmpty()) u += "/" + extras.joinToString("&")
         u += ".json"
         val j = JSONObject(httpGetText(u))
         val metas = j.optJSONArray("metas") ?: return emptyList()
