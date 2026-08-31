@@ -107,6 +107,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
@@ -2292,7 +2293,17 @@ private fun PlayerScreen(
     var audioTrackCount by remember { mutableStateOf(0) }
     var textTrackCount by remember { mutableStateOf(0) }
     var subStyleOpen by remember { mutableStateOf(false) }
-    var controllerVisible by remember { mutableStateOf(true) }
+    // the Title Card chrome replaces Media3's controller entirely
+    var chromeVisible by remember { mutableStateOf(true) }
+    var chromeTouchedAt by remember { mutableStateOf(System.currentTimeMillis()) }
+    var isPlayingState by remember { mutableStateOf(false) }
+    var isLiveState by remember { mutableStateOf(false) }
+    var posMs by remember { mutableStateOf(0L) }
+    var durMs by remember { mutableStateOf(0L) }
+    var bufMs by remember { mutableStateOf(0L) }
+    var qualityLabel by remember { mutableStateOf<String?>(null) }
+    var speedLabel by remember { mutableStateOf("1.0×") }
+    var isFullscreen by remember { mutableStateOf(false) }
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
     var skipFlash by remember { mutableStateOf<Triple<Int, Int, Long>?>(null) } // zone (-1/+1), total secs, stamp
     var dragSeek by remember { mutableStateOf<Pair<Long, Long>?>(null) }        // target ms, delta ms
@@ -2433,7 +2444,10 @@ private fun PlayerScreen(
                 (activity as? MainActivity)?.refreshPipParams()
                 if (partyUi.active() && partyUi.isHost) hostDirty = true
             }
-            override fun onVideoSizeChanged(videoSize: VideoSize) { (activity as? MainActivity)?.refreshPipParams() }
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                (activity as? MainActivity)?.refreshPipParams()
+                if (videoSize.height > 0) qualityLabel = "${videoSize.height}p"
+            }
             override fun onPositionDiscontinuity(old: Player.PositionInfo, new: Player.PositionInfo, reason: Int) {
                 if (reason == Player.DISCONTINUITY_REASON_SEEK && partyUi.active() && partyUi.isHost) hostDirty = true
             }
@@ -2461,17 +2475,32 @@ private fun PlayerScreen(
     }
 
     // Restyle live whenever the subtitle appearance changes — a tap in the
-    // panel here, or a synced-in choice made on another device.
-    LaunchedEffect(SubStyle.version.value) {
-        playerViewRef?.subtitleView?.let { SubStyle.apply(context, it) }
+    // panel here, or a synced-in choice made on another device. While the
+    // chrome is up, cues lift clear of the lower third.
+    LaunchedEffect(SubStyle.version.value, chromeVisible) {
+        playerViewRef?.subtitleView?.let {
+            SubStyle.apply(context, it)
+            if (chromeVisible) it.setBottomPaddingFraction(0.32f)
+        }
     }
 
-    // In picture-in-picture only the video shows — no controller, gestures, or overlay buttons.
-    val pip = inPipMode.value
-    LaunchedEffect(pip) {
-        playerViewRef?.useController = !pip
-        if (pip) playerViewRef?.hideController()
+    // one clock drives the chrome: position, buffered, playing, live
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(400)
+            isPlayingState = exo.isPlaying
+            isLiveState = exo.isCurrentMediaItemLive
+            posMs = exo.currentPosition.coerceAtLeast(0L)
+            durMs = if (exo.duration == C.TIME_UNSET) 0L else exo.duration
+            bufMs = exo.bufferedPosition.coerceAtLeast(0L)
+            if (chromeVisible && exo.isPlaying && !subStyleOpen &&
+                System.currentTimeMillis() - chromeTouchedAt > 3500) chromeVisible = false
+        }
     }
+
+    // In picture-in-picture only the video shows — no chrome, no gestures.
+    val pip = inPipMode.value
+    LaunchedEffect(pip) { if (pip) chromeVisible = false }
 
     // A party host arriving on a new stream takes the whole room along (mirrors the web player).
     LaunchedEffect(Unit) {
@@ -2530,30 +2559,18 @@ private fun PlayerScreen(
             factory = { ctx ->
                 PlayerView(ctx).apply {
                     player = exo
-                    useController = true
-                    setShowSubtitleButton(true)
+                    useController = false          // the Title Card chrome is the controller
                     setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
-                    setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { v ->
-                        controllerVisible = (v == View.VISIBLE)
-                    })
                     playerViewRef = this
                     subtitleView?.let { SubStyle.apply(ctx, it) }
-                    setFullscreenButtonClickListener { isFull ->
-                        activity?.let {
-                            it.requestedOrientation =
-                                if (isFull) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                                else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-                            setImmersive(it, isFull)
-                        }
-                    }
                 }
             },
             modifier = Modifier.fillMaxSize()
         )
-        // Touch gestures (phones): double-tap left/right = ±10s, horizontal swipe = seek,
-        // plain tap = show controls. Mounted only while the controller is hidden so the
-        // controller's own buttons stay tappable; remote/D-pad (TV) is unaffected.
-        if (!controllerVisible && !pip) {
+        // Touch gestures: double-tap left/right = ±10s, horizontal swipe = seek,
+        // plain tap = toggle the chrome. The chrome's own controls sit above
+        // this layer, so they stay tappable; remote/D-pad (TV) is unaffected.
+        if (!pip) {
             Box(
                 Modifier
                     .fillMaxSize()
@@ -2565,11 +2582,12 @@ private fun PlayerScreen(
                                 if (zone != 0 && f != null && f.first == zone &&
                                     System.currentTimeMillis() - f.third < 900
                                 ) doSkip(zone) // a quick 3rd/4th tap keeps skipping
-                                else playerViewRef?.showController()
+                                else { chromeVisible = !chromeVisible; chromeTouchedAt = System.currentTimeMillis() }
                             },
                             onDoubleTap = { pos ->
                                 val zone = tapZone(pos.x, size.width)
-                                if (zone != 0) doSkip(zone) else playerViewRef?.showController()
+                                if (zone != 0) doSkip(zone)
+                                else { chromeVisible = !chromeVisible; chromeTouchedAt = System.currentTimeMillis() }
                             }
                         )
                     }
@@ -2593,136 +2611,108 @@ private fun PlayerScreen(
                     }
             )
         }
-        // Party badge: room code + member count, shown with the rest of the chrome.
-        if (!pip && controllerVisible && partyUi.active()) {
-            Text(
-                "${partyUi.code} · ${partyUi.count}",
-                color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Black,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(12.dp)
-                    .background(Color.White, RoundedCornerShape(12.dp))
-                    .padding(horizontal = 10.dp, vertical = 5.dp)
-            )
-        }
-        // PiP + party + quality + audio pickers — these are chrome: they hide with the controller.
-        if (!pip && controllerVisible) Column(
-            Modifier.align(Alignment.TopEnd).padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            IconButton(
-                onClick = {
-                    if (partyUi.active()) onPartyLeave()
-                    else onPartyStart(PartyStreamDesc(url, title, subs))
-                },
-                modifier = Modifier.size(44.dp).background(if (partyUi.active()) Color.White else Color(0xB3000000), CircleShape)
-            ) {
-                Icon(
-                    Icons.Filled.Groups, contentDescription = if (partyUi.active()) "Leave party" else "Start watch party",
-                    tint = if (partyUi.active()) Color.Black else Color.White, modifier = Modifier.size(24.dp)
-                )
-            }
-            val mainActivity = activity as? MainActivity
-            if (mainActivity?.pipSupported() == true) {
-                IconButton(
-                    onClick = { mainActivity.enterPip() },
-                    modifier = Modifier.size(44.dp).background(Color(0xB3000000), CircleShape)
-                ) {
-                    Icon(Icons.Filled.PictureInPictureAlt, contentDescription = "Picture-in-picture", tint = Color.White, modifier = Modifier.size(22.dp))
+        // the Title Card chrome (see PlayerChrome.kt)
+        if (!pip) TitleCardChrome(
+            visible = chromeVisible,
+            title = title,
+            isPlaying = isPlayingState,
+            isLive = isLiveState,
+            positionMs = posMs, durationMs = durMs, bufferedMs = bufMs,
+            episodeTag = contentId?.takeIf { contentType == "series" }?.split(":")
+                ?.takeIf { it.size >= 3 }?.let { "S" + it[it.size - 2] + " · E" + it[it.size - 1] },
+            qualityLabel = qualityLabel?.takeIf { videoQualityCount >= 1 },
+            speedLabel = speedLabel,
+            partyActive = partyUi.active(),
+            partyBadge = partyUi.code?.let { c -> c + " · " + partyUi.count },
+            hasNext = nextEpisode != null,
+            canPip = (activity as? MainActivity)?.pipSupported() == true,
+            showSubtitles = textTrackCount >= 1 || subs.isNotEmpty(),
+            showAudio = audioTrackCount >= 2,
+            onBack = { activity?.onBackPressedDispatcher?.onBackPressed() },
+            onPlayPause = {
+                if (exo.isPlaying) exo.pause() else exo.play()
+                chromeTouchedAt = System.currentTimeMillis()
+            },
+            onSeekBy = { d -> seekBy(d); chromeTouchedAt = System.currentTimeMillis() },
+            onSeekTo = { t -> exo.seekTo(t.coerceAtLeast(0L)); chromeTouchedAt = System.currentTimeMillis() },
+            onNext = { nextEpisode?.let { upnextCounting = false; onPlayNext(it) } },
+            onParty = {
+                if (partyUi.active()) onPartyLeave()
+                else onPartyStart(PartyStreamDesc(url, title, subs))
+                chromeTouchedAt = System.currentTimeMillis()
+            },
+            onSubtitles = {
+                runCatching {
+                    TrackSelectionDialogBuilder(context, "Subtitles", exo, C.TRACK_TYPE_TEXT)
+                        .setShowDisableOption(true).build().show()
                 }
-            }
-            if (videoQualityCount >= 2) {
-                IconButton(
-                    onClick = {
-                        runCatching {
-                            TrackSelectionDialogBuilder(context, "Quality", exo, C.TRACK_TYPE_VIDEO)
-                                .setAllowAdaptiveSelections(true)
-                                .setShowDisableOption(false)
-                                .build()
-                                .show()
-                        }
-                    },
-                    modifier = Modifier.size(44.dp).background(Color(0xB3000000), CircleShape)
-                ) {
-                    Icon(Icons.Filled.Settings, contentDescription = "Quality", tint = Color.White, modifier = Modifier.size(22.dp))
+            },
+            onSubStyle = { subStyleOpen = !subStyleOpen; chromeTouchedAt = System.currentTimeMillis() },
+            onAudio = {
+                runCatching {
+                    TrackSelectionDialogBuilder(context, "Audio", exo, C.TRACK_TYPE_AUDIO)
+                        .setShowDisableOption(false).build().show()
                 }
-            }
-            if (audioTrackCount >= 2) {
-                IconButton(
-                    onClick = {
-                        runCatching {
-                            TrackSelectionDialogBuilder(context, "Audio", exo, C.TRACK_TYPE_AUDIO)
-                                .setShowDisableOption(false)
-                                .build()
-                                .show()
-                        }
-                    },
-                    modifier = Modifier.size(44.dp).background(Color(0xB3000000), CircleShape)
-                ) {
-                    Icon(Icons.Filled.Audiotrack, contentDescription = "Audio", tint = Color.White, modifier = Modifier.size(22.dp))
+            },
+            onQuality = {
+                runCatching {
+                    TrackSelectionDialogBuilder(context, "Quality", exo, C.TRACK_TYPE_VIDEO)
+                        .setAllowAdaptiveSelections(true).setShowDisableOption(false).build().show()
                 }
-            }
-            if (nextEpisode != null) {
-                IconButton(
-                    onClick = { upnextCounting = false; onPlayNext(nextEpisode) },
-                    modifier = Modifier.size(44.dp).background(Color(0xB3000000), CircleShape)
-                ) {
-                    Icon(Icons.Filled.SkipNext, contentDescription = "Next episode", tint = Color.White, modifier = Modifier.size(24.dp))
+            },
+            onSpeedCycle = {
+                val rates = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
+                val next = rates[(rates.indexOfFirst { it == exo.playbackParameters.speed }
+                    .takeIf { it >= 0 } ?: 2).let { (it + 1) % rates.size }]
+                exo.setPlaybackSpeed(next)
+                speedLabel = (if (next == 1f) "1.0" else next.toString().trimEnd('0').trimEnd('.')) + "×"
+                chromeTouchedAt = System.currentTimeMillis()
+            },
+            onPip = { (activity as? MainActivity)?.enterPip() },
+            onFullscreen = {
+                isFullscreen = !isFullscreen
+                activity?.let {
+                    it.requestedOrientation =
+                        if (isFullscreen) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                        else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                    setImmersive(it, isFullscreen)
                 }
-            }
-            if (textTrackCount >= 1 || subs.isNotEmpty()) {
-                IconButton(
-                    onClick = { subStyleOpen = !subStyleOpen },
-                    modifier = Modifier.size(44.dp).background(if (subStyleOpen) Color.White else Color(0xB3000000), CircleShape)
-                ) {
-                    Icon(
-                        Icons.Filled.ClosedCaption, contentDescription = "Subtitle appearance",
-                        tint = if (subStyleOpen) Color.Black else Color.White, modifier = Modifier.size(22.dp)
-                    )
-                }
-            }
-        }
-        // Subtitle appearance panel (extracted — SubStylePanel.kt); vertical
-        // padding leaves the parent Box to bound it so its own scroll engages.
-        if (subStyleOpen && !pip) {
-            Box(Modifier.align(Alignment.CenterEnd).padding(end = 16.dp, top = 24.dp, bottom = 24.dp)) {
-                SubStylePanel(onDone = { subStyleOpen = false })
-            }
-        }
+            },
+        )
         // Up next: offered near the end, counts down and autoplays once the episode ends.
         if (upnextOpen && nextEpisode != null && !pip) {
             Column(
                 Modifier.align(Alignment.BottomEnd)
-                    .padding(end = 16.dp, bottom = 96.dp)
+                    .padding(end = 28.dp, bottom = 110.dp)
                     .width(300.dp)
-                    .background(SurfaceC, RoundedCornerShape(12.dp))
-                    .border(1.dp, Line2, RoundedCornerShape(12.dp))
-                    .padding(16.dp),
+                    .background(Color(0xEB0C0A09))
+                    .border(1.dp, Color(0x61FFFFFF))
+                    .padding(20.dp),
             ) {
-                Text("Up Next", style = labelStyle(13))
+                Text("Up next", fontFamily = Playfair,
+                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                    fontSize = 15.sp, color = Color(0xA8FFFFFF))
                 Text(
-                    "S${nextEpisode.season}" + (nextEpisode.episode?.let { "E$it" } ?: "") +
-                        (if (nextEpisode.name.isNotEmpty()) " · ${nextEpisode.name}" else ""),
-                    color = TextC, fontSize = 22.sp, fontFamily = Serif, fontWeight = FontWeight.Normal,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 6.dp, bottom = 14.dp),
+                    ("S${nextEpisode.season}" + (nextEpisode.episode?.let { "E$it" } ?: "") +
+                        (if (nextEpisode.name.isNotEmpty()) " · ${nextEpisode.name}" else "")).uppercase(),
+                    color = TextC, fontSize = 15.sp, fontFamily = Playfair, letterSpacing = 0.1.em,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 22.sp,
+                    modifier = Modifier.padding(top = 6.dp, bottom = 16.dp),
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = { upnextCounting = false; onPlayNext(nextEpisode) },
-                        colors = ButtonDefaults.buttonColors(containerColor = Red),
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        Text(
-                            if (upnextCounting) "Play now ($upnextLeft)" else "Play now",
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    }
-                    Button(
-                        onClick = { upnextCounting = false; upnextOpen = false; upnextDismissed = true },
-                        colors = ButtonDefaults.buttonColors(containerColor = Surface2),
-                        shape = RoundedCornerShape(12.dp),
-                    ) { Text("Dismiss", color = TextC) }
+                Row(horizontalArrangement = Arrangement.spacedBy(22.dp)) {
+                    Text(
+                        (if (upnextCounting) "Play now ($upnextLeft)" else "Play now").uppercase(),
+                        color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
+                        letterSpacing = 0.24.em,
+                        textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
+                        modifier = Modifier.clickable { upnextCounting = false; onPlayNext(nextEpisode) },
+                    )
+                    Text(
+                        "Dismiss".uppercase(),
+                        color = Color(0xA8FFFFFF), fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
+                        letterSpacing = 0.24.em,
+                        modifier = Modifier.clickable { upnextCounting = false; upnextOpen = false; upnextDismissed = true },
+                    )
                 }
             }
         }
@@ -2762,7 +2752,7 @@ private fun tapZone(x: Float, width: Int): Int = when {
     else -> 0
 }
 
-private fun fmtTime(ms: Long): String {
+internal fun fmtTime(ms: Long): String {
     val s = (ms / 1000).coerceAtLeast(0)
     return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, (s % 3600) / 60, s % 60)
     else "%d:%02d".format(s / 60, s % 60)

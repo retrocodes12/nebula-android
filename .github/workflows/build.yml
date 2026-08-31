@@ -48,9 +48,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.22.0.apk
+          cp "$APK" Nebula-1.23.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.22.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.22.0 Nebula-1.22.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.22.0" \
-            --notes "Nebula opens full now. First run preinstalls a starter catalogue add-on, so the app greets you with a featured hero - full-bleed artwork, the title's own logo, rating and description - instead of an empty screen. Every title page went full-bleed too: backdrop behind everything, logo art in place of plain text, cast and director credits, and rating badges with the year on every poster. Signed with the same permanent key, so it installs over the top. Install (phone): allow 'install unknown apps' and tap the APK. Install (TV): Downloader code 7664693 (or da.gd/nebulaapk)."
+          gh release delete v1.23.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.23.0 Nebula-1.23.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.23.0" \
+            --notes "The player itself, redesigned as a cinema title card - the same chrome the web, TV and PC editions now wear. A serif in letterspaced caps carries the title, an italic line speaks the player's state (Now Playing / Paused), controls are whispered words instead of icons, the seek is a hairline with a diamond knob, and an ornamental frame borders the stage. No accent colour - the film supplies it. Everything else is where you left it: double-tap and swipe gestures, PiP, watch parties, subtitle styling, next-episode autoplay. Signed with the same permanent key, so it installs over the top. Install (phone): allow 'install unknown apps' and tap the APK. Install (TV): Downloader code 7664693 (or da.gd/nebulaapk)."
