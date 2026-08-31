@@ -25,6 +25,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -56,6 +58,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Groups
@@ -108,6 +111,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -281,7 +285,9 @@ private val DarkColors = darkColorScheme(
 private sealed interface Screen {
     data object Home : Screen
     data object Search : Screen
+    data object Library : Screen
     data object Addons : Screen
+    data class Detail(val addon: Addon, val item: MetaItem) : Screen
     data class Catalog(val addon: Addon, val initial: CatalogRef? = null) : Screen
     data class Episodes(val addon: Addon, val item: MetaItem) : Screen
     data class Streams(val addon: Addon, val item: MetaItem) : Screen
@@ -331,9 +337,33 @@ private val seriesChain = SeriesChain()
 private class CatRow(val addon: Addon, val catalog: CatalogRef, val items: List<MetaItem>)
 
 /** Session cache of addon manifests (Home and Search both need them). */
-private val manifestCache = mutableMapOf<String, ManifestInfo>()
-private suspend fun manifestFor(url: String): ManifestInfo =
+internal val manifestCache = mutableMapOf<String, ManifestInfo>()
+internal suspend fun manifestFor(url: String): ManifestInfo =
     manifestCache[url] ?: Stremio.loadManifest(url).also { manifestCache[url] = it }
+
+/** Session cache of full metas (the detail page enhances from these). */
+private val metaFullCache = mutableMapOf<String, FullMeta>()
+
+/** The newest still-in-progress episode of a series. Episode ids are
+    "<seriesId>:…" where seriesId itself may contain colons (kitsu:12345),
+    so membership is a prefix test — never a split on the first colon. */
+private fun seriesResumeRec(ctx: Context, seriesId: String): ProgressRec? =
+    Progress.all(ctx).values.filter {
+        !it.done && !it.dismissed && it.type == "series" &&
+            it.id.startsWith("$seriesId:") &&
+            it.pos >= Progress.MIN_POS_MS && it.dur > 0 && it.pos <= it.dur - Progress.END_GAP_MS
+    }.maxByOrNull { it.at }
+
+/** "Resume S2E4" from the id tail past the series prefix; kitsu-style single
+    tails become "Resume E3"; anything else is plain "Resume". */
+private fun resumeLabel(seriesId: String, epId: String): String {
+    val rest = epId.removePrefix("$seriesId:").split(":")
+    return when {
+        rest.size == 2 -> "Resume S${rest[0]}E${rest[1]}"
+        rest.size == 1 && rest[0].isNotEmpty() -> "Resume E${rest[0]}"
+        else -> "Resume"
+    }
+}
 
 /** Home tab state, hoisted to AppRoot so rows survive navigating into a stream. */
 private class HomeUiState {
@@ -413,7 +443,7 @@ private val partyUi = PartyUi()
 
 // ---------- add-on persistence ----------
 private const val PREFS = "ckplayer"
-private fun loadAddons(ctx: Context): List<Addon> {
+internal fun loadAddons(ctx: Context): List<Addon> {
     val raw = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("addons", "[]") ?: "[]"
     return runCatching {
         val arr = JSONArray(raw)
@@ -453,7 +483,8 @@ private suspend fun hydrateSeriesChain(ctx: Context, addon: Addon, type: String,
     }
 }
 
-private fun saveAddons(ctx: Context, list: List<Addon>) {
+/** Write the list without sync side effects — what a sync merge itself uses. */
+internal fun saveAddonsRaw(ctx: Context, list: List<Addon>) {
     val arr = JSONArray()
     list.forEach {
         arr.put(
@@ -462,6 +493,13 @@ private fun saveAddons(ctx: Context, list: List<Addon>) {
         )
     }
     ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("addons", arr.toString()).apply()
+}
+
+private fun saveAddons(ctx: Context, list: List<Addon>) {
+    val prev = loadAddons(ctx)
+    saveAddonsRaw(ctx, list)
+    Cloud.noteAddonsDiff(ctx, prev, list)
+    Cloud.noteChanged(ctx, "addons")
 }
 
 @Composable
@@ -544,6 +582,31 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 catalogStates.keys.retainAll(live)
             }
 
+            // ---- cross-device sync wiring ----
+            var libraryVersion by remember { mutableStateOf(0) }
+            var addonsVersion by remember { mutableStateOf(0) }
+            LaunchedEffect(Unit) {
+                Cloud.onApplied = { keys ->
+                    if ("addons" in keys) { manifestCache.clear(); homeState.invalidate(); addonsVersion++ }
+                    if ("progress" in keys) homeState.invalidateContinue()
+                    if ("library" in keys) libraryVersion++
+                }
+                Cloud.pullAll(ctx)
+                while (true) { delay(300_000); Cloud.pullAll(ctx) }
+            }
+            val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+            DisposableEffect(lifecycleOwner) {
+                val obs = LifecycleEventObserver { _, e ->
+                    when (e) {
+                        Lifecycle.Event.ON_STOP -> Cloud.flushNow(ctx)
+                        Lifecycle.Event.ON_START -> scope.launch { Cloud.pullAll(ctx) }
+                        else -> {}
+                    }
+                }
+                lifecycleOwner.lifecycle.addObserver(obs)
+                onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+            }
+
             // A deep-link play request jumps straight to the player; Back returns Home.
             LaunchedEffect(playReq) {
                 if (playReq != null) {
@@ -552,14 +615,9 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 }
             }
 
-            // Series open into an episode picker first; everything else goes straight to streams.
+            // Every title opens on its own page first — art, facts, actions.
             fun openMeta(a: Addon, item: MetaItem) {
-                if (item.type == "series") {
-                    push(Screen.Episodes(a, item))
-                } else {
-                    seriesChain.clear()          // a movie must not inherit a stale chain
-                    push(Screen.Streams(a, item))
-                }
+                push(Screen.Detail(a, item))
             }
 
             /** Resume something from the Continue watching row. */
@@ -608,9 +666,41 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 onOpen = { a, item -> openMeta(a, item) },
                             )
                             is Screen.Addons -> AddonsScreen(
+                                version = addonsVersion,
                                 onOpen = { push(Screen.Catalog(it)) },
                                 onAddonsChanged = { manifestCache.clear(); homeState.invalidate() },
                                 onJoinParty = { partyJoin(it) },
+                            )
+                            is Screen.Library -> LibraryScreen(
+                                version = libraryVersion,
+                                onOpen = { li ->
+                                    val addons = loadAddons(ctx)
+                                    val a = addons.firstOrNull { it.manifestUrl == li.addonUrl } ?: addons.firstOrNull()
+                                    if (a == null) partyUi.status = "Add an add-on first"
+                                    else push(Screen.Detail(a, MetaItem(li.id, li.type, li.name, li.poster, li.shape)))
+                                },
+                                onPlayEpisode = { li, ep ->
+                                    val addons = loadAddons(ctx)
+                                    val a = addons.firstOrNull { it.manifestUrl == li.addonUrl } ?: addons.firstOrNull()
+                                    if (a == null) partyUi.status = "Add an add-on first"
+                                    else {
+                                        seriesChain.clear()
+                                        val tag = "S${ep.season}" + (ep.episode?.let { "E$it" } ?: "")
+                                        val label = li.name + " · " + tag + (if (ep.name.isNotEmpty()) " · ${ep.name}" else "")
+                                        push(Screen.Streams(a, MetaItem(ep.id, "series", label, li.poster, li.shape)))
+                                        scope.launch { hydrateSeriesChain(ctx, a, "series", ep.id) }
+                                    }
+                                },
+                            )
+                            is Screen.Detail -> DetailScreen(
+                                s.addon, s.item,
+                                onBack = { pop() },
+                                onEpisodes = { push(Screen.Episodes(s.addon, s.item)) },
+                                onPlayMovie = {
+                                    seriesChain.clear()
+                                    push(Screen.Streams(s.addon, s.item))
+                                },
+                                onResumeEpisode = { r -> openProgress(r) },
                             )
                             is Screen.Catalog -> CatalogScreen(
                                 s.addon, s.initial,
@@ -654,7 +744,8 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                             )
                         }
                     }
-                    if (current == Screen.Home || current == Screen.Search || current == Screen.Addons) {
+                    if (current == Screen.Home || current == Screen.Search ||
+                        current == Screen.Library || current == Screen.Addons) {
                         BottomBar(current, onTab = { setTab(it) })
                     }
                 }
@@ -870,6 +961,7 @@ private fun BottomBar(current: Screen, onTab: (Screen) -> Unit) {
         Row(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
             TabItem("Home", Icons.Filled.Home, current == Screen.Home, Modifier.weight(1f)) { onTab(Screen.Home) }
             TabItem("Search", Icons.Filled.Search, current == Screen.Search, Modifier.weight(1f)) { onTab(Screen.Search) }
+            TabItem("Library", Icons.Filled.Bookmark, current == Screen.Library, Modifier.weight(1f)) { onTab(Screen.Library) }
             TabItem("Add-ons", Icons.Filled.Extension, current == Screen.Addons, Modifier.weight(1f)) { onTab(Screen.Addons) }
         }
     }
@@ -1226,10 +1318,10 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit) {
 
 // ---------- add-ons (manage sources) ----------
 @Composable
-private fun AddonsScreen(onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit, onJoinParty: (String) -> Unit) {
+private fun AddonsScreen(version: Int, onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit, onJoinParty: (String) -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    var addons by remember { mutableStateOf(loadAddons(ctx)) }
+    var addons by remember(version) { mutableStateOf(loadAddons(ctx)) }
     var url by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
     var statusErr by remember { mutableStateOf(false) }
@@ -1331,6 +1423,7 @@ private fun AddonsScreen(onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit, o
                 )
             }
         }
+        item { SyncPanel(onSynced = onAddonsChanged) }
         item {
             Text("Your add-ons", color = TextC, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
         }
@@ -1372,6 +1465,334 @@ private fun AddonsScreen(onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit, o
                         }) {
                             Icon(Icons.Filled.Close, contentDescription = "Remove", tint = MutedC, modifier = Modifier.size(18.dp))
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------- sync between devices ----------
+@Composable
+private fun SyncPanel(onSynced: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var linked by remember { mutableStateOf(Cloud.linked(ctx)) }
+    var codeIn by remember { mutableStateOf("") }
+    var shownCode by remember { mutableStateOf<String?>(null) }
+    var msg by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    Column(
+        Modifier.fillMaxWidth()
+            .background(SurfaceC, RoundedCornerShape(12.dp))
+            .border(1.dp, LineC, RoundedCornerShape(12.dp))
+            .padding(18.dp)
+    ) {
+        Text("SYNC BETWEEN DEVICES", color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp)
+        Text(
+            if (linked) "Syncing is on — add-ons, progress and My List follow you between linked devices."
+            else "Add-ons, progress and your list stay on this device until you link another.",
+            color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp),
+        )
+        if (!linked) {
+            Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = {
+                        busy = true; msg = null
+                        scope.launch {
+                            val c = Cloud.createGroup(ctx)
+                            if (c != null) { linked = true; shownCode = c }
+                            else msg = "Could not reach the sync server."
+                            busy = false
+                        }
+                    },
+                    enabled = !busy,
+                    colors = ButtonDefaults.buttonColors(containerColor = Red),
+                    shape = RoundedCornerShape(12.dp),
+                ) { Text("Start syncing", fontWeight = FontWeight.SemiBold) }
+            }
+            Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = codeIn, onValueChange = { codeIn = it },
+                    placeholder = { Text("Code from another device", color = MutedC) },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color.White, unfocusedBorderColor = Line2, cursorColor = Red,
+                        focusedTextColor = TextC, unfocusedTextColor = TextC,
+                    ),
+                )
+                Button(
+                    onClick = {
+                        busy = true; msg = "Linking…"
+                        scope.launch {
+                            val err = Cloud.join(ctx, codeIn)
+                            if (err == null) {
+                                linked = true; codeIn = ""; msg = "Linked — pulling your things…"
+                                onSynced()
+                            } else msg = err
+                            busy = false
+                        }
+                    },
+                    enabled = !busy,
+                    colors = ButtonDefaults.buttonColors(containerColor = Surface2),
+                    shape = RoundedCornerShape(12.dp),
+                ) { Text("Link", color = TextC, fontWeight = FontWeight.SemiBold) }
+            }
+        } else {
+            Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = {
+                        busy = true
+                        scope.launch {
+                            shownCode = Cloud.mintCode(ctx)
+                            if (shownCode == null) msg = "Could not get a link code."
+                            busy = false
+                        }
+                    },
+                    enabled = !busy,
+                    colors = ButtonDefaults.buttonColors(containerColor = Red),
+                    shape = RoundedCornerShape(12.dp),
+                ) { Text("Link another device", fontWeight = FontWeight.SemiBold) }
+                Button(
+                    onClick = {
+                        Cloud.leave(ctx); linked = false; shownCode = null
+                        msg = "Sync is off for this device. Nothing was deleted."
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Surface2),
+                    shape = RoundedCornerShape(12.dp),
+                ) { Text("Stop syncing", color = TextC) }
+            }
+        }
+        shownCode?.let { c ->
+            Text(
+                c.toCharArray().joinToString(" "),
+                color = TextC, fontFamily = Mono, fontSize = 30.sp, fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(top = 14.dp)
+                    .background(Surface2, RoundedCornerShape(12.dp)).padding(vertical = 14.dp),
+            )
+            Text(
+                "On the other device: Add-ons › Sync › enter this code. It works for 15 minutes.",
+                color = FaintC, fontSize = 12.sp, textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            )
+        }
+        msg?.let { Text(it, color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp)) }
+    }
+}
+
+// ---------- detail (one title's page: art, facts, actions) ----------
+@Composable
+private fun DetailScreen(
+    addon: Addon,
+    item: MetaItem,
+    onBack: () -> Unit,
+    onEpisodes: () -> Unit,
+    onPlayMovie: () -> Unit,
+    onResumeEpisode: (ProgressRec) -> Unit,
+) {
+    val ctx = LocalContext.current
+    val ck = item.type + ":" + item.id
+    var full by remember(ck) { mutableStateOf(metaFullCache[ck]) }
+    var inList by remember(ck) { mutableStateOf(Library.inList(ctx, item.type, item.id)) }
+
+    LaunchedEffect(ck) {
+        if (full != null) return@LaunchedEffect
+        val order = listOf(addon) + loadAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
+        for (a in order) {
+            val m = runCatching {
+                if (a.manifestUrl != addon.manifestUrl &&
+                    !manifestFor(a.manifestUrl).canMeta(item.type, item.id)) return@runCatching null
+                Stremio.loadFullMeta(a.base, item.type, item.id)
+            }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
+            if (m != null) { metaFullCache[ck] = m; full = m; break }
+        }
+    }
+
+    val resume = remember(ck, full) {
+        if (item.type == "series") seriesResumeRec(ctx, item.id)
+        else Progress.get(ctx, item.type, item.id)?.takeIf {
+            !it.done && !it.dismissed && it.pos >= Progress.MIN_POS_MS && it.dur > 0 && it.pos <= it.dur - Progress.END_GAP_MS
+        }
+    }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 16.dp)) {
+        BackBar(item.name, null, onBack)
+        Box(
+            Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(12.dp)).background(SurfaceC)
+                .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(12.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            val art = full?.background ?: item.poster
+            if (art != null) {
+                AsyncImage(model = art, contentDescription = item.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            } else {
+                Text(
+                    item.name.filter { it.isLetterOrDigit() }.take(2).uppercase().ifEmpty { "••" },
+                    color = Color(0xFF3A3A45), fontSize = 34.sp, fontWeight = FontWeight.Black,
+                )
+            }
+        }
+        val facts = listOfNotNull(
+            full?.releaseInfo,
+            full?.runtime,
+            full?.imdbRating?.let { "★ $it" },
+            full?.genres?.take(3)?.joinToString(" · ")?.ifEmpty { null },
+        ).joinToString("   ·   ")
+        if (facts.isNotEmpty()) Text(
+            facts.uppercase(), color = MutedC, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+            letterSpacing = 1.4.sp, modifier = Modifier.padding(top = 14.dp),
+        )
+        full?.description?.let {
+            Text(it, color = MutedC, fontSize = 14.sp, lineHeight = 21.sp, maxLines = 7,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 10.dp))
+        }
+        Row(Modifier.padding(top = 16.dp, bottom = 24.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+                onClick = {
+                    // recompute at click time — the remembered copy can lag a
+                    // just-finished episode when returning from playback
+                    val r = if (item.type == "series") seriesResumeRec(ctx, item.id) else null
+                    when {
+                        item.type == "series" && r != null -> onResumeEpisode(
+                            if (r.addonUrl.isEmpty()) r.copy(addonUrl = addon.manifestUrl) else r
+                        )
+                        item.type == "series" -> onEpisodes()
+                        else -> onPlayMovie()
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text(
+                    when {
+                        item.type == "series" && resume != null -> resumeLabel(item.id, resume.id)
+                        resume != null -> "Resume"
+                        else -> "Play"
+                    },
+                    fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 6.dp),
+                )
+            }
+            if (item.type == "series") Button(
+                onClick = onEpisodes,
+                colors = ButtonDefaults.buttonColors(containerColor = Surface2),
+                shape = RoundedCornerShape(12.dp),
+            ) { Text("Episodes", color = TextC, fontWeight = FontWeight.SemiBold) }
+            Button(
+                onClick = { inList = Library.toggle(ctx, item.type, item, addon.manifestUrl) },
+                colors = ButtonDefaults.buttonColors(containerColor = Surface2),
+                shape = RoundedCornerShape(12.dp),
+            ) { Text(if (inList) "✓ In My List" else "+ My List", color = TextC, fontWeight = FontWeight.SemiBold) }
+        }
+    }
+}
+
+// ---------- library (My List + upcoming episodes) ----------
+@Composable
+private fun LibraryScreen(
+    version: Int,
+    onOpen: (LibItem) -> Unit,
+    onPlayEpisode: (LibItem, Episode) -> Unit,
+) {
+    val ctx = LocalContext.current
+    var items by remember(version) { mutableStateOf(Library.list(ctx)) }
+    var upcoming by remember(version) { mutableStateOf<List<Library.UpRow>?>(null) }
+
+    LaunchedEffect(version, items.size) {
+        upcoming = if (items.none { it.type == "series" }) emptyList()
+        else runCatching { Library.upcoming(ctx) }.getOrDefault(emptyList())
+    }
+
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
+        Text("Library", color = TextC, fontSize = 34.sp, fontFamily = Sans, fontWeight = FontWeight.Bold,
+            letterSpacing = (-1).sp, modifier = Modifier.padding(bottom = 12.dp))
+        if (items.isEmpty()) {
+            Text(
+                "Nothing saved yet — open any title and press + My List. New episodes of saved series appear here too.",
+                color = MutedC, fontSize = 14.sp, lineHeight = 21.sp,
+            )
+            return@Column
+        }
+        LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
+            item(key = "grid") {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    items(items, key = { it.type + ":" + it.id }) { li ->
+                        Box(Modifier.width(if (li.shape == "landscape") 210.dp else 124.dp)) {
+                            MetaCard(MetaItem(li.id, li.type, li.name, li.poster, li.shape)) { onOpen(li) }
+                            IconButton(
+                                onClick = {
+                                    Library.toggle(ctx, li.type, MetaItem(li.id, li.type, li.name, li.poster, li.shape), li.addonUrl)
+                                    items = Library.list(ctx)
+                                },
+                                modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(28.dp)
+                                    .background(Color(0x9E000000), RoundedCornerShape(12.dp)),
+                            ) {
+                                Icon(Icons.Filled.Close, contentDescription = "Remove from My List", tint = MutedC, modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    }
+                }
+            }
+            when (val up = upcoming) {
+                null -> item(key = "upsk") {
+                    Column {
+                        RowHeader("Upcoming", null, null)
+                        SkeletonRow(44.dp, 66.dp, circle = false)
+                    }
+                }
+                else -> if (up.isNotEmpty()) {
+                    item(key = "uphead") { RowHeader("Upcoming", null, null) }
+                    var lastDay = ""
+                    up.forEach { row ->
+                        val day = Library.dayLabel(row.time)
+                        if (day != lastDay) {
+                            lastDay = day
+                            item(key = "day/" + row.time) {
+                                Text(day.uppercase(), color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                                    letterSpacing = 1.6.sp, modifier = Modifier.padding(top = 14.dp, bottom = 8.dp))
+                            }
+                        }
+                        item(key = "up/" + row.series.id + "/" + row.ep.id) {
+                            FocusCard(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                                onClick = { onPlayEpisode(row.series, row.ep) }) {
+                                Row(
+                                    Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(12.dp))
+                                        .border(1.dp, LineC, RoundedCornerShape(12.dp)).padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                ) {
+                                    val thumbMod = Modifier.width(44.dp).height(66.dp).clip(RoundedCornerShape(8.dp)).background(Surface2)
+                                    if (row.series.poster != null) {
+                                        AsyncImage(model = row.series.poster, contentDescription = null, contentScale = ContentScale.Crop, modifier = thumbMod)
+                                    } else {
+                                        Box(thumbMod, contentAlignment = Alignment.Center) {
+                                            Text(row.series.name.take(1).uppercase(), color = FaintC, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                    Column(Modifier.weight(1f)) {
+                                        Text(row.series.name, color = TextC, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        val tag = "S${row.ep.season}" + (row.ep.episode?.let { "E$it" } ?: "")
+                                        val notOut = row.time > System.currentTimeMillis()
+                                        Text(
+                                            tag + (if (row.ep.name.isNotEmpty()) "  ${row.ep.name}" else "") +
+                                                (if (notOut) " — not out yet" else ""),
+                                            color = MutedC, fontSize = 12.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                            fontFamily = Mono, modifier = Modifier.padding(top = 3.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else item(key = "upempty") {
+                    Column {
+                        RowHeader("Upcoming", null, null)
+                        Text("No dated episodes coming up for your saved series.", color = MutedC, fontSize = 13.sp)
                     }
                 }
             }

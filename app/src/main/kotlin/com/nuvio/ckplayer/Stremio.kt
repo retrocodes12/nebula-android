@@ -47,6 +47,20 @@ data class StreamItem(val name: String, val title: String, val url: String, val 
 data class Episode(
     val id: String, val season: Int, val episode: Int?,
     val name: String, val overview: String?, val thumbnail: String?,
+    val released: String? = null,
+)
+
+/** The full meta document for one title — what the detail page shows. */
+data class FullMeta(
+    val name: String,
+    val description: String?,
+    val background: String?,
+    val poster: String?,
+    val runtime: String?,
+    val imdbRating: String?,
+    val releaseInfo: String?,
+    val genres: List<String>,
+    val videos: List<Episode>,
 )
 
 object Stremio {
@@ -145,11 +159,38 @@ object Stremio {
         return ManifestInfo(addon, cats, hasStreams, sTypes, sPrefixes, hasMeta, mTypes, mPrefixes)
     }
 
+    /** Full meta for one title, or null when the add-on has nothing. */
+    suspend fun loadFullMeta(base: String, type: String, id: String): FullMeta? {
+        val u = "$base/meta/${enc(type)}/${enc(id)}.json"
+        val meta = JSONObject(httpGetText(u)).optJSONObject("meta") ?: return null
+        val genres = mutableListOf<String>()
+        (meta.optJSONArray("genres") ?: meta.optJSONArray("genre"))?.let { g ->
+            for (i in 0 until g.length()) genres.add(g.optString(i))
+        }
+        return FullMeta(
+            name = meta.optString("name"),
+            description = meta.optString("description").ifEmpty { meta.optString("overview").ifEmpty { null } },
+            background = meta.optString("background").ifEmpty { null },
+            poster = meta.optString("poster").ifEmpty { null },
+            runtime = meta.optString("runtime").ifEmpty { null },
+            imdbRating = meta.optString("imdbRating").ifEmpty { null },
+            releaseInfo = meta.optString("releaseInfo").ifEmpty {
+                meta.optString("released").take(4).ifEmpty { null }
+            },
+            genres = genres.filter { it.isNotEmpty() },
+            videos = parseVideos(meta.optJSONArray("videos")),
+        )
+    }
+
     /** Fetch a series' episode list (the meta `videos` array). Empty if none. */
     suspend fun loadSeriesVideos(base: String, type: String, id: String): List<Episode> {
         val u = "$base/meta/${enc(type)}/${enc(id)}.json"
         val meta = JSONObject(httpGetText(u)).optJSONObject("meta") ?: return emptyList()
-        val vids = meta.optJSONArray("videos") ?: return emptyList()
+        return parseVideos(meta.optJSONArray("videos"))
+    }
+
+    private fun parseVideos(vids: JSONArray?): List<Episode> {
+        if (vids == null) return emptyList()
         val out = mutableListOf<Episode>()
         for (i in 0 until vids.length()) {
             val v = vids.optJSONObject(i) ?: continue
@@ -168,6 +209,7 @@ object Stremio {
                     name = v.optString("name").ifEmpty { v.optString("title").ifEmpty { "Episode ${ep ?: ""}".trim() } },
                     overview = v.optString("overview").ifEmpty { v.optString("description").ifEmpty { null } },
                     thumbnail = v.optString("thumbnail").ifEmpty { null },
+                    released = v.optString("released").ifEmpty { null },
                 )
             )
         }

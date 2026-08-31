@@ -21,6 +21,9 @@ data class ProgressRec(
     val pos: Long = 0L,
     val dur: Long = 0L,
     val done: Boolean = false,
+    /** Removed from Continue watching — a tombstone, not a delete, so a synced
+        device still holding the old position cannot push it straight back. */
+    val dismissed: Boolean = false,
     val at: Long = 0L,
 )
 
@@ -53,6 +56,7 @@ object Progress {
                     pos = r.optLong("pos"),
                     dur = r.optLong("dur"),
                     done = r.optBoolean("done"),
+                    dismissed = r.optBoolean("dismissed"),
                     at = r.optLong("at"),
                 )
             }
@@ -62,6 +66,11 @@ object Progress {
     }
 
     private fun persist(ctx: Context, m: MutableMap<String, ProgressRec>) {
+        persistRaw(ctx, m)
+        Cloud.noteChanged(ctx, "progress")
+    }
+
+    private fun persistRaw(ctx: Context, m: MutableMap<String, ProgressRec>) {
         if (m.size > MAX) {
             m.entries.sortedByDescending { it.value.at }.drop(MAX).map { it.key }
                 .forEach { m.remove(it) }
@@ -74,7 +83,7 @@ object Progress {
                     .put("type", r.type).put("id", r.id).put("name", r.name)
                     .put("poster", r.poster ?: "").put("shape", r.shape)
                     .put("addonUrl", r.addonUrl).put("pos", r.pos).put("dur", r.dur)
-                    .put("done", r.done).put("at", r.at)
+                    .put("done", r.done).put("dismissed", r.dismissed).put("at", r.at)
             )
         }
         prefs(ctx).edit().putString(KEY, o.toString()).apply()
@@ -85,7 +94,7 @@ object Progress {
     /** Where playback of (type,id) should start, in ms — 0 means the beginning. */
     fun resumeAt(ctx: Context, type: String, id: String): Long {
         val r = get(ctx, type, id) ?: return 0
-        if (r.done || r.pos <= 0 || r.dur <= 0) return 0
+        if (r.done || r.dismissed || r.pos <= 0 || r.dur <= 0) return 0
         if (r.pos < MIN_POS_MS || r.pos > r.dur - END_GAP_MS) return 0
         return r.pos
     }
@@ -100,7 +109,11 @@ object Progress {
             return
         }
         if (rec.pos < MIN_POS_MS) {                 // rewound to the top — forget it
-            if (m[k]?.done == false) { m.remove(k); persist(ctx, m) }
+            val cur = m[k]
+            if (cur != null && !cur.done && !cur.dismissed) {
+                m[k] = ProgressRec(rec.type, rec.id, dismissed = true, at = System.currentTimeMillis())
+                persist(ctx, m)
+            }
             return
         }
         m[k] = rec.copy(at = System.currentTimeMillis())
@@ -109,13 +122,27 @@ object Progress {
 
     fun clear(ctx: Context, type: String, id: String) {
         val m = load(ctx)
-        if (m.remove(key(type, id)) != null) persist(ctx, m)
+        val k = key(type, id)
+        if (m[k] != null) {
+            m[k] = ProgressRec(type, id, dismissed = true, at = System.currentTimeMillis())
+            persist(ctx, m)
+        }
+    }
+
+    /** The whole store, for sync. */
+    internal fun all(ctx: Context): Map<String, ProgressRec> = load(ctx).toMap()
+
+    /** Replace the whole store after a sync merge (no re-push side effects). */
+    internal fun replaceAll(ctx: Context, m: Map<String, ProgressRec>) {
+        val mm = LinkedHashMap(m)
+        cache = mm
+        persistRaw(ctx, mm)
     }
 
     /** Newest first, only the things actually worth resuming. */
     fun continueList(ctx: Context): List<ProgressRec> =
         load(ctx).values
-            .filter { !it.done && it.pos >= MIN_POS_MS && it.dur > 0 && it.pos <= it.dur - END_GAP_MS }
+            .filter { !it.done && !it.dismissed && it.pos >= MIN_POS_MS && it.dur > 0 && it.pos <= it.dur - END_GAP_MS }
             .sortedByDescending { it.at }
             .take(20)
 }
