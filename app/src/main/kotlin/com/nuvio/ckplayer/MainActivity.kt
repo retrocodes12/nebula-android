@@ -2683,36 +2683,30 @@ private fun PlayerScreen(
         if (upnextOpen && nextEpisode != null && !pip) {
             Column(
                 Modifier.align(Alignment.BottomEnd)
-                    .padding(end = 28.dp, bottom = 110.dp)
+                    .padding(end = 20.dp, bottom = 150.dp)
                     .width(300.dp)
-                    .background(Color(0xEB0C0A09))
-                    .border(1.dp, Color(0x61FFFFFF))
-                    .padding(20.dp),
+                    .background(Color(0xE62C2C2E), RoundedCornerShape(16.dp))
+                    .padding(18.dp),
             ) {
-                Text("Up next", fontFamily = Playfair,
-                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                    fontSize = 15.sp, color = Color(0xA8FFFFFF))
+                Text("Up next", color = Color(0xA8EBEBF5), fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 Text(
-                    ("S${nextEpisode.season}" + (nextEpisode.episode?.let { "E$it" } ?: "") +
-                        (if (nextEpisode.name.isNotEmpty()) " · ${nextEpisode.name}" else "")).uppercase(),
-                    color = TextC, fontSize = 15.sp, fontFamily = Playfair, letterSpacing = 0.1.em,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 22.sp,
-                    modifier = Modifier.padding(top = 6.dp, bottom = 16.dp),
+                    "S${nextEpisode.season}" + (nextEpisode.episode?.let { "E$it" } ?: "") +
+                        (if (nextEpisode.name.isNotEmpty()) " · ${nextEpisode.name}" else ""),
+                    color = TextC, fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 24.sp,
+                    modifier = Modifier.padding(top = 5.dp, bottom = 14.dp),
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(22.dp)) {
-                    Text(
-                        (if (upnextCounting) "Play now ($upnextLeft)" else "Play now").uppercase(),
-                        color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 0.24.em,
-                        textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
-                        modifier = Modifier.clickable { upnextCounting = false; onPlayNext(nextEpisode) },
-                    )
-                    Text(
-                        "Dismiss".uppercase(),
-                        color = Color(0xA8FFFFFF), fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 0.24.em,
-                        modifier = Modifier.clickable { upnextCounting = false; upnextOpen = false; upnextDismissed = true },
-                    )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { upnextCounting = false; onPlayNext(nextEpisode) },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
+                        shape = RoundedCornerShape(50),
+                    ) { Text(if (upnextCounting) "Play now ($upnextLeft)" else "Play now", fontWeight = FontWeight.SemiBold) }
+                    Button(
+                        onClick = { upnextCounting = false; upnextOpen = false; upnextDismissed = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x6B505058)),
+                        shape = RoundedCornerShape(50),
+                    ) { Text("Dismiss", color = TextC) }
                 }
             }
         }
