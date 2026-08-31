@@ -48,9 +48,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.19.0.apk
+          cp "$APK" Nebula-1.20.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.19.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.19.0 Nebula-1.19.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.19.0" \
-            --notes "A new look. Nebula now uses an Apple-style interface — layered surfaces over a true-black ground, a translucent top bar, soft rounded artwork, and a highlight that lifts and enlarges what you are pointing at instead of drawing a box around it. Underneath: it remembers where you stopped, with a Continue Watching row that picks any half-finished film or episode back up at the second you left it; episodes show a tick when watched and a bar when part-way; a series keeps rolling on its own, offering the next episode near the end and playing it automatically when one finishes. Search now covers every searchable catalogue an add-on offers, so searching a show name returns shows and not just films. Catalogues load further pages as you scroll instead of stopping at the first hundred items, and lists show placeholder rows while they load. Signed with the same permanent key, so it installs over the top. Install (phone): allow 'install unknown apps' and tap the APK. Install (TV): Downloader code 7664693 (or da.gd/nebulaapk). Nebula.apk is a stable-named copy so releases/latest/download/Nebula.apk, code 7664693 and da.gd/nebulaapk always point at the newest build."
+          gh release delete v1.20.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.20.0 Nebula-1.20.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.20.0" \
+            --notes "Your player, everywhere you watch. Every title now opens on its own page - artwork, year, runtime, rating and description - with a Play button that knows where you stopped (it reads Resume S2E4, not just Play). A My List library collects what you are watching under a new Library tab, and saved series show their next dated episodes in an Upcoming list grouped by day. Devices now sync without an account: link this phone or TV to your browser, PC or LG TV with a 6-character code from the Add-ons tab, and add-ons, watch progress and My List follow you everywhere - newest change wins, whichever device it happened on. Signed with the same permanent key, so it installs over the top. Install (phone): allow 'install unknown apps' and tap the APK. Install (TV): Downloader code 7664693 (or da.gd/nebulaapk). Nebula.apk is a stable-named copy so releases/latest/download/Nebula.apk, code 7664693 and da.gd/nebulaapk always point at the newest build."
