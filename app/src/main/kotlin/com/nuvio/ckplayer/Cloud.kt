@@ -26,12 +26,11 @@ import java.util.concurrent.TimeUnit
  *   - positions/durations travel in SECONDS (web-style); Android stores ms.
  *   - the add-on list carries no timestamps locally, so this layer keeps its
  *     own added/removed stamps (prefs "addons_sync"), exactly like the web's.
- * Subtitle style is a web/TV-only key and is neither pushed nor pulled.
  */
 object Cloud {
     private const val BASE = "https://play.rifflehq.in/cloud"
     private const val PREFS = "ckplayer"
-    private val SYNC_KEYS = listOf("addons", "progress", "library")
+    private val SYNC_KEYS = listOf("addons", "progress", "library", "sub_style")
     private val JSON_MT = "application/json".toMediaType()
 
     private val http = OkHttpClient.Builder()
@@ -159,6 +158,7 @@ object Cloud {
         "addons" -> loadAddons(ctx).isNotEmpty()
         "progress" -> Progress.all(ctx).isNotEmpty()
         "library" -> Library.all(ctx).length() > 0
+        "sub_style" -> SubStyle.at(ctx) > 0
         else -> false
     }
 
@@ -202,6 +202,7 @@ object Cloud {
         "addons" -> mergeAddons(ctx, remote)
         "progress" -> mergeProgress(ctx, remote)
         "library" -> mergeLibrary(ctx, remote)
+        "sub_style" -> mergeSubStyle(ctx, remote)
         else -> false to false
     }
 
@@ -239,6 +240,11 @@ object Cloud {
             o.toString()
         }
         "library" -> Library.all(ctx).toString()
+        "sub_style" -> {
+            val style = JSONObject()
+            SubStyle.get(ctx).forEach { (k, v) -> style.put(k, v) }
+            JSONObject().put("style", style).put("at", SubStyle.at(ctx)).toString()
+        }
         else -> null
     }
 
@@ -335,6 +341,17 @@ object Cloud {
         }
         if (changed) Progress.replaceAll(ctx, local)
         return changed to localNewer
+    }
+
+    private fun mergeSubStyle(ctx: Context, remote: JSONObject): Pair<Boolean, Boolean> {
+        val rAt = remote.optLong("at")
+        val lAt = SubStyle.at(ctx)
+        val style = remote.optJSONObject("style")
+        if (rAt > lAt && style != null) {
+            SubStyle.applyRemote(ctx, style, rAt)
+            return true to false
+        }
+        return false to (lAt > rAt)
     }
 
     private fun mergeLibrary(ctx: Context, remote: JSONObject): Pair<Boolean, Boolean> {

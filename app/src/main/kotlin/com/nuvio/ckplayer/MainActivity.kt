@@ -60,6 +60,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
@@ -2153,6 +2154,8 @@ private fun PlayerScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var videoQualityCount by remember { mutableStateOf(0) }
     var audioTrackCount by remember { mutableStateOf(0) }
+    var textTrackCount by remember { mutableStateOf(0) }
+    var subStyleOpen by remember { mutableStateOf(false) }
     var controllerVisible by remember { mutableStateOf(true) }
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
     var skipFlash by remember { mutableStateOf<Triple<Int, Int, Long>?>(null) } // zone (-1/+1), total secs, stamp
@@ -2276,16 +2279,19 @@ private fun PlayerScreen(
             override fun onTracksChanged(tracks: Tracks) {
                 var v = 0
                 var au = 0
+                var tx = 0
                 for (g in tracks.groups) {
                     when (g.type) {
                         C.TRACK_TYPE_VIDEO -> for (i in 0 until g.length) {
                             if (g.isTrackSupported(i) && g.getTrackFormat(i).height > 0) v++
                         }
                         C.TRACK_TYPE_AUDIO -> if (g.length > 0) au++
+                        C.TRACK_TYPE_TEXT -> if (g.length > 0) tx++
                     }
                 }
                 videoQualityCount = v
                 audioTrackCount = au
+                textTrackCount = tx
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 (activity as? MainActivity)?.refreshPipParams()
@@ -2316,6 +2322,12 @@ private fun PlayerScreen(
                 setImmersive(it, false)
             }
         }
+    }
+
+    // Restyle live whenever the subtitle appearance changes — a tap in the
+    // panel here, or a synced-in choice made on another device.
+    LaunchedEffect(SubStyle.version.value) {
+        playerViewRef?.subtitleView?.let { SubStyle.apply(context, it) }
     }
 
     // In picture-in-picture only the video shows — no controller, gestures, or overlay buttons.
@@ -2389,6 +2401,7 @@ private fun PlayerScreen(
                         controllerVisible = (v == View.VISIBLE)
                     })
                     playerViewRef = this
+                    subtitleView?.let { SubStyle.apply(ctx, it) }
                     setFullscreenButtonClickListener { isFull ->
                         activity?.let {
                             it.requestedOrientation =
@@ -2519,6 +2532,64 @@ private fun PlayerScreen(
                     modifier = Modifier.size(44.dp).background(Color(0xB3000000), CircleShape)
                 ) {
                     Icon(Icons.Filled.SkipNext, contentDescription = "Next episode", tint = Color.White, modifier = Modifier.size(24.dp))
+                }
+            }
+            if (textTrackCount >= 1 || subs.isNotEmpty()) {
+                IconButton(
+                    onClick = { subStyleOpen = !subStyleOpen },
+                    modifier = Modifier.size(44.dp).background(if (subStyleOpen) Color.White else Color(0xB3000000), CircleShape)
+                ) {
+                    Icon(
+                        Icons.Filled.ClosedCaption, contentDescription = "Subtitle appearance",
+                        tint = if (subStyleOpen) Color.Black else Color.White, modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+        }
+        // Subtitle appearance: rows cycle their value on tap, over a live sample.
+        if (subStyleOpen && !pip) {
+            @Suppress("UNUSED_EXPRESSION") SubStyle.version.value   // recompose on cycle
+            val style = SubStyle.get(context)
+            Column(
+                Modifier.align(Alignment.CenterEnd)
+                    .padding(end = 16.dp)
+                    .width(280.dp)
+                    .background(SurfaceC, RoundedCornerShape(12.dp))
+                    .border(1.dp, Line2, RoundedCornerShape(12.dp))
+                    .padding(14.dp),
+            ) {
+                Text("SUBTITLE APPEARANCE", color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp)
+                Box(
+                    Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 6.dp)
+                        .background(Color(0xFF2A3550), RoundedCornerShape(8.dp)).padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "Subtitles will look like this",
+                        color = Color(SubStyle.COLOR.first { it.first == style.getValue("color") }.second),
+                        fontSize = 13.sp,
+                        modifier = Modifier.background(Color(SubStyle.BG.first { it.first == style.getValue("bg") }.second)),
+                    )
+                }
+                SubStyle.ORDER.forEach { k ->
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                            .clickable { SubStyle.cycle(context, k) }
+                            .padding(horizontal = 6.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(SubStyle.LABELS.getValue(k), color = TextC, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            "‹ " + (SubStyle.VALUE_LABELS[style.getValue(k)] ?: style.getValue(k)) + " ›",
+                            color = MutedC, fontSize = 13.sp,
+                        )
+                    }
+                }
+                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Chip("Reset", false) { SubStyle.reset(context) }
+                    Spacer(Modifier.weight(1f))
+                    Chip("Done", true) { subStyleOpen = false }
                 }
             }
         }

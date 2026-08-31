@@ -48,9 +48,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.20.0.apk
+          cp "$APK" Nebula-1.21.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.20.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.20.0 Nebula-1.20.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.20.0" \
-            --notes "Your player, everywhere you watch. Every title now opens on its own page - artwork, year, runtime, rating and description - with a Play button that knows where you stopped (it reads Resume S2E4, not just Play). A My List library collects what you are watching under a new Library tab, and saved series show their next dated episodes in an Upcoming list grouped by day. Devices now sync without an account: link this phone or TV to your browser, PC or LG TV with a 6-character code from the Add-ons tab, and add-ons, watch progress and My List follow you everywhere - newest change wins, whichever device it happened on. Signed with the same permanent key, so it installs over the top. Install (phone): allow 'install unknown apps' and tap the APK. Install (TV): Downloader code 7664693 (or da.gd/nebulaapk). Nebula.apk is a stable-named copy so releases/latest/download/Nebula.apk, code 7664693 and da.gd/nebulaapk always point at the newest build."
+          gh release delete v1.21.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.21.0 Nebula-1.21.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.21.0" \
+            --notes "Subtitles, your way - on Android too. The player gains the same Subtitle appearance panel the web and TV editions have: size (five steps), colour (white, yellow, cyan, green), background (dark, translucent, none), edge (shadow, outline, none), font (sans, serif, mono) and position (bottom to centre). Open it from the CC button while something plays; changes apply live. And because the choice is stored in the same synced document every other edition uses, styling subtitles once on your phone styles them on your TV, browser and PC as well. Signed with the same permanent key, so it installs over the top. Install (phone): allow 'install unknown apps' and tap the APK. Install (TV): Downloader code 7664693 (or da.gd/nebulaapk)."
