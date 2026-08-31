@@ -8,3 +8,6 @@
 /captures/
 .externalNativeBuild/
 .cxx/
+
+# agent-router telemetry — leaked /home paths into the public repo once already
+.claude-flow/

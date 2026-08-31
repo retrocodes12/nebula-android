@@ -102,8 +102,25 @@ object SubStyle {
         save(ctx, m, at, fromSync = true)
     }
 
-    /** Push the current choices into a Media3 SubtitleView. */
+    /** Has the user (here or on a synced device) ever chosen a style? */
+    fun configured(ctx: Context): Boolean = at(ctx) > 0L
+
+    /**
+     * Push the current choices into a Media3 SubtitleView. Until the user has
+     * actually configured something, the system's own caption preferences win —
+     * CaptioningManager styles are an accessibility setting, and overriding
+     * them with app defaults for people who never opened the panel would be a
+     * regression, not a feature.
+     */
     fun apply(ctx: Context, view: SubtitleView) {
+        if (!configured(ctx)) {
+            view.setUserDefaultStyle()
+            view.setUserDefaultTextSize()
+            view.setBottomPaddingFraction(0.08f)
+            view.setApplyEmbeddedStyles(true)
+            view.setApplyEmbeddedFontSizes(true)
+            return
+        }
         val s = get(ctx)
         view.setStyle(
             CaptionStyleCompat(
@@ -116,8 +133,15 @@ object SubStyle {
             )
         )
         view.setFractionalTextSize(
-            SubtitleView.DEFAULT_TEXT_SIZE_FRACTION * SIZE.first { it.first == s.getValue("size") }.second
+            SubtitleView.DEFAULT_TEXT_SIZE_FRACTION * sizeFactor(s.getValue("size"))
         )
         view.setBottomPaddingFraction(POS.first { it.first == s.getValue("pos") }.second)
+        // a chosen style must actually show — embedded VTT colors/sizes would
+        // silently win over everything the panel sets
+        view.setApplyEmbeddedStyles(false)
+        view.setApplyEmbeddedFontSizes(false)
     }
+
+    /** The size multiplier behind a size key (the preview scales with it too). */
+    fun sizeFactor(key: String): Float = SIZE.first { it.first == key }.second
 }

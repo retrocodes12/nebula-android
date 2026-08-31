@@ -347,7 +347,10 @@ object Cloud {
         val rAt = remote.optLong("at")
         val lAt = SubStyle.at(ctx)
         val style = remote.optJSONObject("style")
-        if (rAt > lAt && style != null) {
+        // a malformed doc must not wedge the key: the rev gets recorded either
+        // way, so push our good copy over it rather than silently skipping
+        if (style == null) return false to (lAt > 0)
+        if (rAt > lAt) {
             SubStyle.applyRemote(ctx, style, rAt)
             return true to false
         }

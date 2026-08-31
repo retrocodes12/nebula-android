@@ -227,16 +227,16 @@ private val inPipMode = mutableStateOf(false)
 // ---------- Nebula palette (matches the web/webOS player: flat, restrained) ----------
 // Editorial palette: warm cream ink on near-black, hairlines for structure,
 // red kept to the mark and to progress. Mirrors the shared HTML player.
-private val Red = Color(0xFFE50914)
+internal val Red = Color(0xFFE50914)
 private val Bg = Color(0xFF000000)
-private val SurfaceC = Color(0xFF1C1C1E)     // secondary system background
-private val Surface2 = Color(0xFF2C2C2E)     // tertiary
+internal val SurfaceC = Color(0xFF1C1C1E)     // secondary system background
+internal val Surface2 = Color(0xFF2C2C2E)     // tertiary
 private val LineC = Color(0x1AFFFFFF)        // hairline separator
-private val Line2 = Color(0x29FFFFFF)
-private val MutedC = Color(0x99EBEBF5)       // secondary label
+internal val Line2 = Color(0x29FFFFFF)
+internal val MutedC = Color(0x99EBEBF5)       // secondary label
 private val FaintC = Color(0x4DEBEBF5)       // tertiary label
 private val FillC = Color(0x3D767680)        // control fill
-private val TextC = Color(0xFFFFFFFF)
+internal val TextC = Color(0xFFFFFFFF)
 
 // Three registers and nothing between: a display serif for titles, one
 // grotesque for the interface, a mono for every number and label.
@@ -801,7 +801,7 @@ private fun BackBar(title: String, sub: String?, onBack: () -> Unit) {
 }
 
 @Composable
-private fun Chip(text: String, on: Boolean, onClick: () -> Unit) {
+internal fun Chip(text: String, on: Boolean, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val pill = RoundedCornerShape(12.dp)
@@ -2546,51 +2546,11 @@ private fun PlayerScreen(
                 }
             }
         }
-        // Subtitle appearance: rows cycle their value on tap, over a live sample.
+        // Subtitle appearance panel (extracted — SubStylePanel.kt); vertical
+        // padding leaves the parent Box to bound it so its own scroll engages.
         if (subStyleOpen && !pip) {
-            @Suppress("UNUSED_EXPRESSION") SubStyle.version.value   // recompose on cycle
-            val style = SubStyle.get(context)
-            Column(
-                Modifier.align(Alignment.CenterEnd)
-                    .padding(end = 16.dp)
-                    .width(280.dp)
-                    .background(SurfaceC, RoundedCornerShape(12.dp))
-                    .border(1.dp, Line2, RoundedCornerShape(12.dp))
-                    .padding(14.dp),
-            ) {
-                Text("SUBTITLE APPEARANCE", color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp)
-                Box(
-                    Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 6.dp)
-                        .background(Color(0xFF2A3550), RoundedCornerShape(8.dp)).padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        "Subtitles will look like this",
-                        color = Color(SubStyle.COLOR.first { it.first == style.getValue("color") }.second),
-                        fontSize = 13.sp,
-                        modifier = Modifier.background(Color(SubStyle.BG.first { it.first == style.getValue("bg") }.second)),
-                    )
-                }
-                SubStyle.ORDER.forEach { k ->
-                    Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                            .clickable { SubStyle.cycle(context, k) }
-                            .padding(horizontal = 6.dp, vertical = 9.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(SubStyle.LABELS.getValue(k), color = TextC, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                        Spacer(Modifier.weight(1f))
-                        Text(
-                            "‹ " + (SubStyle.VALUE_LABELS[style.getValue(k)] ?: style.getValue(k)) + " ›",
-                            color = MutedC, fontSize = 13.sp,
-                        )
-                    }
-                }
-                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Chip("Reset", false) { SubStyle.reset(context) }
-                    Spacer(Modifier.weight(1f))
-                    Chip("Done", true) { subStyleOpen = false }
-                }
+            Box(Modifier.align(Alignment.CenterEnd).padding(end = 16.dp, top = 24.dp, bottom = 24.dp)) {
+                SubStylePanel(onDone = { subStyleOpen = false })
             }
         }
         // Up next: offered near the end, counts down and autoplays once the episode ends.
