@@ -40,7 +40,14 @@ data class ManifestInfo(
         return true
     }
 }
-data class MetaItem(val id: String, val type: String, val name: String, val poster: String?, val posterShape: String = "poster")
+data class MetaItem(
+    val id: String, val type: String, val name: String, val poster: String?,
+    val posterShape: String = "poster",
+    // catalogue responses often carry the whole premium presentation — keep it
+    val imdbRating: String? = null, val releaseInfo: String? = null,
+    val background: String? = null, val logo: String? = null,
+    val description: String? = null,
+)
 data class SubTrack(val url: String, val lang: String)
 data class StreamItem(val name: String, val title: String, val url: String, val subtitles: List<SubTrack> = emptyList())
 /** One episode of a series (a Stremio meta `videos` entry). */
@@ -56,10 +63,13 @@ data class FullMeta(
     val description: String?,
     val background: String?,
     val poster: String?,
+    val logo: String? = null,
     val runtime: String?,
     val imdbRating: String?,
     val releaseInfo: String?,
     val genres: List<String>,
+    val cast: List<String> = emptyList(),
+    val director: List<String> = emptyList(),
     val videos: List<Episode>,
 )
 
@@ -167,17 +177,25 @@ object Stremio {
         (meta.optJSONArray("genres") ?: meta.optJSONArray("genre"))?.let { g ->
             for (i in 0 until g.length()) genres.add(g.optString(i))
         }
+        val cast = mutableListOf<String>()
+        meta.optJSONArray("cast")?.let { c -> for (i in 0 until c.length()) cast.add(c.optString(i)) }
+        val director = mutableListOf<String>()
+        (meta.optJSONArray("director"))?.let { c -> for (i in 0 until c.length()) director.add(c.optString(i)) }
+            ?: meta.optString("director").takeIf { it.isNotEmpty() }?.let { director.add(it) }
         return FullMeta(
             name = meta.optString("name"),
             description = meta.optString("description").ifEmpty { meta.optString("overview").ifEmpty { null } },
             background = meta.optString("background").ifEmpty { null },
             poster = meta.optString("poster").ifEmpty { null },
+            logo = meta.optString("logo").ifEmpty { null },
             runtime = meta.optString("runtime").ifEmpty { null },
             imdbRating = meta.optString("imdbRating").ifEmpty { null },
             releaseInfo = meta.optString("releaseInfo").ifEmpty {
                 meta.optString("released").take(4).ifEmpty { null }
             },
             genres = genres.filter { it.isNotEmpty() },
+            cast = cast.filter { it.isNotEmpty() }.take(6),
+            director = director.filter { it.isNotEmpty() }.take(2),
             videos = parseVideos(meta.optJSONArray("videos")),
         )
     }
@@ -238,7 +256,14 @@ object Stremio {
             val m = metas.getJSONObject(i)
             val poster = m.optString("poster").ifEmpty { null }
             val shape = m.optString("posterShape").ifEmpty { "poster" }
-            out.add(MetaItem(m.optString("id"), m.optString("type", c.type), m.optString("name", m.optString("id")), poster, shape))
+            out.add(MetaItem(
+                m.optString("id"), m.optString("type", c.type), m.optString("name", m.optString("id")), poster, shape,
+                imdbRating = m.optString("imdbRating").ifEmpty { null },
+                releaseInfo = m.optString("releaseInfo").ifEmpty { m.optString("year").ifEmpty { null } },
+                background = m.optString("background").ifEmpty { null },
+                logo = m.optString("logo").ifEmpty { null },
+                description = m.optString("description").ifEmpty { null },
+            ))
         }
         return out
     }

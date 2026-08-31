@@ -48,9 +48,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.21.0.apk
+          cp "$APK" Nebula-1.22.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.21.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.21.0 Nebula-1.21.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.21.0" \
-            --notes "Subtitles, your way - on Android too. The player gains the same Subtitle appearance panel the web and TV editions have: size (five steps), colour (white, yellow, cyan, green), background (dark, translucent, none), edge (shadow, outline, none), font (sans, serif, mono) and position (bottom to centre). Open it from the CC button while something plays; changes apply live. And because the choice is stored in the same synced document every other edition uses, styling subtitles once on your phone styles them on your TV, browser and PC as well. Signed with the same permanent key, so it installs over the top. Install (phone): allow 'install unknown apps' and tap the APK. Install (TV): Downloader code 7664693 (or da.gd/nebulaapk)."
+          gh release delete v1.22.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.22.0 Nebula-1.22.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.22.0" \
+            --notes "Nebula opens full now. First run preinstalls a starter catalogue add-on, so the app greets you with a featured hero - full-bleed artwork, the title's own logo, rating and description - instead of an empty screen. Every title page went full-bleed too: backdrop behind everything, logo art in place of plain text, cast and director credits, and rating badges with the year on every poster. Signed with the same permanent key, so it installs over the top. Install (phone): allow 'install unknown apps' and tap the APK. Install (TV): Downloader code 7664693 (or da.gd/nebulaapk)."

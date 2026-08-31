@@ -93,6 +93,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -583,6 +584,20 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 catalogStates.keys.retainAll(live)
             }
 
+            // ---- first-run seeding: the screen must open full, like Stremio does ----
+            LaunchedEffect(Unit) {
+                val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                if (!p.getBoolean("seeded_v1", false)) {
+                    p.edit().putBoolean("seeded_v1", true).apply()
+                    if (loadAddons(ctx).isEmpty()) {
+                        val cin = Addon("https://v3-cinemeta.strem.io/manifest.json", "Cinemeta", "https://v3-cinemeta.strem.io", null)
+                        saveAddonsRaw(ctx, listOf(cin))
+                        Cloud.stampSeed(ctx, cin.manifestUrl)
+                        homeState.invalidate()
+                    }
+                }
+            }
+
             // ---- cross-device sync wiring ----
             var libraryVersion by remember { mutableStateOf(0) }
             var addonsVersion by remember { mutableStateOf(0) }
@@ -840,12 +855,24 @@ private fun MetaCard(m: MetaItem, modifier: Modifier = Modifier, onClick: () -> 
                         color = Color(0xFF3A3A45), fontSize = 22.sp, fontWeight = FontWeight.Black,
                     )
                 }
+                m.imdbRating?.let {
+                    Text(
+                        "★ $it", color = Color.White, fontFamily = Mono, fontSize = 10.sp,
+                        modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
+                            .background(Color(0x9E000000), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 5.dp, vertical = 2.dp),
+                    )
+                }
             }
             Text(
                 m.name, color = TextC, fontSize = 13.sp, fontFamily = Sans, fontWeight = FontWeight.Medium,
                 maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp,
                 modifier = Modifier.padding(top = 7.dp, start = 2.dp, end = 2.dp),
             )
+            m.releaseInfo?.let {
+                Text(it, style = labelStyle(11, FaintC), maxLines = 1,
+                    modifier = Modifier.padding(top = 2.dp, start = 2.dp))
+            }
         }
     }
 }
@@ -1072,6 +1099,88 @@ private fun UpdateCard(version: String, notes: String, onDismiss: () -> Unit) {
     }
 }
 
+/** Featured hero: full-bleed backdrop, the title's own logo art, cycling
+    through the top five of the first catalogue. The scrim exists only so the
+    type stays legible over the artwork. */
+@Composable
+private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit) {
+    val ctx = LocalContext.current
+    val first = rows.firstOrNull() ?: return
+    val picks = remember(first) { first.items.filter { it.background != null || it.poster != null }.take(5) }
+    if (picks.isEmpty()) return
+    var idx by remember(picks) { mutableStateOf(0) }
+    LaunchedEffect(picks) {
+        while (true) { delay(12_000); idx = (idx + 1) % picks.size }
+    }
+    val m = picks[idx]
+    var inList by remember(m.id) { mutableStateOf(Library.inList(ctx, m.type, m.id)) }
+    Box(
+        Modifier.fillMaxWidth().height(340.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .clickable { onOpen(first.addon, m) },
+    ) {
+        AsyncImage(
+            model = m.background ?: m.poster, contentDescription = m.name,
+            contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize(),
+        )
+        Box(
+            Modifier.matchParentSize().background(
+                Brush.verticalGradient(
+                    0f to Color(0x3D000000), 0.35f to Color(0x14000000),
+                    0.72f to Color(0xB3000000), 1f to Color(0xF2000000),
+                )
+            )
+        )
+        Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
+            val facts = listOfNotNull(
+                m.releaseInfo, m.imdbRating?.let { "★ $it" },
+            ).joinToString("  ·  ")
+            if (facts.isNotEmpty()) Text(
+                facts.uppercase(), color = Color(0xC7EBEBF5), fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold, letterSpacing = 1.4.sp,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+            if (m.logo != null) {
+                AsyncImage(
+                    model = m.logo, contentDescription = m.name,
+                    modifier = Modifier.height(64.dp).padding(bottom = 8.dp),
+                    alignment = Alignment.CenterStart,
+                )
+            } else {
+                Text(
+                    m.name, color = TextC, fontSize = 30.sp, fontWeight = FontWeight.Bold,
+                    letterSpacing = (-0.8).sp, lineHeight = 33.sp, maxLines = 2,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 8.dp),
+                )
+            }
+            m.description?.let {
+                Text(
+                    it, color = Color(0xD1EBEBF5), fontSize = 13.sp, lineHeight = 18.sp,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(bottom = 12.dp),
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = { onOpen(first.addon, m) },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("Details", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 6.dp))
+                }
+                Button(
+                    onClick = {
+                        inList = Library.toggle(ctx, m.type, m, first.addon.manifestUrl)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x66767680)),
+                    shape = RoundedCornerShape(12.dp),
+                ) { Text(if (inList) "✓ My List" else "+ My List", color = TextC, fontWeight = FontWeight.SemiBold) }
+            }
+        }
+    }
+}
+
 // ---------- home (content rows, Stremio-style) ----------
 @Composable
 private fun HomeScreen(
@@ -1185,6 +1294,7 @@ private fun HomeScreen(
                 Chip("Retry", false) { st.invalidate() }
             }
             else -> LazyColumn(state = st.listState, contentPadding = PaddingValues(bottom = 16.dp)) {
+                if (st.rows.isNotEmpty()) item(key = "hero") { HeroHeader(st.rows, onOpen) }
                 if (st.continueRows.isNotEmpty()) item(key = "continue") {
                     Column {
                         RowHeader("Continue watching", null, null)
@@ -1619,37 +1729,62 @@ private fun DetailScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 16.dp)) {
-        BackBar(item.name, null, onBack)
-        Box(
-            Modifier.fillMaxWidth().aspectRatio(16f / 9f)
-                .clip(RoundedCornerShape(12.dp)).background(SurfaceC)
-                .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(12.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            val art = full?.background ?: item.poster
+    Box(Modifier.fillMaxSize()) {
+        // full-bleed backdrop; the scrim exists only so type stays legible
+        Box(Modifier.fillMaxWidth().height(430.dp)) {
+            val art = full?.background ?: item.background ?: item.poster
             if (art != null) {
-                AsyncImage(model = art, contentDescription = item.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-            } else {
-                Text(
-                    item.name.filter { it.isLetterOrDigit() }.take(2).uppercase().ifEmpty { "••" },
-                    color = Color(0xFF3A3A45), fontSize = 34.sp, fontWeight = FontWeight.Black,
-                )
+                AsyncImage(model = art, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
             }
+            Box(
+                Modifier.matchParentSize().background(
+                    Brush.verticalGradient(
+                        0f to Color(0x52000000), 0.32f to Color(0x1F000000),
+                        0.7f to Color(0xC7000000), 1f to Color(0xFF000000),
+                    )
+                )
+            )
+        }
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 16.dp)) {
+        BackBar("", null, onBack)
+        Spacer(Modifier.height(160.dp))
+        val logoArt = full?.logo ?: item.logo
+        if (logoArt != null) {
+            AsyncImage(
+                model = logoArt, contentDescription = item.name,
+                modifier = Modifier.height(96.dp).padding(bottom = 10.dp),
+                alignment = Alignment.CenterStart,
+            )
+        } else {
+            Text(
+                item.name, color = TextC, fontSize = 34.sp, fontWeight = FontWeight.Bold,
+                letterSpacing = (-1).sp, lineHeight = 37.sp, maxLines = 2,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 8.dp),
+            )
         }
         val facts = listOfNotNull(
-            full?.releaseInfo,
+            full?.releaseInfo ?: item.releaseInfo,
             full?.runtime,
-            full?.imdbRating?.let { "★ $it" },
+            (full?.imdbRating ?: item.imdbRating)?.let { "★ $it" },
             full?.genres?.take(3)?.joinToString(" · ")?.ifEmpty { null },
         ).joinToString("   ·   ")
         if (facts.isNotEmpty()) Text(
             facts.uppercase(), color = MutedC, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-            letterSpacing = 1.4.sp, modifier = Modifier.padding(top = 14.dp),
+            letterSpacing = 1.4.sp,
         )
-        full?.description?.let {
+        (full?.description ?: item.description)?.let {
             Text(it, color = MutedC, fontSize = 14.sp, lineHeight = 21.sp, maxLines = 7,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 10.dp))
+        }
+        full?.let { f ->
+            val credits = buildString {
+                if (f.cast.isNotEmpty()) append("Cast  " + f.cast.joinToString(", "))
+                if (f.director.isNotEmpty()) { if (isNotEmpty()) append("\n"); append("Director  " + f.director.joinToString(", ")) }
+            }
+            if (credits.isNotEmpty()) Text(
+                credits, color = FaintC, fontSize = 12.5.sp, lineHeight = 19.sp,
+                modifier = Modifier.padding(top = 8.dp),
+            )
         }
         Row(Modifier.padding(top = 16.dp, bottom = 24.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(
@@ -1688,6 +1823,7 @@ private fun DetailScreen(
                 colors = ButtonDefaults.buttonColors(containerColor = Surface2),
                 shape = RoundedCornerShape(12.dp),
             ) { Text(if (inList) "✓ In My List" else "+ My List", color = TextC, fontWeight = FontWeight.SemiBold) }
+        }
         }
     }
 }

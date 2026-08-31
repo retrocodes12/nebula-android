@@ -255,6 +255,13 @@ object Cloud {
         return s
     }
 
+    /** Seeded defaults must never beat a real removal in sync — stamp the epoch. */
+    fun stampSeed(ctx: Context, url: String) {
+        val s = addonsSync(ctx)
+        s.getJSONObject("at").put(url, 1L)
+        prefs(ctx).edit().putString("addons_sync", s.toString()).apply()
+    }
+
     /** Diff hook run by saveAddons: stamp additions, tombstone removals. */
     fun noteAddonsDiff(ctx: Context, prev: List<Addon>, next: List<Addon>) {
         val s = addonsSync(ctx)
