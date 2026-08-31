@@ -2628,7 +2628,7 @@ private fun PlayerScreen(
             canPip = (activity as? MainActivity)?.pipSupported() == true,
             showSubtitles = textTrackCount >= 1 || subs.isNotEmpty(),
             showAudio = audioTrackCount >= 2,
-            onBack = { activity?.onBackPressedDispatcher?.onBackPressed() },
+            onBack = { (activity as? androidx.activity.ComponentActivity)?.onBackPressedDispatcher?.onBackPressed() },
             onPlayPause = {
                 if (exo.isPlaying) exo.pause() else exo.play()
                 chromeTouchedAt = System.currentTimeMillis()
