@@ -73,6 +73,7 @@ import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -1672,6 +1673,9 @@ private fun SettingsScreen(
                         checking = false
                     }
                 }
+            }
+            SettingsRow(Icons.Filled.Shield, "Privacy Policy", "No accounts, no tracking — how Nebula handles data", true) {
+                runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.rifflehq.in/privacy.html"))) }
             }
             SettingsRow(Icons.Filled.Info, "Nebula for Android", "v$version · HLS · DASH · DASH+ClearKey", false, null)
         }
