@@ -1421,6 +1421,15 @@ private fun HomeScreen(
 // ---------- search (one query, every add-on) ----------
 @Composable
 private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit) {
+    // results as you type: the effect restarts on every keystroke, so the
+    // delay only survives once typing pauses
+    LaunchedEffect(st.query) {
+        val q = st.query.trim()
+        if (q.isEmpty()) { st.submitted = ""; return@LaunchedEffect }
+        if (q.length < 2) return@LaunchedEffect
+        kotlinx.coroutines.delay(450)
+        if (q != st.submitted) st.submitted = q
+    }
     val ctx = LocalContext.current
     LaunchedEffect(st.submitted) {
         val q = st.submitted.trim()
@@ -2188,6 +2197,14 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
     var genre by st::genre
     var query by st::query
     var submitted by st::submitted
+    // results as you type — the restart-on-keystroke delay is the debounce
+    LaunchedEffect(st.query) {
+        val q = st.query.trim()
+        if (q.isEmpty()) { if (st.submitted.isNotEmpty()) st.submitted = ""; return@LaunchedEffect }
+        if (q.length < 2) return@LaunchedEffect
+        kotlinx.coroutines.delay(450)
+        if (q != st.submitted) st.submitted = q
+    }
     var items by st::items
     var loading by st::loading
     var status by st::status
