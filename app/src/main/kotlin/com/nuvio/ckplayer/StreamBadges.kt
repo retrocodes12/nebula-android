@@ -67,6 +67,36 @@ object StreamBadges {
     private val RE_SEEDS_EMOJI = Regex("""\uD83D\uDC64\s*(\d+)""")
     private val RE_SEEDS_TEXT = Regex("""\b(?:seeds?|seeders?)[:\s]+(\d+)""", RegexOption.IGNORE_CASE)
     private val RE_BULLET = Regex("""\s*[\u00b7\u2022]\s*""")
+    private val LANGS = listOf(
+        "English", "French", "Italian", "Spanish", "German", "Hindi", "Tamil", "Telugu", "Malayalam", "Kannada",
+        "Polish", "Portuguese", "Russian", "Japanese", "Korean", "Chinese", "Arabic", "Turkish", "Dutch", "Latino", "Multi",
+    )
+    private val RE_LANG = Regex("""\b(""" + LANGS.joinToString("|") + """|Dual\s*Audio)\b""", RegexOption.IGNORE_CASE)
+    private val FLAG_LANGS = mapOf(
+        "\uD83C\uDDEC\uD83C\uDDE7" to "English", "\uD83C\uDDFA\uD83C\uDDF8" to "English",
+        "\uD83C\uDDEB\uD83C\uDDF7" to "French", "\uD83C\uDDEE\uD83C\uDDF9" to "Italian",
+        "\uD83C\uDDEA\uD83C\uDDF8" to "Spanish", "\uD83C\uDDE9\uD83C\uDDEA" to "German",
+        "\uD83C\uDDEE\uD83C\uDDF3" to "Hindi", "\uD83C\uDDF5\uD83C\uDDF1" to "Polish",
+        "\uD83C\uDDE7\uD83C\uDDF7" to "Portuguese", "\uD83C\uDDF7\uD83C\uDDFA" to "Russian",
+        "\uD83C\uDDEF\uD83C\uDDF5" to "Japanese", "\uD83C\uDDF0\uD83C\uDDF7" to "Korean",
+    )
+    private val RE_FLAG = Regex("""[\uD83C][\uDDE6-\uDDFF]""")
+
+    private fun langsIn(raw: String): String {
+        val out = LinkedHashSet<String>()
+        RE_LANG.findAll(raw).forEach { m ->
+            if (out.size < 4) {
+                var n = m.groupValues[1].replace(Regex("""\s+"""), " ")
+                n = n.lowercase().replaceFirstChar { it.uppercase() }
+                if (n == "Dual audio") n = "Dual Audio"
+                out.add(n)
+            }
+        }
+        FLAG_LANGS.forEach { (f, n) -> if (out.size < 4 && raw.contains(f)) out.add(n) }
+        val list = out.toList()
+        if (list.isEmpty()) return ""
+        return list.take(3).joinToString(" + ") + (if (list.size > 3) " +" + (list.size - 3) else "")
+    }
 
     private fun fmtBytes(n: Long): String {
         val g = n / 1073741824.0
@@ -117,6 +147,7 @@ object StreamBadges {
                     val src = RE_SOURCE.find(tok)
                     if (src != null) { if (provider == null) provider = src.groupValues[1].trim(); continue }
                     if (RE_BITRATE.containsMatchIn(tok) || RE_SIZE.containsMatchIn(tok)) continue
+                    if (tok.replace(RE_LANG, "").replace(RE_FLAG, "").replace(Regex("""[+,&/\s]|and""", RegexOption.IGNORE_CASE), "").isEmpty()) continue
                     if (fired.any { it.containsMatchIn(tok) }) continue
                     kept.add(tok)
                 }
@@ -129,6 +160,7 @@ object StreamBadges {
         size?.let { factsList.add(it) }
         bitrate?.let { factsList.add(it) }
         seeds?.let { factsList.add(it + " seeds") }
+        langsIn(text).takeIf { it.isNotEmpty() }?.let { factsList.add(it) }
         provider?.let { factsList.add(it) }
         return Facts(factsList.joinToString("  \u00b7  "), desc.joinToString(" \u00b7 "))
     }

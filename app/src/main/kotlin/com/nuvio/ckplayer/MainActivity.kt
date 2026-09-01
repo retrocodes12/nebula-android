@@ -2651,8 +2651,10 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
     var sections by remember { mutableStateOf<List<Pair<String, List<StreamItem>>>>(emptyList()) }
     var status by remember { mutableStateOf("Loading streams…") }
     var loading by remember { mutableStateOf(true) }
+    var filter by remember { mutableStateOf<String?>(null) }
+    var reload by remember { mutableStateOf(0) }
     val ctx = LocalContext.current
-    LaunchedEffect(item) {
+    LaunchedEffect(item, reload) {
         loading = true
         val order = listOf(addon) + loadAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
         val out = mutableListOf<Pair<String, List<StreamItem>>>()
@@ -2677,10 +2679,39 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
         loading = false
     }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
-        BackBar(item.name, status, onBack)
+        BackBar("", status, onBack)
         LazyColumn(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
+            item(key = "hero") {
+                // episode context header — art, S/E kicker, episode title, series name
+                val art = item.background ?: item.poster
+                val segs = item.id.split(":")
+                val kick = if (item.type == "series" && segs.size >= 3)
+                    "SEASON ${segs[segs.size - 2]} · EPISODE ${segs[segs.size - 1]}" else null
+                val parts = item.name.split(" · ")
+                val heroTitle = if (parts.size >= 3) parts.drop(2).joinToString(" · ") else parts.lastOrNull() ?: item.name
+                val heroSub = if (parts.size >= 2) parts[0] else null
+                Box(Modifier.fillMaxWidth().height(190.dp).clip(RoundedCornerShape(18.dp)).background(SurfaceC)) {
+                    if (art != null) AsyncImage(model = art, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
+                    Box(Modifier.matchParentSize().background(Brush.verticalGradient(
+                        0f to Color(0x33000000), 0.5f to Color(0x14000000), 1f to Color(0xE6000000))))
+                    Column(Modifier.align(Alignment.BottomStart).padding(14.dp)) {
+                        if (kick != null) Text(kick, color = Color(0xD9EBEBF5), fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.2.sp)
+                        Text(heroTitle, color = TextC, fontSize = 24.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (heroSub != null) Text(heroSub, color = MutedC, fontSize = 13.sp)
+                    }
+                }
+            }
+            if (sections.size > 1) item(key = "filters") {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 10.dp)) {
+                    item { Chip("↻", false) { filter = null; reload++ } }
+                    item { Chip("All", filter == null) { filter = null } }
+                    items(sections.size) { i ->
+                        Chip(sections[i].first, filter == sections[i].first) { filter = sections[i].first }
+                    }
+                }
+            }
             if (loading && sections.isEmpty()) items(4) { SkeletonRow(42.dp, 42.dp, circle = true) }
-            sections.forEachIndexed { sectionIndex, (addonName, streams) ->
+            sections.filter { filter == null || it.first == filter }.forEachIndexed { sectionIndex, (addonName, streams) ->
                 if (sections.size > 1) item(key = "head/$sectionIndex") {
                     Text(
                         addonName, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold,
