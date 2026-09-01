@@ -23,9 +23,17 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -66,8 +74,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkRemove
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ClosedCaption
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
@@ -110,8 +120,16 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -707,6 +725,15 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 if (r.type == "series") scope.launch { hydrateSeriesChain(ctx, a, r.type, r.id) }
             }
 
+            /** The title page behind a Continue watching card — the series, not the
+                episode, since the card's id is whichever episode was last played. */
+            fun openProgressDetails(r: ProgressRec) {
+                val addons = loadAddons(ctx)
+                val a = addons.firstOrNull { it.manifestUrl == r.addonUrl } ?: addons.firstOrNull() ?: return
+                val id = if (r.type == "series") r.id.substringBefore(':') else r.id
+                push(Screen.Detail(a, MetaItem(id, r.type, r.name.split(" · ").first(), r.poster, r.shape)))
+            }
+
             /** Play a specific episode of the current chain, replacing the player in
                 place so Back doesn't have to walk back through every episode. */
             fun playEpisode(ep: Episode) {
@@ -738,6 +765,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 onSeeAll = { a, c -> push(Screen.Catalog(a, c)) },
                                 onGoAddons = { push(Screen.Addons) },
                                 onResume = { r -> openProgress(r) },
+                                onDetails = { r -> openProgressDetails(r) },
                             )
                             is Screen.Search -> SearchScreen(
                                 searchState,
@@ -863,14 +891,17 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
 
 /** Card wrapper: scales up + white border when focused (TV D-pad) or pressed. */
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun FocusCard(
     shape: RoundedCornerShape,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
+    val haptics = LocalHapticFeedback.current
     val zoom by animateFloatAsState(if (focused) 1.09f else 1f, tween(300), label = "zoom")
     val lift by animateFloatAsState(if (focused) 22f else 0f, tween(300), label = "lift")
     Box(
@@ -878,8 +909,133 @@ private fun FocusCard(
             .scale(zoom)
             .shadow(lift.dp, shape, clip = false)
             .clip(shape)
-            .clickable(interactionSource = interaction, indication = null) { onClick() }
+            .combinedClickable(
+                interactionSource = interaction,
+                indication = null,
+                onLongClickLabel = "More options",
+                // the buzz is the whole affordance here — nothing on the card
+                // itself advertises that a hold does anything
+                onLongClick = onLongClick?.let {
+                    { haptics.performHapticFeedback(HapticFeedbackType.LongPress); it() }
+                },
+                onClick = onClick,
+            )
     ) { content() }
+}
+
+/** One row inside a [CardSheet]. */
+private data class SheetAction(
+    val icon: ImageVector,
+    val label: String,
+    val destructive: Boolean = false,
+    val onClick: () -> Unit,
+)
+
+/**
+ * The long-press sheet that stands in for per-card buttons. A delete cross
+ * parked on the artwork reads as a defect rather than a feature — and it is the
+ * one control you never want the easiest to hit — so every card action lives in
+ * here instead, reached by holding the card.
+ */
+@Composable
+private fun CardSheet(
+    title: String,
+    sub: String?,
+    poster: String?,
+    shape: String,
+    actions: List<SheetAction>,
+    onDismiss: () -> Unit,
+) {
+    val shown = remember { MutableTransitionState(false) }
+    var closing by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown.targetState = true }
+    // let the slide-out finish before the dialog goes, so it doesn't blink away
+    LaunchedEffect(closing, shown.isIdle) {
+        if (closing && shown.isIdle && !shown.currentState) onDismiss()
+    }
+    val close: () -> Unit = { closing = true; shown.targetState = false }
+
+    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        // kill the platform dim so the scrim below can fade in with the sheet
+        val window = (LocalView.current.parent as? DialogWindowProvider)?.window
+        LaunchedEffect(window) { window?.setDimAmount(0f) }
+        Box(Modifier.fillMaxSize()) {
+            AnimatedVisibility(shown, enter = fadeIn(tween(200)), exit = fadeOut(tween(160))) {
+                Box(
+                    Modifier.fillMaxSize().background(Color(0xB8000000)).clickable(
+                        interactionSource = remember { MutableInteractionSource() }, indication = null,
+                    ) { close() }
+                )
+            }
+            AnimatedVisibility(
+                shown,
+                modifier = Modifier.align(Alignment.BottomCenter),
+                enter = slideInVertically(tween(300)) { it } + fadeIn(tween(180)),
+                exit = slideOutVertically(tween(190)) { it } + fadeOut(tween(150)),
+            ) {
+                Column(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                        .background(Color(0xFF141418))
+                        .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                        .navigationBarsPadding()
+                        .padding(bottom = 12.dp),
+                ) {
+                    Box(
+                        Modifier.align(Alignment.CenterHorizontally).padding(top = 10.dp)
+                            .width(38.dp).height(4.dp).clip(RoundedCornerShape(2.dp))
+                            .background(Color(0x33FFFFFF))
+                    )
+                    Row(
+                        Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 16.dp, bottom = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier.width(if (shape == "landscape") 82.dp else 48.dp)
+                                .aspectRatio(thumbRatio(shape))
+                                .clip(RoundedCornerShape(9.dp)).background(SurfaceC),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (poster != null) AsyncImage(
+                                model = poster, contentDescription = null,
+                                contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
+                            ) else Text(
+                                title.filter { it.isLetterOrDigit() }.take(2).uppercase().ifEmpty { "••" },
+                                color = Color(0xFF3A3A45), fontSize = 15.sp, fontWeight = FontWeight.Black,
+                            )
+                        }
+                        Column(Modifier.padding(start = 14.dp).weight(1f)) {
+                            Text(
+                                title, color = TextC, fontSize = 17.sp, fontFamily = Sans,
+                                fontWeight = FontWeight.Bold, letterSpacing = (-0.3).sp,
+                                maxLines = 2, overflow = TextOverflow.Ellipsis,
+                            )
+                            if (sub != null) Text(
+                                sub, color = MutedC, fontSize = 13.sp, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp),
+                            )
+                        }
+                    }
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0x14FFFFFF)))
+                    actions.forEach { a ->
+                        val tint = if (a.destructive) Color(0xFFFF5A5F) else TextC
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clickable { close(); a.onClick() }
+                                .padding(horizontal = 18.dp, vertical = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(a.icon, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
+                            Text(
+                                a.label, color = tint, fontSize = 15.sp, fontFamily = Sans,
+                                fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 15.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -923,8 +1079,13 @@ internal fun Chip(text: String, on: Boolean, onClick: () -> Unit) {
 
 /** One poster/landscape card — used by the catalog grid, Home rows, and Search. */
 @Composable
-private fun MetaCard(m: MetaItem, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    FocusCard(shape = RoundedCornerShape(12.dp), modifier = modifier, onClick = onClick) {
+private fun MetaCard(
+    m: MetaItem,
+    modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
+    FocusCard(shape = RoundedCornerShape(12.dp), modifier = modifier, onClick = onClick, onLongClick = onLongClick) {
         Column(Modifier.padding(2.dp)) {
             Box(
                 Modifier.fillMaxWidth().aspectRatio(thumbRatio(m.posterShape))
@@ -968,7 +1129,7 @@ private fun MetaCard(m: MetaItem, modifier: Modifier = Modifier, onClick: () -> 
 
 /** A Continue watching card: poster, how much is left, and a resume bar. */
 @Composable
-private fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick: () -> Unit, onRemove: () -> Unit) {
+private fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick: () -> Unit, onLongClick: () -> Unit) {
     // episode identity reads off the artwork itself — a wrapped two-line title
     // under a poster was the single biggest source of visual noise on Home
     val parts = r.name.split(" · ")
@@ -977,58 +1138,49 @@ private fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick:
     val title = if (tag != null) parts[0] else r.name
     val sub = if (tag != null) parts.drop(2).joinToString(" · ").ifEmpty { null } else null
     val left = r.dur - r.pos
-    Box(modifier) {
-        FocusCard(shape = RoundedCornerShape(14.dp), onClick = onClick) {
-            Box(
-                Modifier.fillMaxWidth().aspectRatio(16f / 9f)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(SurfaceC)
-                    .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(14.dp)),
-            ) {
-                if (r.poster != null) {
-                    AsyncImage(
-                        model = r.poster, contentDescription = r.name,
-                        contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
-                    )
-                } else {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text(
-                            r.name.filter { it.isLetterOrDigit() }.take(2).uppercase().ifEmpty { "••" },
-                            color = Color(0xFF3A3A45), fontSize = 22.sp, fontWeight = FontWeight.Black,
-                        )
-                    }
-                }
-                Box(Modifier.matchParentSize().background(Brush.verticalGradient(
-                    0f to Color(0x00000000), 0.45f to Color(0x40000000), 1f to Color(0xE6000000))))
-                Column(Modifier.align(Alignment.BottomStart).padding(start = 11.dp, end = 11.dp, bottom = 10.dp)) {
-                    val kicker = listOfNotNull(tag, left.takeIf { it > 0 }?.let { fmtTime(it) + " left" })
-                        .joinToString("  ·  ")
-                    if (kicker.isNotEmpty()) Text(
-                        kicker, color = Color(0xE0EBEBF5), fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 0.4.sp, maxLines = 1,
-                    )
+    FocusCard(shape = RoundedCornerShape(14.dp), modifier = modifier, onClick = onClick, onLongClick = onLongClick) {
+        Box(
+            Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(14.dp))
+                .background(SurfaceC)
+                .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(14.dp)),
+        ) {
+            if (r.poster != null) {
+                AsyncImage(
+                    model = r.poster, contentDescription = r.name,
+                    contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        title, color = Color.White, fontSize = 15.sp, fontFamily = Sans,
-                        fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 1.dp),
+                        r.name.filter { it.isLetterOrDigit() }.take(2).uppercase().ifEmpty { "••" },
+                        color = Color(0xFF3A3A45), fontSize = 22.sp, fontWeight = FontWeight.Black,
                     )
-                    if (sub != null) Text(
-                        sub, color = Color(0xB3EBEBF5), fontSize = 12.sp, maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                val pct = if (r.dur > 0) (r.pos.toFloat() / r.dur).coerceIn(0f, 1f) else 0f
-                Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(Color(0x66000000))) {
-                    Box(Modifier.fillMaxWidth(pct).fillMaxSize().background(Red))
                 }
             }
-        }
-        IconButton(
-            onClick = onRemove,
-            modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).size(26.dp)
-                .background(Color(0x8A000000), CircleShape),
-        ) {
-            Icon(Icons.Filled.Close, contentDescription = "Remove from Continue watching", tint = Color(0xCCFFFFFF), modifier = Modifier.size(14.dp))
+            Box(Modifier.matchParentSize().background(Brush.verticalGradient(
+                0f to Color(0x00000000), 0.45f to Color(0x40000000), 1f to Color(0xE6000000))))
+            Column(Modifier.align(Alignment.BottomStart).padding(start = 11.dp, end = 11.dp, bottom = 10.dp)) {
+                val kicker = listOfNotNull(tag, left.takeIf { it > 0 }?.let { fmtTime(it) + " left" })
+                    .joinToString("  ·  ")
+                if (kicker.isNotEmpty()) Text(
+                    kicker, color = Color(0xE0EBEBF5), fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 0.4.sp, maxLines = 1,
+                )
+                Text(
+                    title, color = Color.White, fontSize = 15.sp, fontFamily = Sans,
+                    fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 1.dp),
+                )
+                if (sub != null) Text(
+                    sub, color = Color(0xB3EBEBF5), fontSize = 12.sp, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            val pct = if (r.dur > 0) (r.pos.toFloat() / r.dur).coerceIn(0f, 1f) else 0f
+            Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(Color(0x66000000))) {
+                Box(Modifier.fillMaxWidth(pct).fillMaxSize().background(Red))
+            }
         }
     }
 }
@@ -1322,9 +1474,34 @@ private fun HomeScreen(
     onSeeAll: (Addon, CatalogRef) -> Unit,
     onGoAddons: () -> Unit,
     onResume: (ProgressRec) -> Unit = {},
+    onDetails: (ProgressRec) -> Unit = {},
 ) {
     val ctx = LocalContext.current
     var update by remember { mutableStateOf<Updates.Release?>(null) }
+    // the card held down, if any — Home's only long-press surface is Continue watching
+    var sheetFor by remember { mutableStateOf<ProgressRec?>(null) }
+
+    sheetFor?.let { r ->
+        val parts = r.name.split(" · ")
+        val isEp = parts.size > 1 && Regex("""^S\d+E\d+${'$'}""", RegexOption.IGNORE_CASE).matches(parts[1].trim())
+        val left = (r.dur - r.pos).takeIf { it > 0 }?.let { fmtTime(it) + " left" }
+        CardSheet(
+            title = if (isEp) parts[0] else r.name,
+            sub = listOfNotNull(parts.getOrNull(1)?.takeIf { isEp }?.trim()?.uppercase(), left)
+                .joinToString("  ·  ").ifEmpty { null },
+            poster = r.poster,
+            shape = "landscape",
+            actions = listOf(
+                SheetAction(Icons.Filled.PlayArrow, "Resume") { onResume(r) },
+                SheetAction(Icons.Filled.Info, "View details") { onDetails(r) },
+                SheetAction(Icons.Filled.Delete, "Remove from Continue watching", destructive = true) {
+                    Progress.clear(ctx, r.type, r.id)
+                    st.continueRows = Progress.continueList(ctx)
+                },
+            ),
+            onDismiss = { sheetFor = null },
+        )
+    }
 
     // Re-read on every entry (this screen leaves composition when one is pushed),
     // so finishing an episode is reflected the moment you come back.
@@ -1445,10 +1622,7 @@ private fun HomeScreen(
                                     r,
                                     Modifier.width(250.dp),
                                     onClick = { onResume(r) },
-                                    onRemove = {
-                                        Progress.clear(ctx, r.type, r.id)
-                                        st.continueRows = Progress.continueList(ctx)
-                                    },
+                                    onLongClick = { sheetFor = r },
                                 )
                             }
                         }
@@ -2322,6 +2496,24 @@ private fun LibraryScreen(
     val ctx = LocalContext.current
     var items by remember(version) { mutableStateOf(Library.list(ctx)) }
     var upcoming by remember(version) { mutableStateOf<List<Library.UpRow>?>(null) }
+    var sheetFor by remember { mutableStateOf<LibItem?>(null) }
+
+    sheetFor?.let { li ->
+        CardSheet(
+            title = li.name,
+            sub = if (li.type == "series") "Series" else "Movie",
+            poster = li.poster,
+            shape = li.shape,
+            actions = listOf(
+                SheetAction(Icons.Filled.Info, "View details") { onOpen(li) },
+                SheetAction(Icons.Filled.BookmarkRemove, "Remove from My List", destructive = true) {
+                    Library.toggle(ctx, li.type, MetaItem(li.id, li.type, li.name, li.poster, li.shape), li.addonUrl)
+                    items = Library.list(ctx)
+                },
+            ),
+            onDismiss = { sheetFor = null },
+        )
+    }
 
     LaunchedEffect(version, items.size) {
         upcoming = if (items.none { it.type == "series" }) emptyList()
@@ -2342,19 +2534,11 @@ private fun LibraryScreen(
             item(key = "grid") {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(items, key = { it.type + ":" + it.id }) { li ->
-                        Box(Modifier.width(if (li.shape == "landscape") 210.dp else 124.dp)) {
-                            MetaCard(MetaItem(li.id, li.type, li.name, li.poster, li.shape)) { onOpen(li) }
-                            IconButton(
-                                onClick = {
-                                    Library.toggle(ctx, li.type, MetaItem(li.id, li.type, li.name, li.poster, li.shape), li.addonUrl)
-                                    items = Library.list(ctx)
-                                },
-                                modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(28.dp)
-                                    .background(Color(0x9E000000), RoundedCornerShape(12.dp)),
-                            ) {
-                                Icon(Icons.Filled.Close, contentDescription = "Remove from My List", tint = MutedC, modifier = Modifier.size(16.dp))
-                            }
-                        }
+                        MetaCard(
+                            MetaItem(li.id, li.type, li.name, li.poster, li.shape),
+                            Modifier.width(if (li.shape == "landscape") 210.dp else 124.dp),
+                            onLongClick = { sheetFor = li },
+                        ) { onOpen(li) }
                     }
                 }
             }
