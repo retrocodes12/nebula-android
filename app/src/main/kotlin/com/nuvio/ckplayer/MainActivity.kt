@@ -777,24 +777,34 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 push(Screen.Detail(a, MetaItem(id, r.type, r.name.split(" · ").first(), r.poster, r.shape)))
             }
 
-            /** Play a specific episode of the current chain, replacing the player in
+            /** Play a specific episode of the current chain from the stream chosen
+                ahead of time (or chosen now, the same way), replacing the player in
                 place so Back doesn't have to walk back through every episode. */
             fun playEpisode(ep: Episode) {
-                val a = seriesChain.addon ?: return
+                val origin = seriesChain.addon ?: return
                 val label = seriesChain.label(ep)
                 seriesChain.index = seriesChain.episodes.indexOfFirst { it.id == ep.id }
+                val poster = (stack.lastOrNull() as? Screen.Play)?.poster
                 scope.launch {
-                    val s = runCatching { Stremio.loadStreams(a.base, seriesChain.type, ep.id) }
-                        .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
-                        .getOrDefault(emptyList()).firstOrNull()
+                    val res = NextEp.take(ep.id) ?: NextEp.source(ctx, origin)?.let { a ->
+                        NextEp.resolve(ctx, a, origin, seriesChain.type, ep.id)
+                    }
+                    val pick = res?.pick
                     val rest = stack.dropLast(1)
-                    stack = rest + if (s != null) {
-                        Screen.Play(s.url, s.name, s.subtitles, seriesChain.type, ep.id, label, null, a.manifestUrl)
+                    stack = rest + if (res != null && pick != null) {
+                        // an untouched series adopts the first auto-pick as its taste; a hand-pick is never overwritten
+                        NextEp.notePick(ctx, pick, res.addon, byHand = false)
+                        Screen.Play(pick.url, pick.name, pick.subtitles, seriesChain.type, ep.id, label, poster, res.addon.manifestUrl)
                     } else {
                         // nothing auto-playable — fall back to the picker
-                        Screen.Streams(a, MetaItem(ep.id, seriesChain.type, label, null))
+                        Screen.Streams(origin, MetaItem(ep.id, seriesChain.type, label, poster))
                     }
                 }
+            }
+            /** Choose the next episode's stream while this one still plays. */
+            fun prefetchNext() {
+                val next = seriesChain.next() ?: return
+                NextEp.prefetch(ctx, scope, seriesChain.addon, seriesChain.type, next)
             }
 
             // Home used to appear the instant the shell was ready and then fill
@@ -931,10 +941,12 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                             is Screen.Streams -> StreamsScreen(
                                 s.addon, s.item,
                                 onBack = { pop() },
-                                onPlay = {
+                                onPlay = { st, from, byHand ->
+                                    // remembered so the next episode keeps this source and quality
+                                    NextEp.notePick(ctx, st, from, byHand)
                                     push(
                                         Screen.Play(
-                                            it.url, it.name, it.subtitles,
+                                            st.url, st.name, st.subtitles,
                                             s.item.type, s.item.id, s.item.name,
                                             s.item.poster, s.addon.manifestUrl,
                                             description = s.item.description,
@@ -950,6 +962,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 currentEpisode = seriesChain.episodes.getOrNull(seriesChain.index),
                                 nextEpisode = seriesChain.next(),
                                 onPlayNext = { ep -> playEpisode(ep) },
+                                onPrefetchNext = { prefetchNext() },
                                 onProgressSaved = { homeState.invalidateContinue() },
                                 onPartyStart = { partyStart(it) },
                                 onPartyLeave = { partyLeave() },
@@ -2789,7 +2802,7 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
         SettingsGroup {
             SettingsToggle(
                 "Auto stream selection",
-                "Skip the stream list: play the best source from your highest-ranked add-on",
+                "Skip the stream list: play the source closest to your last pick from your highest-ranked add-on",
                 Prefs.autoStream,
             ) { Prefs.setAutoStream(ctx, it) }
             SettingsToggle(
@@ -3532,18 +3545,21 @@ private fun EpisodesScreen(
 // add-on the item came from PLUS every other installed add-on whose manifest
 // serves streams for this type/id, and show the answers grouped per add-on.
 @Composable
-private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPlay: (StreamItem) -> Unit) {
-    var sections by remember { mutableStateOf<List<Pair<String, List<StreamItem>>>>(emptyList()) }
+private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPlay: (StreamItem, Addon, Boolean) -> Unit) {
+    var sections by remember { mutableStateOf<List<Pair<Addon, List<StreamItem>>>>(emptyList()) }
     var status by remember { mutableStateOf("Loading streams…") }
     var loading by remember { mutableStateOf(true) }
     var filter by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableStateOf(0) }
+    var usualUrl by remember { mutableStateOf<String?>(null) }   // the row that matches the last pick
     val ctx = LocalContext.current
     LaunchedEffect(item, reload) {
         loading = true
+        usualUrl = null
         val order = listOf(addon) + loadAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
-        val out = mutableListOf<Pair<String, List<StreamItem>>>()
+        val out = mutableListOf<Pair<Addon, List<StreamItem>>>()
         var failures = 0
+        val pf = NextEp.picked(ctx)
         for (a in order) {
             runCatching {
                 // origin is always asked; others only if their manifest matches
@@ -3551,17 +3567,25 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
                     !manifestFor(a.manifestUrl).canStream(item.type, item.id)) return@runCatching
                 val streams = Stremio.loadStreams(a.base, item.type, item.id)
                 if (streams.isNotEmpty()) {
-                    out.add(a.name to streams)
+                    // the row that matches what was picked last time heads its
+                    // section — buried at row 30 of 40 it would help nobody
+                    var list = streams
+                    if (pf != null && pf.addonUrl == a.manifestUrl) {
+                        val twin = StreamTwin.match(streams, pf, a)?.takeIf { StreamTwin.isTwin(it, pf, a) }
+                        if (twin != null) { usualUrl = twin.url; list = listOf(twin) + streams.filter { it !== twin } }
+                    }
+                    out.add(a to list)
                     sections = out.toList()
                     val n = out.sumOf { it.second.size }
                     status = "$n stream${if (n > 1) "s" else ""}" + (if (out.size > 1) " from ${out.size} add-ons" else "")
-                    // Auto selection: the first stream of the highest-priority add-on
-                    // that answered. Guarded by id, not screen state — this screen's
-                    // state dies while the player is up, and re-firing on the way
-                    // back would trap the user in playback forever.
+                    // Auto selection: the row closest to the last pick from the
+                    // highest-priority add-on that answered (its first row when
+                    // nothing was ever picked). Guarded by id, not screen state —
+                    // this screen's state dies while the player is up, and
+                    // re-firing on the way back would trap the user in playback forever.
                     if (Prefs.autoStream && autoPlayedFor != item.id) {
                         autoPlayedFor = item.id
-                        onPlay(streams.first())
+                        onPlay(StreamTwin.match(list, pf, a) ?: list.first(), a, false)
                         return@LaunchedEffect
                     }
                 }
@@ -3614,20 +3638,23 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
                     item { StreamFilterChip("↻", false) { filter = null; reload++ } }
                     item { StreamFilterChip("All", filter == null) { filter = null } }
                     items(sections.size) { i ->
-                        StreamFilterChip(sections[i].first, filter == sections[i].first) { filter = sections[i].first }
+                        val nm = sections[i].first.name
+                        StreamFilterChip(nm, filter == nm) { filter = nm }
                     }
                 }
             }
             if (loading && sections.isEmpty()) items(4) { Box(Modifier.padding(horizontal = 16.dp)) { SkeletonRow(42.dp, 42.dp, circle = true) } }
-            sections.filter { filter == null || it.first == filter }.forEachIndexed { sectionIndex, (addonName, streams) ->
+            sections.filter { filter == null || it.first.name == filter }.forEachIndexed { sectionIndex, (from, streams) ->
                 if (sections.size > 1) item(key = "head/$sectionIndex") {
                     Text(
-                        addonName, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold,
+                        from.name, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold,
                         modifier = Modifier.padding(horizontal = 16.dp).padding(top = 6.dp),
                     )
                 }
             items(streams) { s ->
-                Box(Modifier.padding(horizontal = 16.dp)) { StreamRow(s, addonName, item.name, onPlay) }
+                Box(Modifier.padding(horizontal = 16.dp)) {
+                    StreamRow(s, from.name, item.name, usual = s.url == usualUrl, onPlay = { onPlay(it, from, true) })
+                }
             }
             }
         }
@@ -3663,7 +3690,7 @@ private fun StreamFilterChip(label: String, on: Boolean, onClick: () -> Unit) {
 /** A stream row: resolution plate, release name, badges, and a right-hand
     spec column — the parts you actually choose by, nothing said twice. */
 @Composable
-private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, onPlay: (StreamItem) -> Unit) {
+private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual: Boolean = false, onPlay: (StreamItem) -> Unit) {
     val raw = remember(s.url) { s.name + "\n" + s.title }
     val plate = remember(s.url) { StreamBadges.plate(raw) }
     val m = remember(s.url) { StreamBadges.match(raw, if (plate != null) "resolution" else null) }
@@ -3683,7 +3710,7 @@ private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, onPla
     FocusCard(shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth(), onClick = { onPlay(s) }) {
         Row(
             Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(14.dp))
-                .border(1.dp, LineC, RoundedCornerShape(14.dp)).padding(12.dp),
+                .border(1.dp, if (usual) Line2 else LineC, RoundedCornerShape(14.dp)).padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -3706,6 +3733,11 @@ private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, onPla
                 }
             }
             Column(Modifier.weight(1f)) {
+                // the row that matches what you picked last time — same source, same quality
+                if (usual) Text(
+                    "SAME AS LAST TIME", color = Red, fontFamily = Mono, fontSize = 9.sp,
+                    fontWeight = FontWeight.Medium, letterSpacing = 1.3.sp, modifier = Modifier.padding(bottom = 3.dp),
+                )
                 Text(name, color = TextC, fontSize = 15.sp, fontFamily = Sans, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (m.badges.isNotEmpty()) {
                     Row(
@@ -3809,6 +3841,7 @@ private fun PlayerScreen(
     currentEpisode: Episode? = null,
     nextEpisode: Episode? = null,
     onPlayNext: (Episode) -> Unit = {},
+    onPrefetchNext: () -> Unit = {},
     onProgressSaved: () -> Unit = {},
     onPartyStart: (PartyStreamDesc) -> Unit = {},
     onPartyLeave: () -> Unit = {},
@@ -4024,6 +4057,7 @@ private fun PlayerScreen(
     }
 
     // Offer the next episode in the last 25s; the countdown itself starts on ENDED.
+    // Its stream is chosen from 90s out, so Play now has nothing left to fetch.
     if (nextEpisode != null) LaunchedEffect(nextEpisode.id) {
         while (true) {
             delay(500)
@@ -4032,9 +4066,12 @@ private fun PlayerScreen(
             val dur = exo.duration
             if (dur == C.TIME_UNSET || dur <= 0) continue
             val remain = dur - exo.currentPosition
+            if (remain <= 90_000) onPrefetchNext()
             if (remain in 500..25_000) upnextOpen = true
         }
     }
+    // the card opening (near the end, on ENDED, or after a seek) is the other cue
+    LaunchedEffect(upnextOpen) { if (upnextOpen) onPrefetchNext() }
     LaunchedEffect(upnextCounting) {
         if (!upnextCounting) return@LaunchedEffect
         upnextLeft = 8
@@ -4502,12 +4539,18 @@ private fun PlayerScreen(
                     .padding(18.dp),
             ) {
                 Text("Up next", color = Color(0xA8EBEBF5), fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                // what it will play from — chosen while this one still runs
+                val srcLine = NextEp.sourceLine(context, nextEpisode.id)
                 Text(
                     "S${nextEpisode.season}" + (nextEpisode.episode?.let { "E$it" } ?: "") +
                         (if (nextEpisode.name.isNotEmpty()) " · ${nextEpisode.name}" else ""),
                     color = TextC, fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
                     maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 24.sp,
-                    modifier = Modifier.padding(top = 5.dp, bottom = 14.dp),
+                    modifier = Modifier.padding(top = 5.dp, bottom = if (srcLine != null) 5.dp else 14.dp),
+                )
+                if (srcLine != null) Text(
+                    srcLine, color = MutedC, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 0.6.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 14.dp),
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(

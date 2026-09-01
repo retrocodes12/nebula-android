@@ -63,6 +63,9 @@ object StreamBadges {
         return Match(badges, fired)
     }
 
+    /** Every badge that fires on the row, no per-group dedupe — a stream's fingerprint. */
+    fun allBadges(raw: String): List<String> = PACK.filter { it.second.containsMatchIn(raw) }.map { it.third }
+
     /** The resolution leads the row as a plate — it is what you choose by. */
     data class Plate(val res: String, val tag: String)
     fun plate(raw: String): Plate? = when {

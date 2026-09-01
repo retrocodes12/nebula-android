@@ -48,9 +48,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.48.0.apk
+          cp "$APK" Nebula-1.49.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.48.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.48.0 Nebula-1.48.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.48.0" \
-            --notes "Pause for a moment and the screen tells you what you are watching, the episode and its synopsis, how long is left and when it ends, and what plays next. An Info pill opens a playback HUD: picture size and frame rate, codec, stream and connection rates, buffer, dropped frames, live delay. Add-on subtitles gain a Timing panel with 0.1 s and 0.5 s nudges. Settings gets a Picture quality policy: Auto, Start high, Data saver (720p cap). The player title now shows the film or episode rather than the source, and the pill row scrolls."
+          gh release delete v1.49.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.49.0 Nebula-1.49.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.49.0" \
+            --notes "The next episode is chosen while this one is still playing — same source, same quality as the stream you picked — so Play now starts it without a trip through the list. The up-next card says what it will play from. On the stream list, the row that matches your last pick heads its section, marked Same as last time, and Auto stream selection now follows that pick instead of taking the first row."

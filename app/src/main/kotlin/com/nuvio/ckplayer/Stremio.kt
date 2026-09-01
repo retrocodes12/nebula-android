@@ -57,6 +57,9 @@ data class StreamItem(
     val name: String, val title: String, val url: String,
     val subtitles: List<SubTrack> = emptyList(),
     val videoSize: Long = 0L,
+    // behaviorHints.bingeGroup: the add-on's own "this is the same release
+    // across episodes" — the strongest signal a next episode can follow
+    val bingeGroup: String = "",
 )
 /** One episode of a series (a Stremio meta `videos` entry). */
 data class Episode(
@@ -332,8 +335,9 @@ object Stremio {
                 if (su.isNotEmpty()) subs.add(SubTrack(su, o.optString("lang", "und")))
             }
             val text = s.optString("title").ifEmpty { s.optString("description") }
-            val vsize = s.optJSONObject("behaviorHints")?.optLong("videoSize") ?: 0L
-            out.add(StreamItem(s.optString("name"), text, url, subs, vsize))
+            val bh = s.optJSONObject("behaviorHints")
+            val vsize = bh?.optLong("videoSize") ?: 0L
+            out.add(StreamItem(s.optString("name"), text, url, subs, vsize, bh?.optString("bingeGroup").orEmpty()))
         }
         return out
     }
