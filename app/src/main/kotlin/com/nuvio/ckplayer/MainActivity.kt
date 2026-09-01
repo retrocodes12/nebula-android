@@ -45,6 +45,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -64,6 +65,9 @@ import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -290,6 +294,10 @@ private sealed interface Screen {
     data object Search : Screen
     data object Library : Screen
     data object Addons : Screen
+    data object Settings : Screen
+    data object SettingsSubtitles : Screen
+    data object SettingsSync : Screen
+    data object SettingsParty : Screen
     data class Detail(val addon: Addon, val item: MetaItem) : Screen
     data class Catalog(val addon: Addon, val initial: CatalogRef? = null) : Screen
     data class Episodes(val addon: Addon, val item: MetaItem) : Screen
@@ -668,14 +676,14 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
 
             Box(Modifier.fillMaxSize()) {
                 val current = stack.last()
-                Column(Modifier.fillMaxSize()) {
-                    Box(Modifier.weight(1f)) {
+                Box(Modifier.fillMaxSize()) {
+                    Box(Modifier.fillMaxSize()) {
                         when (val s = current) {
                             is Screen.Home -> HomeScreen(
                                 homeState,
                                 onOpen = { a, item -> openMeta(a, item) },
                                 onSeeAll = { a, c -> push(Screen.Catalog(a, c)) },
-                                onGoAddons = { setTab(Screen.Addons) },
+                                onGoAddons = { push(Screen.Addons) },
                                 onResume = { r -> openProgress(r) },
                             )
                             is Screen.Search -> SearchScreen(
@@ -684,10 +692,22 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                             )
                             is Screen.Addons -> AddonsScreen(
                                 version = addonsVersion,
+                                onBack = { pop() },
                                 onOpen = { push(Screen.Catalog(it)) },
                                 onAddonsChanged = { manifestCache.clear(); homeState.invalidate() },
-                                onJoinParty = { partyJoin(it) },
                             )
+                            is Screen.Settings -> SettingsScreen(
+                                onAddons = { push(Screen.Addons) },
+                                onSubtitles = { push(Screen.SettingsSubtitles) },
+                                onSync = { push(Screen.SettingsSync) },
+                                onParty = { push(Screen.SettingsParty) },
+                            )
+                            is Screen.SettingsSubtitles -> SettingsSubtitlesScreen(onBack = { pop() })
+                            is Screen.SettingsSync -> SettingsSyncScreen(
+                                onBack = { pop() },
+                                onSynced = { manifestCache.clear(); homeState.invalidate() },
+                            )
+                            is Screen.SettingsParty -> SettingsPartyScreen(onBack = { pop() }, onJoin = { partyJoin(it) })
                             is Screen.Library -> LibraryScreen(
                                 version = libraryVersion,
                                 onOpen = { li ->
@@ -762,8 +782,8 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                         }
                     }
                     if (current == Screen.Home || current == Screen.Search ||
-                        current == Screen.Library || current == Screen.Addons) {
-                        BottomBar(current, onTab = { setTab(it) })
+                        current == Screen.Library || current == Screen.Settings) {
+                        BottomBar(current, onTab = { setTab(it) }, modifier = Modifier.align(Alignment.BottomCenter))
                     }
                 }
             }
@@ -982,36 +1002,43 @@ private fun RowHeader(title: String, sub: String?, seeAll: (() -> Unit)?) {
     }
 }
 
-/** Bottom tab bar (Stremio-style): Home / Search / Add-ons. */
+/** Floating pill tab bar: Home / Search / Library / Settings. */
 @Composable
-private fun BottomBar(current: Screen, onTab: (Screen) -> Unit) {
-    Column(Modifier.fillMaxWidth().background(Color(0xF20A0A0E))) {
-        Box(Modifier.fillMaxWidth().height(1.dp).background(LineC))
-        Row(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-            TabItem("Home", Icons.Filled.Home, current == Screen.Home, Modifier.weight(1f)) { onTab(Screen.Home) }
-            TabItem("Search", Icons.Filled.Search, current == Screen.Search, Modifier.weight(1f)) { onTab(Screen.Search) }
-            TabItem("Library", Icons.Filled.Bookmark, current == Screen.Library, Modifier.weight(1f)) { onTab(Screen.Library) }
-            TabItem("Add-ons", Icons.Filled.Extension, current == Screen.Addons, Modifier.weight(1f)) { onTab(Screen.Addons) }
-        }
+private fun BottomBar(current: Screen, onTab: (Screen) -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier
+            .padding(bottom = 14.dp)
+            .clip(RoundedCornerShape(34.dp))
+            .background(Color(0xF0141419))
+            .border(1.dp, Color(0x1FFFFFFF), RoundedCornerShape(34.dp))
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        TabItem("Home", Icons.Filled.Home, current == Screen.Home) { onTab(Screen.Home) }
+        TabItem("Search", Icons.Filled.Search, current == Screen.Search) { onTab(Screen.Search) }
+        TabItem("Library", Icons.Filled.Bookmark, current == Screen.Library) { onTab(Screen.Library) }
+        TabItem("Settings", Icons.Filled.Settings, current == Screen.Settings) { onTab(Screen.Settings) }
     }
 }
 
 @Composable
-private fun TabItem(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, on: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun TabItem(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, on: Boolean, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
-    val tint = if (on) Color.White else if (focused) Color.White else MutedC
+    val tint = if (on || focused) Color.White else MutedC
     Column(
-        modifier
-            .clip(RoundedCornerShape(12.dp))
-            .border(1.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(12.dp))
-            .background(if (on) Color(0x24E50914) else Color.Transparent, RoundedCornerShape(12.dp))
+        Modifier
+            .clip(RoundedCornerShape(26.dp))
+            .border(1.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(26.dp))
             .clickable(interactionSource = interaction, indication = null) { onClick() }
-            .padding(vertical = 7.dp),
+            .padding(horizontal = 13.dp, vertical = 5.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(22.dp))
-        Text(label, color = tint, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 3.dp))
+        Box(
+            Modifier.size(32.dp).background(if (on) Surface2 else Color.Transparent, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) { Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp)) }
+        Text(label, color = tint, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 2.dp))
     }
 }
 
@@ -1133,8 +1160,10 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit) {
             )
         )
         Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
+            val seasonCount = m.videos.map { it.season }.filter { it > 0 }.distinct().size
             val facts = listOfNotNull(
                 m.releaseInfo, m.imdbRating?.let { "★ $it" },
+                if (seasonCount > 0) "$seasonCount season" + (if (seasonCount > 1) "s" else "") else null,
             ).joinToString("  ·  ")
             if (facts.isNotEmpty()) Text(
                 facts.uppercase(), color = Color(0xC7EBEBF5), fontSize = 11.sp,
@@ -1294,7 +1323,7 @@ private fun HomeScreen(
                     modifier = Modifier.padding(bottom = 10.dp))
                 Chip("Retry", false) { st.invalidate() }
             }
-            else -> LazyColumn(state = st.listState, contentPadding = PaddingValues(bottom = 16.dp)) {
+            else -> LazyColumn(state = st.listState, contentPadding = PaddingValues(bottom = 104.dp)) {
                 if (st.rows.isNotEmpty()) item(key = "hero") { HeroHeader(st.rows, onOpen) }
                 if (st.continueRows.isNotEmpty()) item(key = "continue") {
                     Column {
@@ -1412,7 +1441,7 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit) {
             }
             st.submitted.isNotBlank() && st.sections.isEmpty() ->
                 Text("No matches for “${st.submitted.trim()}”.", color = MutedC, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
-            else -> LazyColumn(state = st.listState, contentPadding = PaddingValues(bottom = 16.dp)) {
+            else -> LazyColumn(state = st.listState, contentPadding = PaddingValues(bottom = 104.dp)) {
                 items(st.sections, key = { it.addon.manifestUrl + "/" + it.catalog.id }) { r ->
                     Column {
                         RowHeader(r.addon.name, "${r.items.size} result" + (if (r.items.size > 1) "s" else ""), null)
@@ -1430,14 +1459,13 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit) {
 
 // ---------- add-ons (manage sources) ----------
 @Composable
-private fun AddonsScreen(version: Int, onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit, onJoinParty: (String) -> Unit) {
+private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var addons by remember(version) { mutableStateOf(loadAddons(ctx)) }
     var url by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
     var statusErr by remember { mutableStateOf(false) }
-    var partyCode by remember { mutableStateOf("") }
 
     LazyColumn(
         Modifier.fillMaxSize(),
@@ -1446,10 +1474,10 @@ private fun AddonsScreen(version: Int, onOpen: (Addon) -> Unit, onAddonsChanged:
     ) {
         item {
             Column {
-                Text("Add-ons", color = TextC, fontSize = 24.sp, fontWeight = FontWeight.Black)
+                BackBar("Add-ons", null, onBack)
                 Text(
                     "Add a Stremio add-on and its catalogs show up on Home. HLS · DASH · DASH+ClearKey.",
-                    color = MutedC, fontSize = 14.sp, modifier = Modifier.padding(top = 4.dp, bottom = 10.dp),
+                    color = MutedC, fontSize = 14.sp, modifier = Modifier.padding(bottom = 10.dp),
                 )
             }
         }
@@ -1501,42 +1529,6 @@ private fun AddonsScreen(version: Int, onOpen: (Addon) -> Unit, onAddonsChanged:
             }
         }
         item {
-            Column(
-                Modifier.fillMaxWidth()
-                    .background(SurfaceC, RoundedCornerShape(12.dp))
-                    .border(1.dp, LineC, RoundedCornerShape(12.dp))
-                    .padding(18.dp)
-            ) {
-                Text("WATCH PARTY", color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp)
-                Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(
-                        value = partyCode, onValueChange = { partyCode = it },
-                        placeholder = { Text("Party code", color = MutedC) },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color.White,
-                            unfocusedBorderColor = Line2,
-                            cursorColor = Red,
-                            focusedTextColor = TextC,
-                            unfocusedTextColor = TextC,
-                        ),
-                    )
-                    Button(
-                        onClick = { onJoinParty(partyCode) },
-                        colors = ButtonDefaults.buttonColors(containerColor = Red),
-                        shape = RoundedCornerShape(12.dp),
-                    ) { Text("Join", fontWeight = FontWeight.SemiBold) }
-                }
-                Text(
-                    "To start one: play a stream, then tap the party button in the player. Friends enter your code here and watch in sync.",
-                    color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp),
-                )
-            }
-        }
-        item { SyncPanel(onSynced = onAddonsChanged) }
-        item {
             Text("Your add-ons", color = TextC, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
         }
         if (addons.isEmpty()) {
@@ -1581,6 +1573,174 @@ private fun AddonsScreen(version: Int, onOpen: (Addon) -> Unit, onAddonsChanged:
                 }
             }
         }
+    }
+}
+
+
+// ---------- settings ----------
+@Composable
+private fun SettingsHeader(text: String) {
+    Text(
+        text, color = MutedC, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.6.sp,
+        modifier = Modifier.padding(top = 20.dp, bottom = 8.dp, start = 4.dp),
+    )
+}
+
+@Composable
+private fun SettingsGroup(content: @Composable () -> Unit) {
+    Column(
+        Modifier.fillMaxWidth()
+            .background(SurfaceC, RoundedCornerShape(18.dp))
+            .border(1.dp, LineC, RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(18.dp)),
+    ) { content() }
+}
+
+/** One settings row: icon tile, title, subtitle. Pass onClick = null for a plain fact row. */
+@Composable
+private fun SettingsRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    sub: String,
+    divider: Boolean,
+    onClick: (() -> Unit)?,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    Column {
+        Row(
+            Modifier.fillMaxWidth()
+                .then(if (onClick != null) Modifier.clickable(interactionSource = interaction, indication = null) { onClick() } else Modifier)
+                .background(if (focused) Color(0x14FFFFFF) else Color.Transparent)
+                .padding(horizontal = 14.dp, vertical = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Box(
+                Modifier.size(44.dp).background(Surface2, RoundedCornerShape(14.dp)),
+                contentAlignment = Alignment.Center,
+            ) { Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(21.dp)) }
+            Column(Modifier.weight(1f)) {
+                Text(title, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(sub, color = MutedC, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 2.dp))
+            }
+        }
+        if (divider) Box(Modifier.padding(start = 72.dp).fillMaxWidth().height(1.dp).background(LineC))
+    }
+}
+
+@Composable
+private fun SettingsScreen(
+    onAddons: () -> Unit,
+    onSubtitles: () -> Unit,
+    onSync: () -> Unit,
+    onParty: () -> Unit,
+) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val version = remember {
+        runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "?"
+    }
+    var updSub by remember { mutableStateOf("You're on v$version — tap to check now") }
+    var checking by remember { mutableStateOf(false) }
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp),
+    ) {
+        Text(
+            "Settings", color = TextC, fontSize = 34.sp, fontFamily = Sans, fontWeight = FontWeight.Bold,
+            letterSpacing = (-1).sp, modifier = Modifier.padding(top = 24.dp),
+        )
+        SettingsHeader("GENERAL")
+        SettingsGroup {
+            SettingsRow(Icons.Filled.Extension, "Add-ons", "Add and manage Stremio add-ons", true, onAddons)
+            SettingsRow(Icons.Filled.ClosedCaption, "Subtitle style", "Size, colour, background and font of captions", true, onSubtitles)
+            SettingsRow(Icons.Filled.Sync, "Sync between devices", "Add-ons, progress and My List follow you", true, onSync)
+            SettingsRow(Icons.Filled.Groups, "Watch party", "Watch in sync with friends using a code", false, onParty)
+        }
+        SettingsHeader("ABOUT")
+        SettingsGroup {
+            SettingsRow(Icons.Filled.Download, "Check for updates", updSub, true) {
+                if (!checking) {
+                    checking = true; updSub = "Checking…"
+                    scope.launch {
+                        val r = runCatching { Updates.latest() }.getOrNull()
+                        updSub = when {
+                            r == null -> "Could not reach the release feed — try again later"
+                            Updates.isNewer(r.version, version) -> "v${r.version} is available — the update card is waiting on Home"
+                            else -> "You're up to date (v$version)"
+                        }
+                        checking = false
+                    }
+                }
+            }
+            SettingsRow(Icons.Filled.Info, "Nebula for Android", "v$version · HLS · DASH · DASH+ClearKey", false, null)
+        }
+        Spacer(Modifier.height(110.dp))
+    }
+}
+
+@Composable
+private fun SettingsSubtitlesScreen(onBack: () -> Unit) {
+    Column(Modifier.fillMaxSize().padding(20.dp)) {
+        BackBar("Subtitle style", null, onBack)
+        Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.TopCenter) {
+            SubStylePanel(onDone = onBack)
+        }
+    }
+}
+
+@Composable
+private fun SettingsSyncScreen(onBack: () -> Unit, onSynced: () -> Unit) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
+        BackBar("Sync", null, onBack)
+        SyncPanel(onSynced = onSynced)
+    }
+}
+
+@Composable
+private fun SettingsPartyScreen(onBack: () -> Unit, onJoin: (String) -> Unit) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
+        BackBar("Watch party", null, onBack)
+        PartyPanel(onJoin)
+    }
+}
+
+@Composable
+private fun PartyPanel(onJoin: (String) -> Unit) {
+    var partyCode by remember { mutableStateOf("") }
+    Column(
+        Modifier.fillMaxWidth()
+            .background(SurfaceC, RoundedCornerShape(12.dp))
+            .border(1.dp, LineC, RoundedCornerShape(12.dp))
+            .padding(18.dp)
+    ) {
+        Text("WATCH PARTY", color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp)
+        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedTextField(
+                value = partyCode, onValueChange = { partyCode = it },
+                placeholder = { Text("Party code", color = MutedC) },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color.White,
+                    unfocusedBorderColor = Line2,
+                    cursorColor = Red,
+                    focusedTextColor = TextC,
+                    unfocusedTextColor = TextC,
+                ),
+            )
+            Button(
+                onClick = { onJoin(partyCode) },
+                colors = ButtonDefaults.buttonColors(containerColor = Red),
+                shape = RoundedCornerShape(12.dp),
+            ) { Text("Join", fontWeight = FontWeight.SemiBold) }
+        }
+        Text(
+            "To start one: play a stream, then tap the party button in the player. Friends enter your code here and watch in sync.",
+            color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp),
+        )
     }
 }
 
@@ -1855,7 +2015,7 @@ private fun LibraryScreen(
             )
             return@Column
         }
-        LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
+        LazyColumn(contentPadding = PaddingValues(bottom = 104.dp)) {
             item(key = "grid") {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(items, key = { it.type + ":" + it.id }) { li ->
@@ -2112,6 +2272,7 @@ private fun EpisodesScreen(
     var episodes by remember { mutableStateOf<List<Episode>>(emptyList()) }
     var status by remember { mutableStateOf("Loading episodes…") }
     var selectedSeason by remember { mutableStateOf<Int?>(null) }
+    var upNextId by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(item.id) {
         val order = listOf(addon) + loadAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
@@ -2130,7 +2291,23 @@ private fun EpisodesScreen(
         // hand the chain to the player so it can offer the next episode
         seriesChain.set(item.type, item.name, addon, found)
         status = "${found.size} episodes"
-        selectedSeason = found.map { it.season }.distinct().sortedWith(compareBy({ it == 0 }, { it })).firstOrNull()
+        // open at the viewer's place in the show: the season of the newest
+        // watched/in-progress episode; a finished episode advances to the next
+        val flat = found.sortedWith(compareBy({ it.season == 0 }, { it.season }, { it.episode ?: 0 }))
+        val all = Progress.all(ctx)
+        var newest: ProgressRec? = null
+        var newestIdx = -1
+        flat.forEachIndexed { i, e ->
+            val r = all[Progress.key(item.type, e.id)] ?: return@forEachIndexed
+            if (r.dismissed) return@forEachIndexed
+            if (!r.done && !(r.pos >= Progress.MIN_POS_MS && r.dur > 0)) return@forEachIndexed
+            val cur = newest
+            if (cur == null || r.at > cur.at) { newest = r; newestIdx = i }
+        }
+        val up = if (newestIdx >= 0) flat[if (newest?.done == true) minOf(newestIdx + 1, flat.size - 1) else newestIdx] else null
+        upNextId = up?.id
+        selectedSeason = up?.season
+            ?: found.map { it.season }.distinct().sortedWith(compareBy({ it == 0 }, { it })).firstOrNull()
     }
 
     val bySeason = episodes.groupBy { it.season }
@@ -2147,13 +2324,18 @@ private fun EpisodesScreen(
                 }
             }
         }
-        LazyColumn(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
+        val listState = rememberLazyListState()
+        LaunchedEffect(current, upNextId, eps.size) {
+            val i = eps.indexOfFirst { it.id == upNextId }
+            if (i >= 0) listState.scrollToItem(maxOf(0, i - 1))
+        }
+        LazyColumn(Modifier.fillMaxWidth(), state = listState, verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
             if (episodes.isEmpty()) items(6) { SkeletonRow(112.dp, 63.dp, circle = false) }
             items(eps, key = { it.id }) { ep ->
                 FocusCard(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth(), onClick = { onPlayEpisode(ep) }) {
                     Row(
                         Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(12.dp))
-                            .border(1.dp, LineC, RoundedCornerShape(12.dp)).padding(10.dp),
+                            .border(1.dp, if (ep.id == upNextId) Color(0x73FFFFFF) else LineC, RoundedCornerShape(12.dp)).padding(10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
@@ -2185,9 +2367,22 @@ private fun EpisodesScreen(
                                 (ep.episode?.let { "$it. " } ?: "") + ep.name,
                                 color = TextC, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis,
                             )
-                            if (!ep.overview.isNullOrEmpty()) {
-                                Text(ep.overview, color = MutedC, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp))
+                            val date = ep.released?.let {
+                                runCatching {
+                                    java.time.LocalDate.parse(it.take(10))
+                                        .format(java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy"))
+                                }.getOrNull()
                             }
+                            val sub = listOfNotNull(date, ep.overview?.takeIf { o -> o.isNotEmpty() }).joinToString(" — ")
+                            if (sub.isNotEmpty()) {
+                                Text(sub, color = MutedC, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp))
+                            }
+                        }
+                        if (ep.id == upNextId) {
+                            Text(
+                                "Up next", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.background(Surface2, RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 5.dp),
+                            )
                         }
                     }
                 }
