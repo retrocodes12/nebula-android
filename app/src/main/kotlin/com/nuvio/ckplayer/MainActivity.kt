@@ -1489,7 +1489,7 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
             Column {
                 BackBar("Add-ons", null, onBack)
                 Text(
-                    "Add a Stremio add-on and its catalogs show up on Home. HLS · DASH · DASH+ClearKey.",
+                    "Add an add-on by its manifest URL and its catalogs show up on Home. HLS · DASH · DASH+ClearKey.",
                     color = MutedC, fontSize = 14.sp, modifier = Modifier.padding(bottom = 10.dp),
                 )
             }
@@ -1666,7 +1666,7 @@ private fun SettingsScreen(
         )
         SettingsHeader("GENERAL")
         SettingsGroup {
-            SettingsRow(Icons.Filled.Extension, "Add-ons", "Add and manage Stremio add-ons", true, onAddons)
+            SettingsRow(Icons.Filled.Extension, "Add-ons", "Add and manage your add-ons", true, onAddons)
             SettingsRow(Icons.Filled.ClosedCaption, "Subtitle style", "Size, colour, background and font of captions", true, onSubtitles)
             SettingsRow(Icons.Filled.Sync, "Sync between devices", "Add-ons, progress and My List follow you", true, onSync)
             SettingsRow(Icons.Filled.Groups, "Watch party", "Watch in sync with friends using a code", false, onParty)
