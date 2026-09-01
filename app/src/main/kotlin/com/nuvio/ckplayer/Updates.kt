@@ -106,7 +106,7 @@ object Updates {
      * in that case the relevant Settings screen is opened so the user can grant it, then retry.
      */
     fun installApk(context: Context, apk: File): Boolean {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
+        if (!context.packageManager.canRequestPackageInstalls()) {
             runCatching {
                 context.startActivity(
                     Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))

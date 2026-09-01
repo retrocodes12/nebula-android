@@ -1,5 +1,6 @@
 package com.nuvio.ckplayer
 
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
@@ -146,7 +147,7 @@ object StreamBadges {
     private fun fmtBytes(n: Long): String {
         val g = n / 1073741824.0
         if (g >= 10) return "${g.roundToInt()} GB"
-        if (g >= 1) return String.format("%.1f GB", g)
+        if (g >= 1) return String.format(Locale.US, "%.1f GB", g)
         return "${(n / 1048576.0).roundToInt()} MB"
     }
 

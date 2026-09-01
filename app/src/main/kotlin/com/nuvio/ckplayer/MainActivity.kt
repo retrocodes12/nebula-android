@@ -1,3 +1,5 @@
+@file:androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+
 package com.nuvio.ckplayer
 
 import android.app.Activity
@@ -792,7 +794,12 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 onPlayEpisode = { ep ->
                                     seriesChain.index = seriesChain.episodes.indexOfFirst { it.id == ep.id }
                                     val label = seriesChain.label(ep)
-                                    push(Screen.Streams(s.addon, MetaItem(ep.id, "series", label, s.item.poster)))
+                                    push(Screen.Streams(s.addon, MetaItem(
+                                        ep.id, "series", label, s.item.poster,
+                                        // the streams header is a landscape banner — hand it the
+                                        // backdrop, not a portrait poster to crop
+                                        background = s.item.background ?: ep.thumbnail,
+                                    )))
                                 },
                             )
                             is Screen.Catalog -> CatalogScreen(
@@ -807,7 +814,12 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 onPlayEpisode = { ep ->
                                     seriesChain.index = seriesChain.episodes.indexOfFirst { it.id == ep.id }
                                     val label = seriesChain.label(ep)
-                                    push(Screen.Streams(s.addon, MetaItem(ep.id, "series", label, s.item.poster)))
+                                    push(Screen.Streams(s.addon, MetaItem(
+                                        ep.id, "series", label, s.item.poster,
+                                        // the streams header is a landscape banner — hand it the
+                                        // backdrop, not a portrait poster to crop
+                                        background = s.item.background ?: ep.thumbnail,
+                                    )))
                                 },
                                 // no episode data anywhere → replace this screen with the flat stream list
                                 onFallback = { stack = stack.dropLast(1) + Screen.Streams(s.addon, s.item) },
