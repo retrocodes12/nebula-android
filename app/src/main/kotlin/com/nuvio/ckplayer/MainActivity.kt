@@ -31,10 +31,12 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -63,6 +65,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -79,6 +82,7 @@ import androidx.compose.material.icons.filled.BookmarkRemove
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
@@ -119,12 +123,21 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.window.Dialog
@@ -165,6 +178,7 @@ import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
@@ -1771,6 +1785,27 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
     var status by remember { mutableStateOf("") }
     var statusErr by remember { mutableStateOf(false) }
 
+    // ---- ranking ----
+    // Rows are a fixed height, so a drag is just "how many rows have I passed",
+    // which keeps this to arithmetic instead of a layout-info crawl.
+    val haptics = LocalHapticFeedback.current
+    val density = LocalDensity.current
+    var dragIndex by remember { mutableStateOf(-1) }
+    var dragOffset by remember { mutableStateOf(0f) }
+    var liftIndex by remember { mutableStateOf(-1) }      // picked up with the D-pad
+    var rowSpanPx by remember { mutableStateOf(0f) }
+    /** Move an add-on and persist the new ranking. Returns where it landed. */
+    fun rankMove(from: Int, to: Int): Int {
+        if (from < 0 || from >= addons.size || to < 0 || to >= addons.size || from == to) return from
+        val next = addons.toMutableList()
+        next.add(to, next.removeAt(from))
+        Cloud.noteAddonOrder(ctx)
+        saveAddons(ctx, next)
+        addons = next
+        onAddonsChanged()
+        return to
+    }
+
     LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(20.dp),
@@ -1833,16 +1868,45 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
             }
         }
         item {
-            Text("Your add-ons", color = TextC, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
+            Column(Modifier.padding(top = 12.dp)) {
+                Text("Your add-ons", color = TextC, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                if (addons.size > 1) Text(
+                    "Drag by the handle to rank them. Home rows follow this order, and streams, " +
+                        "artwork and subtitles are taken from the highest add-on that has them.",
+                    color = MutedC, fontSize = 13.sp, lineHeight = 19.sp,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
         }
         if (addons.isEmpty()) {
             item { Text("No add-ons yet — paste a manifest URL above.", color = MutedC, fontSize = 14.sp) }
         } else {
-            items(addons, key = { it.manifestUrl }) { a ->
+            itemsIndexed(addons, key = { _, a -> a.manifestUrl }) { i, a ->
+                val dragging = i == dragIndex
+                val lifted = i == liftIndex
+                val raised = dragging || lifted
+                Box(
+                    Modifier
+                        .zIndex(if (raised) 1f else 0f)
+                        .graphicsLayer {
+                            translationY = if (dragging) dragOffset else 0f
+                            val s = if (lifted) 1.02f else 1f
+                            scaleX = s; scaleY = s
+                            shadowElevation = if (raised) 22f else 0f
+                            shape = RoundedCornerShape(12.dp)
+                            clip = false
+                        }
+                        .onSizeChanged {
+                            if (rowSpanPx == 0f) rowSpanPx = it.height + with(density) { 10.dp.toPx() }
+                        }
+                        .then(if (dragging) Modifier else Modifier.animateItem()),
+                ) {
                 FocusCard(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth(), onClick = { onOpen(a) }) {
                     Row(
-                        Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(12.dp))
-                            .border(1.dp, LineC, RoundedCornerShape(12.dp)).padding(14.dp),
+                        Modifier.fillMaxWidth()
+                            .background(if (raised) Surface2 else SurfaceC, RoundedCornerShape(12.dp))
+                            .border(1.dp, if (raised) Color(0x3DFFFFFF) else LineC, RoundedCornerShape(12.dp))
+                            .padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
@@ -1867,6 +1931,72 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                                 color = MutedC, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                             )
                         }
+                        if (addons.size > 1) {
+                            val grip = remember { MutableInteractionSource() }
+                            val gripFocused by grip.collectIsFocusedAsState()
+                            Box(
+                                Modifier.size(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (gripFocused) TextC else Color.Transparent)
+                                    // A remote can't drag, so OK picks the row up
+                                    // and the D-pad walks it.
+                                    .onKeyEvent { ev ->
+                                        if (ev.type != KeyEventType.KeyDown) return@onKeyEvent false
+                                        val here = addons.indexOfFirst { it.manifestUrl == a.manifestUrl }
+                                        if (here < 0) return@onKeyEvent false
+                                        when (ev.key) {
+                                            Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
+                                                liftIndex = if (liftIndex == here) -1 else here
+                                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                true
+                                            }
+                                            Key.DirectionUp ->
+                                                if (liftIndex == here) { liftIndex = rankMove(here, here - 1); true } else false
+                                            Key.DirectionDown ->
+                                                if (liftIndex == here) { liftIndex = rankMove(here, here + 1); true } else false
+                                            Key.Back ->
+                                                if (liftIndex >= 0) { liftIndex = -1; true } else false
+                                            else -> false
+                                        }
+                                    }
+                                    .focusable(true, grip)
+                                    .pointerInput(a.manifestUrl) {
+                                        detectDragGesturesAfterLongPress(
+                                            onDragStart = {
+                                                // read the index now: the row may have
+                                                // moved since this gesture was wired up
+                                                dragIndex = addons.indexOfFirst { it.manifestUrl == a.manifestUrl }
+                                                dragOffset = 0f
+                                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            },
+                                            onDrag = { change, amount ->
+                                                change.consume()
+                                                if (dragIndex < 0) return@detectDragGesturesAfterLongPress
+                                                dragOffset += amount.y
+                                                val span = rowSpanPx
+                                                if (span <= 0f) return@detectDragGesturesAfterLongPress
+                                                val steps = (dragOffset / span).roundToInt()
+                                                if (steps != 0) {
+                                                    val landed = rankMove(dragIndex, dragIndex + steps)
+                                                    if (landed != dragIndex) {
+                                                        dragOffset -= (landed - dragIndex) * span
+                                                        dragIndex = landed
+                                                    }
+                                                }
+                                            },
+                                            onDragEnd = { dragIndex = -1; dragOffset = 0f },
+                                            onDragCancel = { dragIndex = -1; dragOffset = 0f },
+                                        )
+                                    },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    Icons.Filled.DragHandle, contentDescription = "Reorder",
+                                    tint = if (gripFocused) Color.Black else if (raised) TextC else FaintC,
+                                    modifier = Modifier.size(21.dp),
+                                )
+                            }
+                        }
                         IconButton(onClick = {
                             val list = addons.filterNot { it.manifestUrl == a.manifestUrl }
                             saveAddons(ctx, list); addons = list; onAddonsChanged()
@@ -1874,6 +2004,7 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                             Icon(Icons.Filled.Close, contentDescription = "Remove", tint = MutedC, modifier = Modifier.size(18.dp))
                         }
                     }
+                }
                 }
             }
         }

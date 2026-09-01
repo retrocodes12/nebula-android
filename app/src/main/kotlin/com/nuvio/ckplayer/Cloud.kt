@@ -222,7 +222,12 @@ object Cloud {
                     .put("logo", a.logo ?: "").put("at", at.optLong(a.manifestUrl)))
             }
             if (stamped) { s.put("at", at); putJsonPref(ctx, "addons_sync", s) }
-            JSONObject().put("list", list).put("removed", s.optJSONObject("removed") ?: JSONObject()).toString()
+            // The list is keyed by URL and so carries no order of its own — rank
+            // travels separately, with its own stamp.
+            val order = JSONArray()
+            loadAddons(ctx).forEach { order.put(it.manifestUrl) }
+            JSONObject().put("list", list).put("removed", s.optJSONObject("removed") ?: JSONObject())
+                .put("order", order).put("orderAt", s.optLong("orderAt")).toString()
         }
         "progress" -> {
             val o = JSONObject()
@@ -260,6 +265,13 @@ object Cloud {
         val s = addonsSync(ctx)
         s.getJSONObject("at").put(url, 1L)
         prefs(ctx).edit().putString("addons_sync", s.toString()).apply()
+    }
+
+    /** Stamp a deliberate reorder so the newest ranking wins across devices. */
+    fun noteAddonOrder(ctx: Context) {
+        val s = addonsSync(ctx)
+        s.put("orderAt", System.currentTimeMillis())
+        putJsonPref(ctx, "addons_sync", s)
     }
 
     /** Diff hook run by saveAddons: stamp additions, tombstone removals. */
@@ -313,6 +325,18 @@ object Cloud {
         }
         arr.forEach { if (!rl.has(it.manifestUrl)) localNewer = true }
         for (u in removed.keys()) if (!rr.has(u)) localNewer = true
+        // Ranking, newest-wins. Add-ons the sender didn't know about keep their
+        // relative position at the end rather than being dropped or shuffled.
+        val ro = remote.optJSONArray("order")
+        val roAt = remote.optLong("orderAt")
+        if (roAt > s.optLong("orderAt") && ro != null && ro.length() > 0) {
+            val rank = HashMap<String, Int>()
+            for (i in 0 until ro.length()) rank[ro.optString(i)] = i
+            val next = arr.filter { rank.containsKey(it.manifestUrl) }.sortedBy { rank[it.manifestUrl] } +
+                arr.filter { !rank.containsKey(it.manifestUrl) }
+            s.put("orderAt", roAt)
+            if (next != arr.toList()) { arr.clear(); arr.addAll(next); changed = true }
+        } else if (s.optLong("orderAt") > roAt) localNewer = true
         putJsonPref(ctx, "addons_sync", s)
         if (changed) saveAddonsRaw(ctx, arr)
         return changed to localNewer
