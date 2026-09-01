@@ -43,6 +43,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -2450,9 +2451,26 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
                             Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(24.dp))
                         }
                         Column(Modifier.weight(1f)) {
-                            Text(s.name.ifEmpty { "Stream" }, color = TextC, fontSize = 15.sp, fontFamily = Sans, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            val sub = s.title.replace("\n", " · ")
-                            if (sub.isNotEmpty()) Text(sub, style = labelStyle(13), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(s.name.replace("\n", " ").ifEmpty { "Stream" }, color = TextC, fontSize = 15.sp, fontFamily = Sans, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            val badges = remember(s.url) { StreamBadges.badges(s.name + "\n" + s.title) }
+                            if (badges.isNotEmpty()) {
+                                Row(
+                                    Modifier.padding(top = 5.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    badges.forEach { b ->
+                                        AsyncImage(
+                                            model = b, contentDescription = null,
+                                            contentScale = ContentScale.Fit,
+                                            modifier = Modifier.height(15.dp).widthIn(max = 76.dp),
+                                        )
+                                    }
+                                }
+                            }
+                            val f = remember(s.url) { StreamBadges.facts(s.videoSize, s.title) }
+                            if (f.facts.isNotEmpty()) Text(f.facts, color = MutedC, fontSize = 12.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
+                            if (f.desc.isNotEmpty()) Text(f.desc, style = labelStyle(12), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
                         }
                     }
                 }

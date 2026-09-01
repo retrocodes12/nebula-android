@@ -48,9 +48,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.25.0.apk
+          cp "$APK" Nebula-1.26.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.25.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.25.0 Nebula-1.25.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.25.0" \
-            --notes "A Settings home: grouped pages for add-ons, subtitle style, sync and watch party, with update checks and a floating pill navigation bar. Series get smarter: Episodes opens on the season you're watching with the next episode highlighted, air dates on every episode, and a season count on series pages."
+          gh release delete v1.26.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.26.0 Nebula-1.26.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.26.0" \
+            --notes "Stream cards reborn: fusion badges — real Dolby Vision, Atmos, REMUX, 4K and codec logos matched from each stream's text — plus a clean facts line (size, seeders, source) replacing the raw emoji clutter."

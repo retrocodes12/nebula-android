@@ -49,7 +49,11 @@ data class MetaItem(
     val description: String? = null,
 )
 data class SubTrack(val url: String, val lang: String)
-data class StreamItem(val name: String, val title: String, val url: String, val subtitles: List<SubTrack> = emptyList())
+data class StreamItem(
+    val name: String, val title: String, val url: String,
+    val subtitles: List<SubTrack> = emptyList(),
+    val videoSize: Long = 0L,
+)
 /** One episode of a series (a Stremio meta `videos` entry). */
 data class Episode(
     val id: String, val season: Int, val episode: Int?,
@@ -284,7 +288,9 @@ object Stremio {
                 val su = o.optString("url")
                 if (su.isNotEmpty()) subs.add(SubTrack(su, o.optString("lang", "und")))
             }
-            out.add(StreamItem(s.optString("name"), s.optString("title"), url, subs))
+            val text = s.optString("title").ifEmpty { s.optString("description") }
+            val vsize = s.optJSONObject("behaviorHints")?.optLong("videoSize") ?: 0L
+            out.add(StreamItem(s.optString("name"), text, url, subs, vsize))
         }
         return out
     }
