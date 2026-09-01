@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.nuvio.ckplayer"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.nuvio.ckplayer"
@@ -74,7 +74,7 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
 
-    val media3 = "1.4.1"
+    val media3 = "1.11.0"
     implementation("androidx.media3:media3-exoplayer:$media3")
     implementation("androidx.media3:media3-exoplayer-dash:$media3")
     implementation("androidx.media3:media3-exoplayer-hls:$media3")
