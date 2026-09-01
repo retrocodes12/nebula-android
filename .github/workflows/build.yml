@@ -48,9 +48,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.29.0.apk
+          cp "$APK" Nebula-1.30.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.29.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.29.0 Nebula-1.29.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.29.0" \
-            --notes "Subtitles for everything: Nebula now asks your subtitle add-ons (OpenSubtitles ships by default) for any movie or episode, with an in-player picker by language — plus the subtitle Style panel now opens in the player as intended."
+          gh release delete v1.30.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.30.0 Nebula-1.30.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.30.0" \
+            --notes "Fix release: installs from before the starter add-ons existed now receive Cinemeta automatically after updating. If you removed it on purpose, it stays removed."

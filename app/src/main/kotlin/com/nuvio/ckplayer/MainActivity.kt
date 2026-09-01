@@ -608,6 +608,19 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                         homeState.invalidate()
                     }
                 }
+                // v2: an older install that already had add-ons when seeding first
+                // ran never got Cinemeta — add it once, unless deliberately removed
+                if (!p.getBoolean("seeded_v2", false)) {
+                    p.edit().putBoolean("seeded_v2", true).apply()
+                    val cinUrl = "https://v3-cinemeta.strem.io/manifest.json"
+                    val cur2 = loadAddons(ctx)
+                    val removed2 = Cloud.addonsSync(ctx).getJSONObject("removed")
+                    if (cur2.none { it.manifestUrl == cinUrl } && !removed2.has(cinUrl)) {
+                        saveAddonsRaw(ctx, cur2 + Addon(cinUrl, "Cinemeta", "https://v3-cinemeta.strem.io", null))
+                        Cloud.stampSeed(ctx, cinUrl)
+                        homeState.invalidate()
+                    }
+                }
                 // OpenSubtitles was never seeded on Android (web always had it) —
                 // one-time add so subtitles exist out of the box here too
                 if (!p.getBoolean("seeded_subs_v1", false)) {
