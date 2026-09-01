@@ -549,14 +549,14 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                         partyUi.code = ev.code; partyUi.isHost = false; partyUi.count = ev.count
                         partyUi.lastState = ev.state
                         partyUi.status = "Joined party ${ev.code}"
-                        ev.stream?.let { st -> stack = listOf(Screen.Home, Screen.Play(st.url, st.title, st.subs)) }
+                        ev.stream?.let { st -> stack = listOf(Screen.Home, Screen.Play(st.url, st.title, st.subs, st.type, st.id, st.name ?: st.title, st.poster, st.addonUrl)) }
                     }
                     is PartyEvent.State -> partyUi.lastState = ev.state
                     is PartyEvent.StreamSwitch -> {
                         if (!partyUi.isHost) {
                             partyUi.lastState = null
                             partyUi.status = "Host switched streams"
-                            stack = listOf(Screen.Home, Screen.Play(ev.stream.url, ev.stream.title, ev.stream.subs))
+                            stack = listOf(Screen.Home, Screen.Play(ev.stream.url, ev.stream.title, ev.stream.subs, ev.stream.type, ev.stream.id, ev.stream.name ?: ev.stream.title, ev.stream.poster, ev.stream.addonUrl))
                         }
                     }
                     is PartyEvent.Peers -> partyUi.count = ev.count
@@ -2940,7 +2940,7 @@ private fun PlayerScreen(
             onNext = { nextEpisode?.let { upnextCounting = false; onPlayNext(it) } },
             onParty = {
                 if (partyUi.active()) onPartyLeave()
-                else onPartyStart(PartyStreamDesc(url, title, subs))
+                else onPartyStart(PartyStreamDesc(url, title, subs, contentType, contentId, contentName, poster, addonUrl))
                 chromeTouchedAt = System.currentTimeMillis()
             },
             onSubtitles = {

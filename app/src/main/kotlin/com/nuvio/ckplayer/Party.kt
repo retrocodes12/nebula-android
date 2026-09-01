@@ -21,7 +21,12 @@ import java.util.concurrent.TimeUnit
  * themselves. Mirrors the shared HTML player's protocol.
  */
 
-data class PartyStreamDesc(val url: String, val title: String, val subs: List<SubTrack>)
+data class PartyStreamDesc(
+    val url: String, val title: String, val subs: List<SubTrack>,
+    // content identity rides along so viewers get subtitles + progress
+    val type: String? = null, val id: String? = null, val name: String? = null,
+    val poster: String? = null, val addonUrl: String? = null,
+)
 
 /** pos is seconds; when live=true it means "seconds behind the live edge" (engine-neutral). */
 data class PartyState(val playing: Boolean, val pos: Double, val live: Boolean, val atLocal: Long)
@@ -104,6 +109,11 @@ class PartySession(
         if (s.subs.isNotEmpty()) {
             put("subs", JSONArray().apply { s.subs.forEach { put(JSONObject().put("url", it.url).put("lang", it.lang)) } })
         }
+        s.type?.let { put("type", it) }
+        s.id?.let { put("id", it) }
+        s.name?.let { put("name", it) }
+        s.poster?.let { put("poster", it) }
+        s.addonUrl?.let { put("addonUrl", it) }
     }
 
     private fun connect(onOpen: (WebSocket) -> Unit) {
@@ -179,6 +189,11 @@ class PartySession(
         o.optJSONArray("subs")?.let { arr ->
             for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { subs.add(SubTrack(it.optString("url"), it.optString("lang"))) }
         }
-        return PartyStreamDesc(o.optString("url"), o.optString("title").ifEmpty { "Watch party" }, subs)
+        return PartyStreamDesc(
+            o.optString("url"), o.optString("title").ifEmpty { "Watch party" }, subs,
+            type = o.optString("type").ifEmpty { null }, id = o.optString("id").ifEmpty { null },
+            name = o.optString("name").ifEmpty { null }, poster = o.optString("poster").ifEmpty { null },
+            addonUrl = o.optString("addonUrl").ifEmpty { null },
+        )
     }
 }

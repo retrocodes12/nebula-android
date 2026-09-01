@@ -48,9 +48,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.30.0.apk
+          cp "$APK" Nebula-1.31.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.30.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.30.0 Nebula-1.30.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.30.0" \
-            --notes "Fix release: installs from before the starter add-ons existed now receive Cinemeta automatically after updating. If you removed it on purpose, it stays removed."
+          gh release delete v1.31.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.31.0 Nebula-1.31.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.31.0" \
+            --notes "Watch parties get better for viewers: the host's title identity now travels with the stream, so subtitles, watch progress and resume work for everyone in the party."
