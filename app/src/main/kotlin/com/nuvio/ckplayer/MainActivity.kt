@@ -2719,44 +2719,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
                     )
                 }
             items(streams) { s ->
-                FocusCard(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth(), onClick = { onPlay(s) }) {
-                    Row(
-                        Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(12.dp))
-                            .border(1.dp, LineC, RoundedCornerShape(12.dp)).padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    ) {
-                        Box(
-                            Modifier.size(42.dp).background(Red, CircleShape),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(24.dp))
-                        }
-                        Column(Modifier.weight(1f)) {
-                            Text(s.name.replace("\n", " ").ifEmpty { "Stream" }, color = TextC, fontSize = 15.sp, fontFamily = Sans, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            val m = remember(s.url) { StreamBadges.match(s.name + "\n" + s.title) }
-                            val badges = m.badges
-                            if (badges.isNotEmpty()) {
-                                Row(
-                                    Modifier.padding(top = 5.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(7.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    badges.forEach { b ->
-                                        AsyncImage(
-                                            model = b, contentDescription = null,
-                                            contentScale = ContentScale.Fit,
-                                            modifier = Modifier.height(15.dp).widthIn(max = 76.dp),
-                                        )
-                                    }
-                                }
-                            }
-                            val f = remember(s.url) { StreamBadges.facts(s.videoSize, s.title, m.fired) }
-                            if (f.facts.isNotEmpty()) Text(f.facts, color = MutedC, fontSize = 12.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
-                            if (f.desc.isNotEmpty()) Text(f.desc, style = labelStyle(12), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
-                        }
-                    }
-                }
+                StreamRow(s, addonName, item.name, onPlay)
             }
             }
         }
@@ -2767,6 +2730,78 @@ internal fun partyDisplayName(ctx: Context): String {
     val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     return p.getString("party_name", null)?.takeIf { it.isNotBlank() }
         ?: android.os.Build.MODEL.take(24).ifBlank { "Android" }
+}
+
+/** A stream row: resolution plate, release name, badges, and a right-hand
+    spec column — the parts you actually choose by, nothing said twice. */
+@Composable
+private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, onPlay: (StreamItem) -> Unit) {
+    val raw = remember(s.url) { s.name + "\n" + s.title }
+    val plate = remember(s.url) { StreamBadges.plate(raw) }
+    val m = remember(s.url) { StreamBadges.match(raw, if (plate != null) "resolution" else null) }
+    val f = remember(s.url) { StreamBadges.facts(s.videoSize, s.title, m.fired) }
+    val name = remember(s.url) {
+        StreamBadges.cleanName(s.name, addonName).ifEmpty { f.provider ?: "Stream" }
+    }
+    val sub = remember(s.url) {
+        listOfNotNull(
+            f.provider?.takeIf { !name.contains(it, true) },
+            f.langs.takeIf { it.isNotEmpty() },
+            StreamBadges.cleanDesc(f.desc, addonName, pageTitle).takeIf { it.isNotEmpty() },
+        ).joinToString("  ·  ")
+    }
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    FocusCard(shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth(), onClick = { onPlay(s) }) {
+        Row(
+            Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(14.dp))
+                .border(1.dp, LineC, RoundedCornerShape(14.dp)).padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (plate != null) {
+                Column(
+                    Modifier.width(62.dp).clip(RoundedCornerShape(12.dp))
+                        .background(if (focused) Red else Surface2)
+                        .padding(vertical = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(plate.res, color = TextC, fontFamily = Mono, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    if (plate.tag.isNotEmpty()) Text(
+                        plate.tag, color = MutedC, fontFamily = Mono, fontSize = 8.5.sp,
+                        letterSpacing = 1.sp, modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+            } else {
+                Box(Modifier.size(42.dp).background(Red, CircleShape), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
+                }
+            }
+            Column(Modifier.weight(1f)) {
+                Text(name, color = TextC, fontSize = 15.sp, fontFamily = Sans, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (m.badges.isNotEmpty()) {
+                    Row(
+                        Modifier.padding(top = 5.dp),
+                        horizontalArrangement = Arrangement.spacedBy(7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        m.badges.take(5).forEach { b ->
+                            AsyncImage(model = b, contentDescription = null, contentScale = ContentScale.Fit,
+                                modifier = Modifier.height(14.dp).widthIn(max = 70.dp))
+                        }
+                    }
+                }
+                if (sub.isNotEmpty()) Text(sub, color = MutedC, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 5.dp))
+            }
+            if (f.size != null || f.bitrate != null || f.seeds != null) {
+                Column(horizontalAlignment = Alignment.End) {
+                    f.size?.let { Text(it, color = TextC, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
+                    val line2 = listOfNotNull(f.bitrate, f.seeds?.let { "$it seeds" }).joinToString(" · ")
+                    if (line2.isNotEmpty()) Text(line2, color = MutedC, fontFamily = Mono, fontSize = 11.sp, modifier = Modifier.padding(top = 2.dp))
+                }
+            }
+        }
+    }
 }
 
 /** One party reaction, floating up and fading like the web player's. */

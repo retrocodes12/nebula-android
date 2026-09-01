@@ -47,18 +47,63 @@ object StreamBadges {
 
     data class Match(val badges: List<String>, val fired: List<Regex>)
 
-    fun match(raw: String): Match {
+    fun match(raw: String, skipGroup: String? = null): Match {
         val seen = HashSet<String>()
         val badges = ArrayList<String>()
         val fired = ArrayList<Regex>()
         for ((group, re, file) in PACK) {
             if (!re.containsMatchIn(raw)) continue
             fired.add(re)                              // every match cleans the text line
+            if (group == skipGroup) continue           // shown elsewhere (resolution plate)
             if (group in seen || badges.size >= 6) continue
             seen.add(group)
             badges.add(BASE + file)
         }
         return Match(badges, fired)
+    }
+
+    /** The resolution leads the row as a plate — it is what you choose by. */
+    data class Plate(val res: String, val tag: String)
+    fun plate(raw: String): Plate? = when {
+        Regex("""\b(4k|2160p|uhd)\b""", RegexOption.IGNORE_CASE).containsMatchIn(raw) -> Plate("4K", "ULTRA HD")
+        Regex("""\b(1080p|fhd)\b""", RegexOption.IGNORE_CASE).containsMatchIn(raw) -> Plate("1080", "FULL HD")
+        Regex("""\b720p\b""", RegexOption.IGNORE_CASE).containsMatchIn(raw) -> Plate("720", "HD")
+        Regex("""\b(480p|360p)\b""", RegexOption.IGNORE_CASE).containsMatchIn(raw) -> Plate("SD", "")
+        else -> null
+    }
+
+    private val RE_EMOJI = Regex("""[\u2190-\u21FF\u2300-\u27BF\u2B00-\u2BFF\uFE0F\u200D]|[\uD83C-\uDBFF][\uDC00-\uDFFF]""")
+    private val RE_RES = Regex("""\b(4k|2160p|uhd|1080p|fhd|720p|480p|360p)\b""", RegexOption.IGNORE_CASE)
+    private val RE_EPTAG = Regex("""\bs\d{1,2}\s*e\d{1,3}\b""", RegexOption.IGNORE_CASE)
+    private val RE_YEAR = Regex("""^\(?(19|20)\d\d\)?${'$'}""")
+
+    /** The row sits under its add-on's heading and above its own badges, so the
+        name only has to say which RELEASE this is. */
+    fun cleanName(raw: String?, addonName: String?): String {
+        var t = (raw ?: "").replace("\n", " ").replace(RE_EMOJI, " ")
+        if (!addonName.isNullOrBlank()) t = t.replace(Regex("""\b""" + Regex.escape(addonName) + """\b""", RegexOption.IGNORE_CASE), " ")
+        return t.replace(RE_RES, " ")
+            .replace(Regex("""\s*[·•|]\s*"""), " · ")
+            .replace(Regex("""\s{2,}"""), " ")
+            .trim().trim('·', '•', '|', ',', '-', ' ')
+    }
+
+    /** Whatever is left after the badges, facts and the page itself take theirs. */
+    fun cleanDesc(desc: String, addonName: String?, pageTitle: String): String {
+        val known = pageTitle.lowercase().replace(Regex("""[^a-z0-9]"""), "")
+        val out = ArrayList<String>()
+        for (tokRaw in desc.split(" · ")) {
+            val t = tokRaw.replace(RE_EMOJI, " ").replace(Regex("""\s{2,}"""), " ").trim()
+            if (t.isEmpty()) continue
+            if (RE_EPTAG.containsMatchIn(t)) continue          // the header says the episode
+            if (RE_YEAR.matches(t)) continue
+            if (!addonName.isNullOrBlank() && t.equals(addonName, true)) continue
+            val bare = t.replace(RE_EPTAG, "").replace(Regex("""[^a-zA-Z0-9]"""), "").lowercase()
+            if (bare.isNotEmpty() && known.contains(bare)) continue
+            if (out.contains(t)) continue
+            out.add(t)
+        }
+        return out.take(4).joinToString("  ·  ")
     }
 
     private val RE_SIZE = Regex("""(\d+(?:[.,]\d+)?)\s*(GB|GiB|MB|MiB)\b""", RegexOption.IGNORE_CASE)
@@ -105,7 +150,11 @@ object StreamBadges {
         return "${(n / 1048576.0).roundToInt()} MB"
     }
 
-    data class Facts(val facts: String, val desc: String)
+    data class Facts(
+        val facts: String, val desc: String,
+        val size: String? = null, val bitrate: String? = null, val seeds: String? = null,
+        val langs: String = "", val provider: String? = null,
+    )
 
     /** Size, bitrate, seeders and provider pulled out of the stream text; lines
         that only carried those are consumed, bullet-style tokens the badges
@@ -156,12 +205,16 @@ object StreamBadges {
                 desc.add(ln.trim())
             }
         }
+        val langs = langsIn(text)
         val factsList = ArrayList<String>()
         size?.let { factsList.add(it) }
         bitrate?.let { factsList.add(it) }
         seeds?.let { factsList.add(it + " seeds") }
-        langsIn(text).takeIf { it.isNotEmpty() }?.let { factsList.add(it) }
+        langs.takeIf { it.isNotEmpty() }?.let { factsList.add(it) }
         provider?.let { factsList.add(it) }
-        return Facts(factsList.joinToString("  \u00b7  "), desc.joinToString(" \u00b7 "))
+        return Facts(
+            factsList.joinToString("  \u00b7  "), desc.joinToString(" \u00b7 "),
+            size = size, bitrate = bitrate, seeds = seeds, langs = langs, provider = provider,
+        )
     }
 }
