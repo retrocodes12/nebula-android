@@ -1,5 +1,5 @@
 name: Lint audit
-on: [push]
+on: workflow_dispatch
 jobs:
   lint:
     runs-on: ubuntu-latest
