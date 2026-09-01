@@ -42,6 +42,7 @@ object Prefs {
     var gestures by mutableStateOf(true); private set             // tap-zone skips + swipe seek
     var audioLang by mutableStateOf(""); private set              // "" = device language
     var subLang by mutableStateOf(""); private set
+    var quality by mutableStateOf("auto"); private set            // auto / high (start high) / saver (≤720p)
 
     fun load(ctx: Context) {
         val p = ctx.getSharedPreferences(P, Context.MODE_PRIVATE)
@@ -56,6 +57,7 @@ object Prefs {
         gestures = p.getBoolean("pref_gestures", true)
         audioLang = p.getString("pref_audiolang", "") ?: ""
         subLang = p.getString("pref_sublang", "") ?: ""
+        quality = p.getString("pref_quality", "auto") ?: "auto"
     }
 
     private fun edit(ctx: Context) = ctx.getSharedPreferences(P, Context.MODE_PRIVATE).edit()
@@ -71,6 +73,7 @@ object Prefs {
     fun setGestures(ctx: Context, v: Boolean) { gestures = v; edit(ctx).putBoolean("pref_gestures", v).apply() }
     fun setAudioLang(ctx: Context, v: String) { audioLang = v; edit(ctx).putString("pref_audiolang", v).apply() }
     fun setSubLang(ctx: Context, v: String) { subLang = v; edit(ctx).putString("pref_sublang", v).apply() }
+    fun setQuality(ctx: Context, v: String) { quality = v; edit(ctx).putString("pref_quality", v).apply() }
 
     /** The short list a picker offers; "" means follow the device. */
     val LANGS = listOf(

@@ -6,6 +6,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -39,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -87,19 +90,134 @@ private fun GlassCircle(
 }
 
 @Composable
-private fun GlassPill(label: String, value: String? = null, onClick: () -> Unit) {
+internal fun GlassPill(label: String, value: String? = null, on: Boolean = false, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
+    // an "on" pill inverts, the way the web player's round buttons do
+    val bg = if (on) (if (focused) Color.White else Color(0xEBFFFFFF)) else if (focused) GlassHot else Glass
+    val ink = if (on) Color.Black else Ink
     Row(
-        Modifier.background(if (focused) GlassHot else Glass, RoundedCornerShape(50))
+        Modifier.background(bg, RoundedCornerShape(50))
             .clickable(interactionSource = interaction, indication = null) { onClick() }
             .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        Text(label, color = ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
         if (value != null) Text(
-            value, color = DimInk, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+            value, color = if (on) Color(0x99000000) else DimInk, fontSize = 13.sp, fontWeight = FontWeight.Medium,
             modifier = Modifier.padding(start = 6.dp), maxLines = 1,
+        )
+    }
+}
+
+/**
+ * What the screen says after a moment paused: a kicker (Paused / Live · Paused /
+ * Finished), the title, the episode line, a short synopsis and a row of facts —
+ * time left, when it ends, how far behind live, what plays next. Mirrors the
+ * shared player's #pauseBoard.
+ */
+@Composable
+internal fun PauseBoard(
+    visible: Boolean,
+    kicker: String,
+    title: String,
+    sub: String?,
+    desc: String?,
+    meta: List<Pair<String, Boolean>>,   // text, isNext
+    modifier: Modifier = Modifier,
+) {
+    AnimatedVisibility(visible, enter = fadeIn(), exit = fadeOut(), modifier = modifier) {
+        Column(Modifier.fillMaxWidth(0.62f)) {
+            Text(kicker, color = DimInk, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.4.sp)
+            Text(
+                title, color = Ink, fontSize = 30.sp, fontWeight = FontWeight.SemiBold, lineHeight = 34.sp,
+                letterSpacing = (-0.6).sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            if (!sub.isNullOrEmpty()) Text(
+                sub, color = DimInk, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp),
+            )
+            if (!desc.isNullOrEmpty()) Text(
+                desc, color = Color(0xCCEBEBF5), fontSize = 13.5.sp, lineHeight = 19.sp, maxLines = 3,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 10.dp),
+            )
+            if (meta.isNotEmpty()) Row(
+                Modifier.padding(top = 14.dp),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+            ) {
+                meta.forEach { (t, next) ->
+                    Text(
+                        t, color = if (next) Color.Black else Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .background(if (next) Color(0xEBFFFFFF) else Glass, RoundedCornerShape(50))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Picture, codec, rates, buffer, dropped frames — read like a camera HUD, not a debug dump. */
+@Composable
+internal fun PlaybackInfoHud(rows: List<InfoRow>, modifier: Modifier = Modifier) {
+    Column(
+        modifier
+            .width(250.dp)
+            .background(Color(0xD91C1C1E), RoundedCornerShape(14.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        Text("PLAYBACK INFO", color = Color(0x8CEBEBF5), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp)
+        rows.forEachIndexed { i, r ->
+            Row(Modifier.fillMaxWidth().padding(top = if (i == 0) 8.dp else 5.dp)) {
+                Text(r.k, color = DimInk, fontSize = 12.5.sp, modifier = Modifier.weight(1f))
+                Text(
+                    r.v, color = if (r.warn) Color(0xFFFFB340) else Ink, fontSize = 12.5.sp,
+                    fontWeight = FontWeight.Medium, maxLines = 1,
+                )
+            }
+        }
+        if (rows.isEmpty()) Text("Waiting for the stream…", color = DimInk, fontSize = 12.5.sp, modifier = Modifier.padding(top = 8.dp))
+    }
+}
+
+/** Subtitle timing: one big number and four nudges, like a camera's exposure offset. */
+@Composable
+internal fun SubTimingPanel(offsetMs: Long, onNudge: (Long) -> Unit, onReset: () -> Unit, onDone: () -> Unit, modifier: Modifier = Modifier) {
+    Column(
+        modifier
+            .width(280.dp)
+            .background(Color(0xD91C1C1E), RoundedCornerShape(14.dp))
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("SUBTITLE TIMING", color = Color(0x8CEBEBF5), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp, modifier = Modifier.weight(1f))
+            GlassPill("Done", onClick = onDone)
+        }
+        Text(
+            fmtSubOffset(offsetMs), color = Ink, fontSize = 30.sp, fontWeight = FontWeight.SemiBold,
+            letterSpacing = (-0.4).sp, modifier = Modifier.padding(top = 10.dp).align(Alignment.CenterHorizontally),
+        )
+        Text(
+            when { offsetMs > 0 -> "Subtitles later"; offsetMs < 0 -> "Subtitles earlier"; else -> "In sync" },
+            color = DimInk, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.2.sp,
+            modifier = Modifier.padding(top = 2.dp, bottom = 12.dp).align(Alignment.CenterHorizontally),
+        )
+        Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp), modifier = Modifier.align(Alignment.CenterHorizontally)) {
+            GlassPill("−0.5", onClick = { onNudge(-500) })
+            GlassPill("−0.1", onClick = { onNudge(-100) })
+            GlassPill("+0.1", onClick = { onNudge(100) })
+            GlassPill("+0.5", onClick = { onNudge(500) })
+        }
+        Row(Modifier.padding(top = 8.dp).align(Alignment.CenterHorizontally)) {
+            GlassPill("Back in sync", on = offsetMs == 0L, onClick = onReset)
+        }
+        Text(
+            "If the words arrive before the voices, choose +.",
+            color = Color(0x8CEBEBF5), fontSize = 11.5.sp, lineHeight = 15.sp,
+            modifier = Modifier.padding(top = 12.dp),
         )
     }
 }
@@ -137,6 +255,11 @@ internal fun TitleCardChrome(
     onSpeedCycle: () -> Unit,
     onPip: () -> Unit,
     onFullscreen: () -> Unit,
+    dimTitle: Boolean = false,          // the pause board is saying it already
+    infoOn: Boolean = false,
+    onInfo: () -> Unit = {},
+    showTiming: Boolean = false,
+    onTiming: () -> Unit = {},
 ) {
     AnimatedVisibility(visible, enter = fadeIn(), exit = fadeOut()) {
         Box(Modifier.fillMaxSize()) {
@@ -195,7 +318,7 @@ internal fun TitleCardChrome(
             // bottom: title + pills, then the scrubber, then the times
             Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp)) {
                 Row(verticalAlignment = Alignment.Bottom) {
-                    Column(Modifier.weight(1f).padding(end = 16.dp)) {
+                    Column(Modifier.weight(1f).padding(end = 16.dp).alpha(if (dimTitle) 0f else 1f)) {
                         Text(
                             title, color = Ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
                             letterSpacing = (-0.3).sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -205,16 +328,19 @@ internal fun TitleCardChrome(
                         }
                     }
                 }
+                // more pills than a phone is wide: the row scrolls, and D-pad focus drags it along
                 Row(
-                    Modifier.padding(top = 10.dp),
+                    Modifier.padding(top = 10.dp).horizontalScroll(rememberScrollState()),
                     horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
                 ) {
                     if (hasNext) GlassPill("Next ›", onClick = onNext)
                     if (showSubtitles) GlassPill("Subtitles", onClick = onSubtitles)
                     if (showSubtitles) GlassPill("Style", onClick = onSubStyle)
+                    if (showTiming) GlassPill("Timing", onClick = onTiming)
                     if (showAudio) GlassPill("Audio", onClick = onAudio)
                     if (qualityLabel != null) GlassPill("Quality", qualityLabel, onClick = onQuality)
                     GlassPill("Speed", speedLabel, onClick = onSpeedCycle)
+                    GlassPill("Info", on = infoOn, onClick = onInfo)
                     GlassPill(if (partyActive) "Leave party" else "Party", onClick = onParty)
                     if (partyActive) {
                         GlassPill("Invite", onClick = onInvite)

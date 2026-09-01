@@ -179,6 +179,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.TrackSelectionDialogBuilder
@@ -376,6 +377,7 @@ private sealed interface Screen {
         val contentName: String? = null,
         val poster: String? = null,
         val addonUrl: String? = null,
+        val description: String? = null,   // the synopsis the pause board shows
     ) : Screen
 }
 
@@ -935,6 +937,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                             it.url, it.name, it.subtitles,
                                             s.item.type, s.item.id, s.item.name,
                                             s.item.poster, s.addon.manifestUrl,
+                                            description = s.item.description,
                                         )
                                     )
                                 },
@@ -943,6 +946,8 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 s.url, s.title, s.subs,
                                 contentType = s.type, contentId = s.id, contentName = s.contentName,
                                 poster = s.poster, addonUrl = s.addonUrl,
+                                description = s.description,
+                                currentEpisode = seriesChain.episodes.getOrNull(seriesChain.index),
                                 nextEpisode = seriesChain.next(),
                                 onPlayNext = { ep -> playEpisode(ep) },
                                 onProgressSaved = { homeState.invalidateContinue() },
@@ -2755,8 +2760,14 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
                 "Hold speed", null,
                 listOf("1.5" to "1.5×", "2.0" to "2×", "3.0" to "3×"),
                 when (Prefs.holdRate) { 1.5f -> "1.5"; 3.0f -> "3.0"; else -> "2.0" },
-                divider = false,
             ) { Prefs.setHoldRate(ctx, it.toFloat()) }
+            SettingsChips(
+                "Picture quality",
+                "Auto adapts to your connection · Start high opens at the best rendition · Data saver caps at 720p",
+                listOf("auto" to "Auto", "high" to "Start high", "saver" to "Data saver"),
+                Prefs.quality,
+                divider = false,
+            ) { Prefs.setQuality(ctx, it) }
         }
         SettingsHeader("LANGUAGES")
         SettingsGroup {
@@ -3794,6 +3805,8 @@ private fun PlayerScreen(
     contentName: String? = null,
     poster: String? = null,
     addonUrl: String? = null,
+    description: String? = null,
+    currentEpisode: Episode? = null,
     nextEpisode: Episode? = null,
     onPlayNext: (Episode) -> Unit = {},
     onProgressSaved: () -> Unit = {},
@@ -3828,8 +3841,27 @@ private fun PlayerScreen(
     var skipFlash by remember { mutableStateOf<Triple<Int, Int, Long>?>(null) } // zone (-1/+1), total secs, stamp
     var heldSpeed by remember { mutableStateOf<Float?>(null) }                  // speed to restore after hold-to-speed
     var dragSeek by remember { mutableStateOf<Pair<Long, Long>?>(null) }        // target ms, delta ms
+    var pauseBoardOn by remember { mutableStateOf(false) }
+    var pausedSince by remember { mutableStateOf(0L) }
+    var pinfoOn by remember { mutableStateOf(false) }
+    var infoRows by remember { mutableStateOf<List<InfoRow>>(emptyList()) }
+    var subOffsetMs by remember { mutableStateOf(0L) }
+    var subTimingOpen by remember { mutableStateOf(false) }
+    var subBaseFile by remember { mutableStateOf<Pair<Uri, String>?>(null) }   // unshifted add-on subtitle, mime
+    var subAppliedMs by remember { mutableStateOf(0L) }                          // offset the player currently has
+    // Our own meter so the HUD can read the estimate; Start high seeds it so the
+    // first segments are fetched at the best rendition, Data saver seeds it low.
+    val bandwidth = remember {
+        DefaultBandwidthMeter.Builder(context).apply {
+            when (Prefs.quality) {
+                "high" -> setInitialBitrateEstimate(30_000_000L)
+                "saver" -> setInitialBitrateEstimate(1_500_000L)
+            }
+        }.build()
+    }
     val exo = remember {
         ExoPlayer.Builder(context)
+            .setBandwidthMeter(bandwidth)
             // Without these the app behaves as if it were the only thing on the
             // phone: a call or another app's audio would play *over* the film,
             // and pulling the headphones out would blast it from the speaker.
@@ -3845,16 +3877,23 @@ private fun PlayerScreen(
             .apply {
                 playWhenReady = true
                 // "" means follow the device, which is ExoPlayer's own default
-                if (Prefs.audioLang.isNotEmpty() || Prefs.subLang.isNotEmpty()) {
+                if (Prefs.audioLang.isNotEmpty() || Prefs.subLang.isNotEmpty() || Prefs.quality == "saver") {
                     trackSelectionParameters = trackSelectionParameters.buildUpon()
                         .apply {
                             if (Prefs.audioLang.isNotEmpty()) setPreferredAudioLanguage(Prefs.audioLang)
                             if (Prefs.subLang.isNotEmpty()) setPreferredTextLanguage(Prefs.subLang)
+                            if (Prefs.quality == "saver") setMaxVideoSize(Int.MAX_VALUE, 720)   // Data saver
                         }
                         .build()
                 }
             }
     }
+    // "Show · S1E2 · Episode name" is how the chain labels an episode; take it apart again
+    val nameParts = remember(contentName) { (contentName ?: "").split(" · ") }
+    val showName = nameParts.firstOrNull()?.takeIf { it.isNotEmpty() } ?: title
+    val episodeName = if (contentType == "series" && nameParts.size >= 3) nameParts.drop(2).joinToString(" · ") else null
+    val episodeTag = contentId?.takeIf { contentType == "series" }?.split(":")
+        ?.takeIf { it.size >= 3 }?.let { "S" + it[it.size - 2] + " · E" + it[it.size - 1] }
     // Publishes to the platform so the lock screen, the output switcher and the
     // play/pause button on a headset all reach this player. Released alongside
     // the player below, and deliberately before it — a session outliving its
@@ -4077,9 +4116,40 @@ private fun PlayerScreen(
             posMs = exo.currentPosition.coerceAtLeast(0L)
             durMs = if (exo.duration == C.TIME_UNSET) 0L else exo.duration
             bufMs = exo.bufferedPosition.coerceAtLeast(0L)
-            if (chromeVisible && exo.isPlaying && !subStyleOpen &&
-                System.currentTimeMillis() - chromeTouchedAt > 3500) chromeVisible = false
+            val now = System.currentTimeMillis()
+            if (chromeVisible && exo.isPlaying && !subStyleOpen && !subTimingOpen &&
+                now - chromeTouchedAt > 3500) chromeVisible = false
+            // The pause board: a moment after pausing (or at the end), when nothing
+            // else is open, and only once something has actually played.
+            val resting = !exo.isPlaying && (exo.playbackState == Player.STATE_ENDED ||
+                (exo.playbackState == Player.STATE_READY && !exo.playWhenReady))
+            if (!resting) pausedSince = 0L else if (pausedSince == 0L) pausedSince = now
+            pauseBoardOn = resting && !inPipMode.value && !subStyleOpen && !subsMenuOpen && !subTimingOpen &&
+                !upnextOpen && exo.currentPosition > 1000 && now - pausedSince > 1600 && now - chromeTouchedAt > 1600
+            if (pinfoOn) infoRows = playbackInfoRows(exo, bandwidth, subOffsetMs)
         }
+    }
+
+    /** Re-feed the active add-on subtitle with every cue moved by subOffsetMs. */
+    fun applySubOffset() {
+        val base = subBaseFile ?: return
+        val cur = exo.currentMediaItem ?: return
+        val uri = if (subOffsetMs == 0L) base.first else shiftedSubFile(context, base.first, subOffsetMs) ?: return
+        val keep = cur.localConfiguration?.subtitleConfigurations?.filter { it.id != "addon-pick" } ?: emptyList()
+        val cfg = MediaItem.SubtitleConfiguration.Builder(uri)
+            .setId("addon-pick").setMimeType(base.second)
+            .setLanguage(cur.localConfiguration?.subtitleConfigurations?.firstOrNull { it.id == "addon-pick" }?.language)
+            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT).build()
+        val pos = exo.currentPosition
+        val wasPlaying = exo.playWhenReady
+        exo.setMediaItem(cur.buildUpon().setSubtitleConfigurations(keep + cfg).build(), pos)
+        exo.prepare()
+        exo.playWhenReady = wasPlaying
+        subAppliedMs = subOffsetMs
+    }
+    // several quick nudges become one re-prepare
+    LaunchedEffect(subOffsetMs) {
+        if (subBaseFile != null && subOffsetMs != subAppliedMs) { delay(600); applySubOffset() }
     }
 
     // In picture-in-picture only the video shows — no chrome, no gestures.
@@ -4208,14 +4278,20 @@ private fun PlayerScreen(
             )
         }
         // the Title Card chrome (see PlayerChrome.kt)
+        // a scrim under the pause board, so the words read over any picture
+        if (pauseBoardOn && !pip) Box(Modifier.fillMaxSize().background(Color(0x7A000000)))
         if (!pip) TitleCardChrome(
             visible = chromeVisible,
-            title = title,
+            title = showName,
             isPlaying = isPlayingState,
             isLive = isLiveState,
             positionMs = posMs, durationMs = durMs, bufferedMs = bufMs,
-            episodeTag = contentId?.takeIf { contentType == "series" }?.split(":")
-                ?.takeIf { it.size >= 3 }?.let { "S" + it[it.size - 2] + " · E" + it[it.size - 1] },
+            episodeTag = episodeTag?.let { t -> if (episodeName != null) "$t · $episodeName" else t },
+            dimTitle = pauseBoardOn,
+            infoOn = pinfoOn,
+            onInfo = { pinfoOn = !pinfoOn; chromeTouchedAt = System.currentTimeMillis() },
+            showTiming = subBaseFile != null,
+            onTiming = { subTimingOpen = !subTimingOpen; subsMenuOpen = false; subStyleOpen = false; chromeTouchedAt = System.currentTimeMillis() },
             qualityLabel = qualityLabel?.takeIf { videoQualityCount >= 1 },
             speedLabel = speedLabel,
             partyActive = partyUi.active(),
@@ -4259,10 +4335,11 @@ private fun PlayerScreen(
                     }
                 } else {
                     subsMenuOpen = !subsMenuOpen
+                    subTimingOpen = false
                 }
                 chromeTouchedAt = System.currentTimeMillis()
             },
-            onSubStyle = { subStyleOpen = !subStyleOpen; chromeTouchedAt = System.currentTimeMillis() },
+            onSubStyle = { subStyleOpen = !subStyleOpen; subTimingOpen = false; chromeTouchedAt = System.currentTimeMillis() },
             onAudio = {
                 runCatching {
                     TrackSelectionDialogBuilder(context, "Audio", exo, C.TRACK_TYPE_AUDIO)
@@ -4294,6 +4371,44 @@ private fun PlayerScreen(
                 }
             },
         )
+        // The pause board (top-left, under the back button) and the playback HUD (top-right)
+        if (!pip) {
+            val remain = (durMs - posMs).coerceAtLeast(0L)
+            val ended = exo.playbackState == Player.STATE_ENDED
+            val meta = mutableListOf<Pair<String, Boolean>>()
+            if (!ended) {
+                if (isLiveState) {
+                    val off = exo.currentLiveOffset
+                    meta += (if (off != C.TIME_UNSET && off > 12_000) fmtTime(off) + " behind live" else "At the live edge") to false
+                } else if (durMs > 0) {
+                    meta += (if (remain >= 60_000) "${remain / 60_000} min left" else "Under a minute left") to false
+                    val ends = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+                        .format(java.util.Date(System.currentTimeMillis() + (remain / exo.playbackParameters.speed).toLong()))
+                    meta += "Ends $ends" to false
+                }
+            }
+            nextEpisode?.let { n ->
+                meta += ("Up next · S${n.season}" + (n.episode?.let { "E$it" } ?: "") +
+                    (if (n.name.isNotEmpty()) " · ${n.name}" else "")) to true
+            }
+            PauseBoard(
+                visible = pauseBoardOn,
+                kicker = when { ended -> "Finished"; isLiveState -> "Live · Paused"; else -> "Paused" },
+                title = showName,
+                sub = episodeTag?.let { t -> if (episodeName != null) "$t · $episodeName" else t },
+                desc = currentEpisode?.overview?.takeIf { it.isNotBlank() } ?: description,
+                meta = meta,
+                modifier = Modifier.align(Alignment.TopStart).padding(start = 20.dp, top = 84.dp),
+            )
+            if (pinfoOn) PlaybackInfoHud(infoRows, Modifier.align(Alignment.TopEnd).padding(end = 20.dp, top = 76.dp))
+            if (subTimingOpen) SubTimingPanel(
+                offsetMs = subOffsetMs,
+                onNudge = { d -> subOffsetMs += d; chromeTouchedAt = System.currentTimeMillis() },
+                onReset = { subOffsetMs = 0L; chromeTouchedAt = System.currentTimeMillis() },
+                onDone = { subTimingOpen = false; chromeTouchedAt = System.currentTimeMillis() },
+                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 20.dp),
+            )
+        }
         // Party reactions float up from the bottom
         partyUi.reactions.forEach { r ->
             key(r.first) { ReactionFloat(r.second, r.third) }
@@ -4332,6 +4447,8 @@ private fun PlayerScreen(
                         .setPreferredTextLanguage(st.lang)
                         .build()
                     activeAddonSub = st.url
+                    subBaseFile = Pair(uri, mime)
+                    subOffsetMs = 0L; subAppliedMs = 0L
                     subsMenuOpen = false
                 }
             }
@@ -4354,6 +4471,8 @@ private fun PlayerScreen(
                             exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
                                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build()
                             activeAddonSub = null
+                            subBaseFile = null
+                            subOffsetMs = 0L; subAppliedMs = 0L
                             subsMenuOpen = false
                         }
                     }
