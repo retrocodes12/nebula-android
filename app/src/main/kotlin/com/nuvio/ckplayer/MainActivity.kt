@@ -1972,7 +1972,9 @@ private fun SyncPanel(onSynced: () -> Unit) {
                 ) { Text("Link", color = TextC, fontWeight = FontWeight.SemiBold) }
             }
         } else {
-            Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            // two content-sized buttons do not fit a phone row — the second one
+            // wrapped mid-label. Primary owns the width; the exit is quiet below.
+            Column(Modifier.padding(top = 12.dp)) {
                 Button(
                     onClick = {
                         busy = true
@@ -1985,15 +1987,20 @@ private fun SyncPanel(onSynced: () -> Unit) {
                     enabled = !busy,
                     colors = ButtonDefaults.buttonColors(containerColor = Red),
                     shape = RoundedCornerShape(12.dp),
-                ) { Text("Link another device", fontWeight = FontWeight.SemiBold) }
-                Button(
-                    onClick = {
-                        Cloud.leave(ctx); linked = false; shownCode = null
-                        msg = "Sync is off for this device. Nothing was deleted."
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Surface2),
-                    shape = RoundedCornerShape(12.dp),
-                ) { Text("Stop syncing", color = TextC) }
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Link another device", fontWeight = FontWeight.SemiBold, maxLines = 1) }
+                Text(
+                    "Stop syncing on this device",
+                    color = MutedC, fontSize = 14.sp, maxLines = 1,
+                    modifier = Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable {
+                            Cloud.leave(ctx); linked = false; shownCode = null
+                            msg = "Sync is off for this device. Nothing was deleted."
+                        }
+                        .padding(vertical = 12.dp),
+                    textAlign = TextAlign.Center,
+                )
             }
         }
         shownCode?.let { c ->

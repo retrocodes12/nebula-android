@@ -48,9 +48,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.38.0.apk
+          cp "$APK" Nebula-1.39.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.38.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.38.0 Nebula-1.38.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.38.0" \
-            --notes "Inspection fixes: file sizes now read the same on every phone regardless of language, series pages open faster by reusing metadata already fetched, and the stream picker header uses proper backdrop artwork."
+          gh release delete v1.39.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.39.0 Nebula-1.39.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.39.0" \
+            --notes "Playback engine updated to Media3 1.11 (from 1.4), with the build toolchain moved up to match. Also fixes the Stop syncing button wrapping mid-label in Settings."

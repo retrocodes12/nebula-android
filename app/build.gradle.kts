@@ -12,8 +12,8 @@ android {
         applicationId = "com.nuvio.ckplayer"
         minSdk = 26
         targetSdk = 34
-        versionCode = 45
-        versionName = "1.38.0"
+        versionCode = 46
+        versionName = "1.39.0"
     }
 
     // Read signing config from Gradle -P properties (passed explicitly on the CI
