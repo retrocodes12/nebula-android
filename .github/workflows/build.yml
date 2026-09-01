@@ -48,9 +48,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.28.0.apk
+          cp "$APK" Nebula-1.29.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.28.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.28.0 Nebula-1.28.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.28.0" \
-            --notes "Adds a Privacy Policy link in Settings. Nebula's promise, now in writing: no accounts, no analytics, no tracking — read it at play.rifflehq.in/privacy.html."
+          gh release delete v1.29.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.29.0 Nebula-1.29.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.29.0" \
+            --notes "Subtitles for everything: Nebula now asks your subtitle add-ons (OpenSubtitles ships by default) for any movie or episode, with an in-player picker by language — plus the subtitle Style panel now opens in the player as intended."

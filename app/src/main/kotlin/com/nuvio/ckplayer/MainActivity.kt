@@ -607,6 +607,18 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                         homeState.invalidate()
                     }
                 }
+                // OpenSubtitles was never seeded on Android (web always had it) —
+                // one-time add so subtitles exist out of the box here too
+                if (!p.getBoolean("seeded_subs_v1", false)) {
+                    p.edit().putBoolean("seeded_subs_v1", true).apply()
+                    val osUrl = "https://opensubtitles-v3.strem.io/manifest.json"
+                    val cur = loadAddons(ctx)
+                    if (cur.none { it.manifestUrl == osUrl }) {
+                        val os = Addon(osUrl, "OpenSubtitles v3", "https://opensubtitles-v3.strem.io", null)
+                        saveAddonsRaw(ctx, cur + os)
+                        Cloud.stampSeed(ctx, os.manifestUrl)
+                    }
+                }
             }
 
             // ---- cross-device sync wiring ----
@@ -2485,6 +2497,44 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
     }
 }
 
+/** One row of the in-player subtitle picker. */
+@Composable
+private fun SubMenuRow(label: String, active: Boolean, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    Row(
+        Modifier.fillMaxWidth()
+            .clickable(interactionSource = interaction, indication = null) { onClick() }
+            .background(if (focused) Color(0x14FFFFFF) else Color.Transparent)
+            .padding(horizontal = 16.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, color = TextC, fontSize = 14.sp, fontWeight = if (active) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.weight(1f))
+        if (active) Text("✓", color = Color(0xFF46D369), fontSize = 13.sp, fontWeight = FontWeight.Black)
+    }
+}
+
+private fun langLabel(code: String): String = runCatching {
+    val c = code.trim().lowercase()
+    if (c.isEmpty() || c == "und") "Unknown"
+    else java.util.Locale(c.take(3)).getDisplayLanguage(java.util.Locale.ENGLISH)
+        .ifEmpty { c.uppercase() }.replaceFirstChar { it.uppercase() }
+}.getOrDefault(code.uppercase())
+
+/** Add-on subtitle links carry no extension and are sometimes CP1252 — download,
+    sniff the format, re-encode as UTF-8 and hand ExoPlayer a local file. */
+private suspend fun cachedSubFile(ctx: Context, st: SubTrack): Pair<Uri, String>? = runCatching {
+    val raw = Stremio.httpGetBytes(st.url)
+    var text = String(raw, Charsets.UTF_8)
+    if (text.isBlank() || text.contains('\uFFFD')) text = String(raw, charset("windows-1252"))
+    text = text.removePrefix("\uFEFF")
+    if (text.isBlank()) return@runCatching null
+    val vtt = text.trimStart().startsWith("WEBVTT")
+    val f = File(ctx.cacheDir, "sub-" + Integer.toHexString(st.url.hashCode()) + (if (vtt) ".vtt" else ".srt"))
+    f.writeText(text)
+    Pair(Uri.fromFile(f), if (vtt) MimeTypes.TEXT_VTT else MimeTypes.APPLICATION_SUBRIP)
+}.getOrNull()
+
 // ---------- player (unchanged behavior) ----------
 @OptIn(UnstableApi::class)
 @Composable
@@ -2511,6 +2561,11 @@ private fun PlayerScreen(
     var audioTrackCount by remember { mutableStateOf(0) }
     var textTrackCount by remember { mutableStateOf(0) }
     var subStyleOpen by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    var addonSubs by remember { mutableStateOf<List<SubTrack>>(emptyList()) }
+    var subsMenuOpen by remember { mutableStateOf(false) }
+    var subBusy by remember { mutableStateOf(false) }
+    var activeAddonSub by remember { mutableStateOf<String?>(null) }
     // the Title Card chrome replaces Media3's controller entirely
     var chromeVisible by remember { mutableStateOf(true) }
     var chromeTouchedAt by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -2609,6 +2664,21 @@ private fun PlayerScreen(
                 ).show()
             }
         }.onFailure { error = it.message }
+    }
+
+    // Ask every subtitle-capable add-on what it has for this title (web parity).
+    LaunchedEffect(contentId) {
+        if (contentType == null || contentId == null) return@LaunchedEffect
+        val found = mutableListOf<SubTrack>()
+        for (a in loadAddons(context)) {
+            runCatching {
+                if (!manifestFor(a.manifestUrl).canSubs(contentType, contentId)) return@runCatching
+                found += Stremio.loadSubtitles(a.base, contentType, contentId)
+            }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+        }
+        // a couple per language is plenty for a picker
+        addonSubs = found.groupBy { it.lang.lowercase() }.toSortedMap()
+            .values.flatMap { it.take(2) }.take(24)
     }
 
     // Keep the resume point roughly current while playing.
@@ -2844,7 +2914,7 @@ private fun PlayerScreen(
             partyBadge = partyUi.code?.let { c -> c + " · " + partyUi.count },
             hasNext = nextEpisode != null,
             canPip = (activity as? MainActivity)?.pipSupported() == true,
-            showSubtitles = textTrackCount >= 1 || subs.isNotEmpty(),
+            showSubtitles = textTrackCount >= 1 || subs.isNotEmpty() || addonSubs.isNotEmpty(),
             showAudio = audioTrackCount >= 2,
             onBack = { (activity as? androidx.activity.ComponentActivity)?.onBackPressedDispatcher?.onBackPressed() },
             onPlayPause = {
@@ -2860,10 +2930,15 @@ private fun PlayerScreen(
                 chromeTouchedAt = System.currentTimeMillis()
             },
             onSubtitles = {
-                runCatching {
-                    TrackSelectionDialogBuilder(context, "Subtitles", exo, C.TRACK_TYPE_TEXT)
-                        .setShowDisableOption(true).build().show()
+                if (addonSubs.isEmpty()) {
+                    runCatching {
+                        TrackSelectionDialogBuilder(context, "Subtitles", exo, C.TRACK_TYPE_TEXT)
+                            .setShowDisableOption(true).build().show()
+                    }
+                } else {
+                    subsMenuOpen = !subsMenuOpen
                 }
+                chromeTouchedAt = System.currentTimeMillis()
             },
             onSubStyle = { subStyleOpen = !subStyleOpen; chromeTouchedAt = System.currentTimeMillis() },
             onAudio = {
@@ -2897,6 +2972,81 @@ private fun PlayerScreen(
                 }
             },
         )
+        // Subtitle style panel (the Style pill toggles it)
+        if (subStyleOpen && !pip) {
+            Box(Modifier.align(Alignment.CenterEnd).padding(end = 20.dp)) {
+                SubStylePanel(onDone = { subStyleOpen = false })
+            }
+        }
+        // Add-on subtitle picker
+        if (subsMenuOpen && !pip) {
+            fun applyPick(st: SubTrack) {
+                subBusy = true
+                scope.launch {
+                    val r = cachedSubFile(context, st)
+                    subBusy = false
+                    if (r == null) {
+                        android.widget.Toast.makeText(context, "Could not load that subtitle", android.widget.Toast.LENGTH_SHORT).show()
+                        return@launch
+                    }
+                    val (uri, mime) = r
+                    val cur = exo.currentMediaItem ?: return@launch
+                    val keep = cur.localConfiguration?.subtitleConfigurations?.filter { it.id != "addon-pick" } ?: emptyList()
+                    val cfg = MediaItem.SubtitleConfiguration.Builder(uri)
+                        .setId("addon-pick")
+                        .setMimeType(mime)
+                        .setLanguage(st.lang)
+                        .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                        .build()
+                    val pos = exo.currentPosition
+                    exo.setMediaItem(cur.buildUpon().setSubtitleConfigurations(keep + cfg).build(), pos)
+                    exo.prepare(); exo.play()
+                    exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                        .setPreferredTextLanguage(st.lang)
+                        .build()
+                    activeAddonSub = st.url
+                    subsMenuOpen = false
+                }
+            }
+            Column(
+                Modifier.align(Alignment.CenterEnd).padding(end = 20.dp)
+                    .width(280.dp)
+                    .background(SurfaceC, RoundedCornerShape(14.dp))
+                    .border(1.dp, Line2, RoundedCornerShape(14.dp))
+                    .padding(vertical = 8.dp)
+                    .heightIn(max = 420.dp),
+            ) {
+                Text(
+                    "SUBTITLES" + (if (subBusy) " · LOADING…" else ""),
+                    color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                )
+                LazyColumn {
+                    item {
+                        SubMenuRow("Off", activeAddonSub == null && textTrackCount == 0) {
+                            exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build()
+                            activeAddonSub = null
+                            subsMenuOpen = false
+                        }
+                    }
+                    if (textTrackCount >= 1) item {
+                        SubMenuRow("Embedded tracks…", false) {
+                            subsMenuOpen = false
+                            runCatching {
+                                TrackSelectionDialogBuilder(context, "Subtitles", exo, C.TRACK_TYPE_TEXT)
+                                    .setShowDisableOption(true).build().show()
+                            }
+                        }
+                    }
+                    items(addonSubs.size) { i ->
+                        val st = addonSubs[i]
+                        SubMenuRow(langLabel(st.lang), activeAddonSub == st.url) { applyPick(st) }
+                    }
+                }
+            }
+        }
         // Up next: offered near the end, counts down and autoplays once the episode ends.
         if (upnextOpen && nextEpisode != null && !pip) {
             Column(

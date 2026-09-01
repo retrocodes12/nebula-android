@@ -29,10 +29,14 @@ data class ManifestInfo(
     val hasMeta: Boolean = false,
     val metaTypes: List<String>? = null,
     val metaIdPrefixes: List<String>? = null,
+    val hasSubs: Boolean = false,
+    val subTypes: List<String>? = null,
+    val subIdPrefixes: List<String>? = null,
 ) {
     /** Stremio semantics: stream resource + matching type + matching id prefix (absent = match all). */
     fun canStream(type: String, id: String): Boolean = matches(hasStreams, streamTypes, streamIdPrefixes, type, id)
     fun canMeta(type: String, id: String): Boolean = matches(hasMeta, metaTypes, metaIdPrefixes, type, id)
+    fun canSubs(type: String, id: String): Boolean = matches(hasSubs, subTypes, subIdPrefixes, type, id)
     private fun matches(has: Boolean, types: List<String>?, prefixes: List<String>?, type: String, id: String): Boolean {
         if (!has) return false
         if (!types.isNullOrEmpty() && type !in types) return false
@@ -78,6 +82,36 @@ data class FullMeta(
 )
 
 object Stremio {
+
+    suspend fun httpGetBytes(u: String): ByteArray = withContext(Dispatchers.IO) {
+        val conn = URL(u).openConnection() as HttpURLConnection
+        conn.connectTimeout = 15000
+        conn.readTimeout = 20000
+        conn.instanceFollowRedirects = true
+        conn.setRequestProperty("Accept", "*/*")
+        conn.setRequestProperty("User-Agent", "NebulaPlayer")
+        try {
+            val code = conn.responseCode
+            val body = (if (code in 200..299) conn.inputStream else conn.errorStream)?.use { it.readBytes() }
+            if (code !in 200..299 || body == null) throw RuntimeException("HTTP $code")
+            body
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** Subtitle add-on query: /subtitles/{type}/{id}.json -> [{url, lang}] */
+    suspend fun loadSubtitles(base: String, type: String, id: String): List<SubTrack> {
+        val j = JSONObject(httpGetText("$base/subtitles/${enc(type)}/${enc(id)}.json"))
+        val arr = j.optJSONArray("subtitles") ?: return emptyList()
+        val out = mutableListOf<SubTrack>()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val u = o.optString("url")
+            if (u.isNotEmpty()) out.add(SubTrack(u, o.optString("lang", o.optString("language", "und"))))
+        }
+        return out
+    }
 
     suspend fun httpGetText(u: String): String = withContext(Dispatchers.IO) {
         val conn = URL(u).openConnection() as HttpURLConnection
@@ -149,6 +183,9 @@ object Stremio {
         var hasMeta = false
         var mTypes: List<String>? = null
         var mPrefixes: List<String>? = null
+        var hasSubs = false
+        var subTypes: List<String>? = null
+        var subPrefixes: List<String>? = null
         val topTypes = strList(j.optJSONArray("types"))
         val topPrefixes = strList(j.optJSONArray("idPrefixes"))
         val res = j.optJSONArray("resources")
@@ -156,6 +193,7 @@ object Stremio {
             when (val r = res.opt(i)) {
                 "stream" -> { hasStreams = true; sTypes = topTypes; sPrefixes = topPrefixes }
                 "meta" -> { hasMeta = true; mTypes = topTypes; mPrefixes = topPrefixes }
+                "subtitles" -> { hasSubs = true; subTypes = topTypes; subPrefixes = topPrefixes }
                 is JSONObject -> when (r.optString("name")) {
                     "stream" -> {
                         hasStreams = true
@@ -167,10 +205,15 @@ object Stremio {
                         mTypes = strList(r.optJSONArray("types")) ?: topTypes
                         mPrefixes = strList(r.optJSONArray("idPrefixes")) ?: topPrefixes
                     }
+                    "subtitles" -> {
+                        hasSubs = true
+                        subTypes = strList(r.optJSONArray("types")) ?: topTypes
+                        subPrefixes = strList(r.optJSONArray("idPrefixes")) ?: topPrefixes
+                    }
                 }
             }
         }
-        return ManifestInfo(addon, cats, hasStreams, sTypes, sPrefixes, hasMeta, mTypes, mPrefixes)
+        return ManifestInfo(addon, cats, hasStreams, sTypes, sPrefixes, hasMeta, mTypes, mPrefixes, hasSubs, subTypes, subPrefixes)
     }
 
     /** Full meta for one title, or null when the add-on has nothing. */
