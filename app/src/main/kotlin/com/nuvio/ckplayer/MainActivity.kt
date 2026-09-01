@@ -788,6 +788,11 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                     push(Screen.Streams(s.addon, s.item))
                                 },
                                 onResumeEpisode = { r -> openProgress(r) },
+                                onPlayEpisode = { ep ->
+                                    seriesChain.index = seriesChain.episodes.indexOfFirst { it.id == ep.id }
+                                    val label = seriesChain.label(ep)
+                                    push(Screen.Streams(s.addon, MetaItem(ep.id, "series", label, s.item.poster)))
+                                },
                             )
                             is Screen.Catalog -> CatalogScreen(
                                 s.addon, s.initial,
@@ -1953,6 +1958,7 @@ private fun DetailScreen(
     onEpisodes: () -> Unit,
     onPlayMovie: () -> Unit,
     onResumeEpisode: (ProgressRec) -> Unit,
+    onPlayEpisode: (Episode) -> Unit = { },
 ) {
     val ctx = LocalContext.current
     val ck = item.type + ":" + item.id
@@ -1995,7 +2001,50 @@ private fun DetailScreen(
                 )
             )
         }
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 16.dp)) {
+        // series episodes live inline on this page (one scroll, like the big apps)
+        var episodes by remember(ck) { mutableStateOf<List<Episode>>(emptyList()) }
+        var selectedSeason by remember(ck) { mutableStateOf<Int?>(null) }
+        var upNextId by remember(ck) { mutableStateOf<String?>(null) }
+        var epsLoading by remember(ck) { mutableStateOf(item.type == "series") }
+        if (item.type == "series") LaunchedEffect(ck) {
+            val order = listOf(addon) + loadAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
+            var found: List<Episode> = emptyList()
+            for (a in order) {
+                val ok = runCatching {
+                    if (a.manifestUrl != addon.manifestUrl && !manifestFor(a.manifestUrl).canMeta(item.type, item.id)) return@runCatching false
+                    val vids = Stremio.loadSeriesVideos(a.base, item.type, item.id)
+                    if (vids.isNotEmpty()) { found = vids; true } else false
+                }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrDefault(false)
+                if (ok) break
+            }
+            epsLoading = false
+            if (found.isEmpty()) return@LaunchedEffect
+            episodes = found
+            seriesChain.set(item.type, item.name, addon, found)
+            // open at the viewer's place in the show, next-up highlighted
+            val flat = found.sortedWith(compareBy({ it.season == 0 }, { it.season }, { it.episode ?: 0 }))
+            val all = Progress.all(ctx)
+            var newest: ProgressRec? = null
+            var newestIdx = -1
+            flat.forEachIndexed { i, e ->
+                val r = all[Progress.key(item.type, e.id)] ?: return@forEachIndexed
+                if (r.dismissed) return@forEachIndexed
+                if (!r.done && !(r.pos >= Progress.MIN_POS_MS && r.dur > 0)) return@forEachIndexed
+                val cur = newest
+                if (cur == null || r.at > cur.at) { newest = r; newestIdx = i }
+            }
+            val up = if (newestIdx >= 0) flat[if (newest?.done == true) minOf(newestIdx + 1, flat.size - 1) else newestIdx] else null
+            upNextId = up?.id
+            selectedSeason = up?.season
+                ?: found.map { it.season }.distinct().sortedWith(compareBy({ it == 0 }, { it })).firstOrNull()
+        }
+        val bySeason = episodes.groupBy { it.season }
+        val seasons = bySeason.keys.sortedWith(compareBy({ it == 0 }, { it }))
+        val currentSeason = selectedSeason ?: seasons.firstOrNull()
+        val eps = (bySeason[currentSeason] ?: emptyList()).sortedBy { it.episode ?: 0 }
+
+        LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
+        item { Column {
         BackBar("", null, onBack)
         Spacer(Modifier.height(160.dp))
         val logoArt = full?.logo ?: item.logo
@@ -2015,28 +2064,55 @@ private fun DetailScreen(
         val facts = listOfNotNull(
             full?.releaseInfo ?: item.releaseInfo,
             full?.runtime,
-            (full?.imdbRating ?: item.imdbRating)?.let { "★ $it" },
             full?.videos?.map { it.season }?.filter { it > 0 }?.distinct()?.size
                 ?.takeIf { it > 0 }?.let { "$it season" + (if (it > 1) "s" else "") },
-            full?.genres?.take(3)?.joinToString(" · ")?.ifEmpty { null },
         ).joinToString("   ·   ")
-        if (facts.isNotEmpty()) Text(
-            facts.uppercase(), color = MutedC, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-            letterSpacing = 1.4.sp,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (facts.isNotEmpty()) Text(
+                facts.uppercase(), color = MutedC, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                letterSpacing = 1.4.sp,
+            )
+            (full?.imdbRating ?: item.imdbRating)?.let { r ->
+                Text(
+                    "★ $r", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.background(Surface2, RoundedCornerShape(8.dp))
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                )
+            }
+        }
         (full?.description ?: item.description)?.let {
             Text(it, color = MutedC, fontSize = 14.sp, lineHeight = 21.sp, maxLines = 7,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 10.dp))
         }
-        full?.let { f ->
-            val credits = buildString {
-                if (f.cast.isNotEmpty()) append("Cast  " + f.cast.joinToString(", "))
-                if (f.director.isNotEmpty()) { if (isNotEmpty()) append("\n"); append("Director  " + f.director.joinToString(", ")) }
+        full?.genres?.takeIf { it.isNotEmpty() }?.let { gs ->
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 14.dp),
+            ) {
+                items(gs.take(6).size) { i ->
+                    Text(
+                        gs[i], color = TextC, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.background(Surface2, RoundedCornerShape(50))
+                            .padding(horizontal = 14.dp, vertical = 7.dp),
+                    )
+                }
             }
-            if (credits.isNotEmpty()) Text(
-                credits, color = FaintC, fontSize = 12.5.sp, lineHeight = 19.sp,
-                modifier = Modifier.padding(top = 8.dp),
+        }
+        full?.cast?.takeIf { it.isNotEmpty() }?.let { cast ->
+            Text(
+                "CAST", color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                letterSpacing = 1.6.sp, modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
             )
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(cast.take(8).size) { i ->
+                    Text(
+                        cast[i], color = MutedC, fontSize = 13.sp,
+                        modifier = Modifier.background(SurfaceC, RoundedCornerShape(50))
+                            .border(1.dp, LineC, RoundedCornerShape(50))
+                            .padding(horizontal = 14.dp, vertical = 7.dp),
+                    )
+                }
+            }
         }
         Row(Modifier.padding(top = 16.dp, bottom = 24.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(
@@ -2048,7 +2124,10 @@ private fun DetailScreen(
                         item.type == "series" && r != null -> onResumeEpisode(
                             if (r.addonUrl.isEmpty()) r.copy(addonUrl = addon.manifestUrl) else r
                         )
-                        item.type == "series" -> onEpisodes()
+                        item.type == "series" -> {
+                            val first = episodes.sortedWith(compareBy({ it.season == 0 }, { it.season }, { it.episode ?: 0 })).firstOrNull()
+                            if (first != null) onPlayEpisode(first) else onEpisodes()
+                        }
                         else -> onPlayMovie()
                     }
                 },
@@ -2065,17 +2144,91 @@ private fun DetailScreen(
                     fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 6.dp),
                 )
             }
-            if (item.type == "series") Button(
-                onClick = onEpisodes,
-                colors = ButtonDefaults.buttonColors(containerColor = Surface2),
-                shape = RoundedCornerShape(12.dp),
-            ) { Text("Episodes", color = TextC, fontWeight = FontWeight.SemiBold) }
             Button(
                 onClick = { inList = Library.toggle(ctx, item.type, item, addon.manifestUrl) },
                 colors = ButtonDefaults.buttonColors(containerColor = Surface2),
                 shape = RoundedCornerShape(12.dp),
             ) { Text(if (inList) "✓ In My List" else "+ My List", color = TextC, fontWeight = FontWeight.SemiBold) }
         }
+        } }   // header item
+
+        if (item.type == "series") {
+            if (seasons.size > 1) item(key = "seasons") {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 14.dp)) {
+                    items(seasons.size) { i ->
+                        val sn = seasons[i]
+                        Chip(if (sn == 0) "Specials" else "Season $sn", sn == currentSeason) { selectedSeason = sn }
+                    }
+                }
+            }
+            if (epsLoading) items(4) { SkeletonRow(112.dp, 63.dp, circle = false) }
+            items(eps, key = { it.id }) { ep ->
+                DetailEpisodeRow(itemType = item.type, ep = ep, upNext = ep.id == upNextId, onClick = { onPlayEpisode(ep) })
+            }
+            item { Spacer(Modifier.height(24.dp)) }
+        }
+        }
+    }
+}
+
+/** One inline episode row on the series page: thumb, number+name, air date on
+    the right, overview beneath — the reference layout, in our language. */
+@Composable
+private fun DetailEpisodeRow(itemType: String, ep: Episode, upNext: Boolean, onClick: () -> Unit) {
+    val ctx = LocalContext.current
+    FocusCard(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp), onClick = onClick) {
+        Row(
+            Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(12.dp))
+                .border(1.dp, if (upNext) Color(0x73FFFFFF) else LineC, RoundedCornerShape(12.dp)).padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            val pr = Progress.get(ctx, itemType, ep.id)
+            Box {
+                val thumbMod = Modifier.width(112.dp).height(63.dp).clip(RoundedCornerShape(10.dp)).background(Color.Black)
+                if (ep.thumbnail != null) {
+                    AsyncImage(model = ep.thumbnail, contentDescription = null, contentScale = ContentScale.Crop, modifier = thumbMod)
+                } else {
+                    Box(thumbMod, contentAlignment = Alignment.Center) {
+                        Text(ep.episode?.toString() ?: "•", color = MutedC, fontWeight = FontWeight.Black, fontSize = 18.sp)
+                    }
+                }
+                if (pr?.done == true) {
+                    Box(
+                        Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp)
+                            .background(Color(0xD10B0B0F), CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) { Text("✓", color = Color(0xFF46D369), fontSize = 11.sp, fontWeight = FontWeight.Black) }
+                } else if (pr != null && pr.pos > 0 && pr.dur > 0) {
+                    Box(Modifier.align(Alignment.BottomStart).width(112.dp).height(4.dp).background(Color(0x8C000000))) {
+                        Box(Modifier.fillMaxWidth((pr.pos.toFloat() / pr.dur).coerceIn(0f, 1f)).fillMaxSize().background(Red))
+                    }
+                }
+            }
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        (ep.episode?.let { "$it. " } ?: "") + ep.name,
+                        color = TextC, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                    )
+                    val date = ep.released?.let {
+                        runCatching {
+                            java.time.LocalDate.parse(it.take(10))
+                                .format(java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy"))
+                        }.getOrNull()
+                    }
+                    if (date != null) Text(date, color = MutedC, fontSize = 12.sp, modifier = Modifier.padding(start = 8.dp))
+                    if (upNext) Text(
+                        "Up next", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(start = 8.dp)
+                            .background(Surface2, RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp),
+                    )
+                }
+                if (!ep.overview.isNullOrEmpty()) {
+                    Text(ep.overview, color = MutedC, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp))
+                }
+            }
         }
     }
 }

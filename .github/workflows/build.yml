@@ -48,9 +48,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.33.0.apk
+          cp "$APK" Nebula-1.34.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.33.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.33.0 Nebula-1.33.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.33.0" \
-            --notes "Search shows results as you type — no more hitting the search button. Works in global search and inside catalog search."
+          gh release delete v1.34.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.34.0 Nebula-1.34.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.34.0" \
+            --notes "Series pages, unified: seasons and episodes now live right on the title page — one scroll from the artwork through the cast to every episode, with air dates, watched ticks and your next episode highlighted."
