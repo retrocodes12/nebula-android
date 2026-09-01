@@ -1,0 +1,39 @@
+name: Lint audit
+on: [push]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Lint
+        run: gradle :app:lintDebug --no-daemon --stacktrace || true
+      - name: Report
+        run: |
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET, collections
+          files = glob.glob('app/build/reports/lint-results*.xml')
+          if not files:
+              print('NO LINT REPORT'); raise SystemExit
+          root = ET.parse(files[0]).getroot()
+          buckets = collections.defaultdict(list)
+          for it in root.findall('issue'):
+              sev = it.get('severity')
+              loc = it.find('location')
+              where = ''
+              if loc is not None:
+                  where = (loc.get('file','').split('/')[-1] + ':' + (loc.get('line') or '?'))
+              buckets[sev].append((it.get('id'), where, (it.get('message') or '')[:150]))
+          for sev in ('Fatal','Error','Warning'):
+              rows = buckets.get(sev, [])
+              print('\n===== %s (%d) =====' % (sev, len(rows)))
+              for i, (iid, where, msg) in enumerate(rows[:40]):
+                  print(' %-26s %-34s %s' % (iid, where, msg))
+              if len(rows) > 40: print('  ... %d more' % (len(rows)-40))
+          PY
