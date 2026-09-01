@@ -3,6 +3,7 @@
 package com.nuvio.ckplayer
 
 import android.app.Activity
+import android.app.PendingIntent
 import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.Intent
@@ -147,6 +148,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -156,6 +158,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.MediaSession
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.TrackSelectionDialogBuilder
 import coil.compose.AsyncImage
@@ -3206,7 +3209,43 @@ private fun PlayerScreen(
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
     var skipFlash by remember { mutableStateOf<Triple<Int, Int, Long>?>(null) } // zone (-1/+1), total secs, stamp
     var dragSeek by remember { mutableStateOf<Pair<Long, Long>?>(null) }        // target ms, delta ms
-    val exo = remember { ExoPlayer.Builder(context).build().apply { playWhenReady = true } }
+    val exo = remember {
+        ExoPlayer.Builder(context)
+            // Without these the app behaves as if it were the only thing on the
+            // phone: a call or another app's audio would play *over* the film,
+            // and pulling the headphones out would blast it from the speaker.
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .setUsage(C.USAGE_MEDIA)
+                    .build(),
+                /* handleAudioFocus = */ true,
+            )
+            .setHandleAudioBecomingNoisy(true)
+            .build()
+            .apply { playWhenReady = true }
+    }
+    // Publishes to the platform so the lock screen, the output switcher and the
+    // play/pause button on a headset all reach this player. Released alongside
+    // the player below, and deliberately before it — a session outliving its
+    // player is a crash. The id is stamped because a screen replacement can
+    // briefly overlap two players, and duplicate session ids throw.
+    val session = remember(exo) {
+        runCatching {
+            MediaSession.Builder(context, exo)
+                .setId("nebula-" + System.currentTimeMillis())
+                .apply {
+                    val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
+                    if (launch != null) setSessionActivity(
+                        PendingIntent.getActivity(
+                            context, 0, launch,
+                            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                        )
+                    )
+                }
+                .build()
+        }.getOrNull()
+    }
 
     fun seekBy(deltaMs: Long) {
         var t = exo.currentPosition + deltaMs
@@ -3377,7 +3416,7 @@ private fun PlayerScreen(
         onDispose {
             // last word on the resume point before the player goes away
             runCatching { snapshotProgress() }
-            exo.removeListener(l); exo.release()
+            exo.removeListener(l); runCatching { session?.release() }; exo.release()
             if (activePipPlayer.value === exo) activePipPlayer.value = null
             // Clears (API 31+) auto-enter so backing out of the player can't PiP the browse UI.
             (activity as? MainActivity)?.refreshPipParams()
