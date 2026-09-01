@@ -38,6 +38,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -49,6 +51,7 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -1180,21 +1183,50 @@ private fun BackBar(title: String, sub: String?, onBack: () -> Unit) {
     }
 }
 
+/** Outlined choice chip: a hairline at rest, white when chosen. Inside a
+    [Segmented] control the rest state drops its own outline. */
 @Composable
-internal fun Chip(text: String, on: Boolean, onClick: () -> Unit) {
+internal fun Chip(text: String, on: Boolean, inSeg: Boolean = false, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
-    val pill = RoundedCornerShape(12.dp)
+    val pill = RoundedCornerShape(50)
+    val line = when {
+        focused -> if (on) Bg else Color.White
+        on -> Color.White
+        inSeg -> Color.Transparent
+        else -> LineC
+    }
     Box(
         Modifier
             .clip(pill)
-            .background(if (on) Color.White else Surface2)
-            .border(2.dp, if (focused) (if (on) Bg else Color.White) else Color.Transparent, pill)
+            .background(if (on) Color.White else Color.Transparent)
+            .border(if (focused) 2.dp else 1.dp, line, pill)
             .clickable(interactionSource = interaction, indication = null) { onClick() }
-            .padding(horizontal = 16.dp, vertical = 9.dp)
+            .padding(horizontal = if (inSeg) 14.dp else 15.dp, vertical = if (inSeg) 7.dp else 8.dp)
     ) {
-        Text(text, color = if (on) Bg else Color(0xFFC9C9D1), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        Text(text, color = if (on) Bg else MutedC, fontSize = 14.sp, fontWeight = FontWeight.Medium)
     }
+}
+
+/** A row of chips inside one hairline pill — the settings segmented control. */
+@Composable
+internal fun Segmented(content: @Composable RowScope.() -> Unit) {
+    Row(
+        Modifier.border(1.dp, LineC, RoundedCornerShape(50)).padding(3.dp)
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        content = content,
+    )
+}
+
+/** The second type register: a mono micro-caps eyebrow over a title or a fact. */
+@Composable
+internal fun Eyebrow(text: String, modifier: Modifier = Modifier, color: Color = FaintC, maxLines: Int = 1) {
+    Text(
+        text.uppercase(), color = color, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+        letterSpacing = 1.5.sp, maxLines = maxLines, overflow = TextOverflow.Ellipsis, modifier = modifier,
+    )
 }
 
 /** One poster/landscape card — used by the catalog grid, Home rows, and Search. */
@@ -1312,10 +1344,12 @@ private fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick:
 private fun RatingStars(item: MetaItem) {
     val ctx = LocalContext.current
     var cur by remember(item.id) { mutableStateOf(Ratings.get(ctx, item.type, item.id)) }
+    // one hairline pill, so the stars read as a control and not a second headline
     Row(
-        Modifier.padding(top = 12.dp),
+        Modifier.padding(top = 14.dp).border(1.dp, LineC, RoundedCornerShape(50))
+            .padding(start = 6.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(0.dp),
     ) {
         for (i in 1..5) {
             Icon(
@@ -1326,13 +1360,10 @@ private fun RatingStars(item: MetaItem) {
                         cur = if (i == cur) 0 else i
                         Ratings.set(ctx, item.type, item, cur)
                     }
-                    .padding(2.dp),
+                    .padding(4.dp),
             )
         }
-        Text(
-            if (cur > 0) "Your rating" else "Rate it",
-            color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(start = 10.dp),
-        )
+        Eyebrow(if (cur > 0) "Your rating" else "Rate it", Modifier.padding(start = 10.dp))
     }
 }
 
@@ -1642,17 +1673,17 @@ private fun SkeletonCell(modifier: Modifier = Modifier) {
     }
 }
 
-/** Row header on Home/Search: "Addon · Catalog" with a See-all pill. */
+/** Row header on Home/Search/Library: the title, a mono eyebrow beside it for
+    where the row comes from (or how big it is), and a See-all chip. */
 @Composable
 private fun RowHeader(title: String, sub: String?, seeAll: (() -> Unit)?) {
     Row(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(title, color = TextC, fontSize = 20.sp, fontFamily = Sans, fontWeight = FontWeight.SemiBold,
             letterSpacing = (-0.4).sp, maxLines = 1,
             overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-        if (sub != null) Text(sub, style = labelStyle(13), maxLines = 1,
-            overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 10.dp).weight(1f))
+        if (sub != null) Eyebrow(sub, Modifier.padding(start = 12.dp).weight(1f))
         else Spacer(Modifier.weight(1f))
-        if (seeAll != null) Chip("See all ›", false, seeAll)
+        if (seeAll != null) Chip("See all ›", false, onClick = seeAll)
     }
 }
 
@@ -1710,6 +1741,15 @@ private fun thumbRatio(shape: String): Float = when (shape) {
     "landscape" -> 16f / 9f
     "square" -> 1f
     else -> 2f / 3f
+}
+
+/** A Stremio content type as a plural word for a row title. */
+private fun typeLabel(type: String): String = when (type) {
+    "movie" -> "Movies"
+    "series" -> "Series"
+    "channel" -> "Channels"
+    "tv" -> "TV"
+    else -> type.replaceFirstChar { it.uppercase() }
 }
 
 /**
@@ -2047,13 +2087,17 @@ private fun HomeScreen(
                     }
                 }
                 items(st.rows, key = { it.addon.manifestUrl + "/" + it.catalog.type + "/" + it.catalog.id }) { r ->
-                    val multi = st.rows.count { it.addon.manifestUrl == r.addon.manifestUrl } > 1
+                    val mine = st.rows.filter { it.addon.manifestUrl == r.addon.manifestUrl }
+                    val multi = mine.size > 1
                     Column {
-                        // the catalog name only earns space when it says something
-                        // the add-on's own name does not
-                        val sub = r.catalog.name.takeIf { multi && !it.startsWith(r.addon.name, true) }
+                        // one catalog: the add-on's name is the row. Several: the
+                        // catalog leads and the add-on becomes the eyebrow, with the
+                        // type appended only when the same name serves two types
+                        val sameName = mine.count { it.catalog.name.equals(r.catalog.name, true) } > 1
+                        val title = if (!multi) r.addon.name
+                            else r.catalog.name + (if (sameName) " · " + typeLabel(r.catalog.type) else "")
                         Box(Modifier.padding(horizontal = 16.dp)) {
-                            RowHeader(if (multi) "${r.addon.name} · ${r.catalog.name}" else r.addon.name, sub) {
+                            RowHeader(title, if (multi) r.addon.name else null) {
                                 onSeeAll(r.addon, r.catalog)
                             }
                         }
@@ -2590,15 +2634,15 @@ private fun SettingsToggle(title: String, sub: String, checked: Boolean, divider
     if (divider) Box(Modifier.fillMaxWidth().padding(start = 14.dp).height(1.dp).background(LineC))
 }
 
-/** A titled row of choice chips. */
+/** A titled segmented control: the choices sit inside one hairline pill. */
 @Composable
 private fun SettingsChips(title: String, sub: String?, options: List<Pair<String, String>>, selected: String, divider: Boolean = true, onPick: (String) -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
         Text(title, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         if (sub != null) Text(sub, color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(top = 2.dp))
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 10.dp)) {
-            items(options, key = { it.first }) { o ->
-                Chip(o.second, selected == o.first) { onPick(o.first) }
+        Box(Modifier.padding(top = 10.dp)) {
+            Segmented {
+                options.forEach { o -> Chip(o.second, selected == o.first, inSeg = true) { onPick(o.first) } }
             }
         }
     }
@@ -3023,21 +3067,20 @@ private fun DetailScreen(
             full?.videos?.map { it.season }?.filter { it > 0 }?.distinct()?.size
                 ?.takeIf { it > 0 }?.let { "$it season" + (if (it > 1) "s" else "") },
         ).joinToString("   ·   ")
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (facts.isNotEmpty()) Text(
-                facts.uppercase(), color = MutedC, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-                letterSpacing = 1.4.sp,
-            )
+        // facts in the mono register; the IMDb figure is a plate, not a badge
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (facts.isNotEmpty()) Eyebrow(facts, color = Color(0xD1FFFFFF))
             (full?.imdbRating ?: item.imdbRating)?.let { r ->
                 Text(
-                    "★ $r", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.background(Surface2, RoundedCornerShape(8.dp))
-                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                    "★ $r", color = Color.White, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                    letterSpacing = 0.6.sp,
+                    modifier = Modifier.border(1.dp, Color(0x4DFFFFFF), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
                 )
             }
         }
         (full?.description ?: item.description)?.let {
-            Text(it, color = MutedC, fontSize = 14.sp, lineHeight = 21.sp, maxLines = 7,
+            Text(it, color = Color(0xCCFFFFFF), fontSize = 14.sp, lineHeight = 21.sp, maxLines = 7,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 10.dp))
         }
         full?.genres?.takeIf { it.isNotEmpty() }?.let { gs ->
@@ -3047,24 +3090,20 @@ private fun DetailScreen(
             ) {
                 items(gs.take(6).size) { i ->
                     Text(
-                        gs[i], color = TextC, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.background(Surface2, RoundedCornerShape(50))
+                        gs[i], color = TextC, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                        modifier = Modifier.border(1.dp, Color(0x38FFFFFF), RoundedCornerShape(50))
                             .padding(horizontal = 14.dp, vertical = 7.dp),
                     )
                 }
             }
         }
         full?.cast?.takeIf { it.isNotEmpty() }?.let { cast ->
-            Text(
-                "CAST", color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                letterSpacing = 1.6.sp, modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
-            )
+            Eyebrow("Cast", Modifier.padding(top = 16.dp, bottom = 8.dp))
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(cast.take(8).size) { i ->
                     Text(
                         cast[i], color = MutedC, fontSize = 13.sp,
-                        modifier = Modifier.background(SurfaceC, RoundedCornerShape(50))
-                            .border(1.dp, LineC, RoundedCornerShape(50))
+                        modifier = Modifier.border(1.dp, LineC, RoundedCornerShape(50))
                             .padding(horizontal = 14.dp, vertical = 7.dp),
                     )
                 }
@@ -3100,14 +3139,17 @@ private fun DetailScreen(
                     fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 6.dp),
                 )
             }
+            // the secondary actions are ghosts: one outline, no fill
             Button(
                 onClick = { inList = Library.toggle(ctx, item.type, item, addon.manifestUrl) },
-                colors = ButtonDefaults.buttonColors(containerColor = Surface2),
+                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+                border = BorderStroke(1.dp, Color(0x47FFFFFF)),
                 shape = RoundedCornerShape(12.dp),
             ) { Text(if (inList) "✓ In My List" else "+ My List", color = TextC, fontWeight = FontWeight.SemiBold) }
             if (Social.on) Button(
                 onClick = { recOpen = true },
-                colors = ButtonDefaults.buttonColors(containerColor = Surface2),
+                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+                border = BorderStroke(1.dp, Color(0x47FFFFFF)),
                 shape = RoundedCornerShape(12.dp),
             ) { Text("Recommend", color = TextC, fontWeight = FontWeight.SemiBold) }
         }
@@ -3124,8 +3166,9 @@ private fun DetailScreen(
                 }
             }
             if (epsLoading) items(4) { SkeletonRow(112.dp, 63.dp, circle = false) }
-            items(eps, key = { it.id }) { ep ->
-                DetailEpisodeRow(itemType = item.type, ep = ep, upNext = ep.id == upNextId, onClick = { onPlayEpisode(ep) })
+            items(eps.size, key = { eps[it].id }) { i ->
+                val ep = eps[i]
+                EpisodeRow(itemType = item.type, ep = ep, upNext = ep.id == upNextId, first = i == 0, onClick = { onPlayEpisode(ep) })
             }
             item { Spacer(Modifier.height(24.dp)) }
         }
@@ -3133,62 +3176,69 @@ private fun DetailScreen(
     }
 }
 
-/** One inline episode row on the series page: thumb, number+name, air date on
-    the right, overview beneath — the reference layout, in our language. */
+/** One episode in a list: thumb, a mono eyebrow (number · air date), the name,
+    the overview beneath. Rows are transparent and divided by hairlines — a
+    list, not a stack of tiles — and only the target row wears a mark. */
 @Composable
-private fun DetailEpisodeRow(itemType: String, ep: Episode, upNext: Boolean, onClick: () -> Unit) {
+private fun EpisodeRow(itemType: String, ep: Episode, upNext: Boolean, first: Boolean, onClick: () -> Unit) {
     val ctx = LocalContext.current
-    FocusCard(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp), onClick = onClick) {
-        Row(
-            Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(12.dp))
-                .border(1.dp, if (upNext) Color(0x73FFFFFF) else LineC, RoundedCornerShape(12.dp)).padding(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            val pr = Progress.get(ctx, itemType, ep.id)
-            Box {
-                val thumbMod = Modifier.width(112.dp).height(63.dp).clip(RoundedCornerShape(10.dp)).background(Color.Black)
-                if (ep.thumbnail != null) {
-                    AsyncImage(model = ep.thumbnail, contentDescription = null, contentScale = ContentScale.Crop, modifier = thumbMod)
-                } else {
-                    Box(thumbMod, contentAlignment = Alignment.Center) {
-                        Text(ep.episode?.toString() ?: "•", color = MutedC, fontWeight = FontWeight.Black, fontSize = 18.sp)
+    Column {
+        if (!first) Box(Modifier.fillMaxWidth().height(1.dp).background(LineC))
+        FocusCard(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth(), onClick = onClick) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                val pr = Progress.get(ctx, itemType, ep.id)
+                Box {
+                    val thumbMod = Modifier.width(112.dp).height(63.dp).clip(RoundedCornerShape(8.dp)).background(SurfaceC)
+                    if (ep.thumbnail != null) {
+                        AsyncImage(model = ep.thumbnail, contentDescription = null, contentScale = ContentScale.Crop, modifier = thumbMod)
+                    } else {
+                        Box(thumbMod, contentAlignment = Alignment.Center) {
+                            Text(ep.episode?.toString() ?: "•", color = FaintC, fontFamily = Mono, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                        }
+                    }
+                    if (pr?.done == true) {
+                        Box(
+                            Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp)
+                                .background(Color(0xD10B0B0F), CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) { Text("✓", color = Color(0xFF46D369), fontSize = 11.sp, fontWeight = FontWeight.Black) }
+                    } else if (pr != null && pr.pos > 0 && pr.dur > 0) {
+                        Box(Modifier.align(Alignment.BottomStart).width(112.dp).height(4.dp).background(Color(0x8C000000))) {
+                            Box(Modifier.fillMaxWidth((pr.pos.toFloat() / pr.dur).coerceIn(0f, 1f)).fillMaxSize().background(Red))
+                        }
                     }
                 }
-                if (pr?.done == true) {
-                    Box(
-                        Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp)
-                            .background(Color(0xD10B0B0F), CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) { Text("✓", color = Color(0xFF46D369), fontSize = 11.sp, fontWeight = FontWeight.Black) }
-                } else if (pr != null && pr.pos > 0 && pr.dur > 0) {
-                    Box(Modifier.align(Alignment.BottomStart).width(112.dp).height(4.dp).background(Color(0x8C000000))) {
-                        Box(Modifier.fillMaxWidth((pr.pos.toFloat() / pr.dur).coerceIn(0f, 1f)).fillMaxSize().background(Red))
-                    }
-                }
-            }
-            Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        (ep.episode?.let { "$it. " } ?: "") + ep.name,
-                        color = TextC, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
-                    )
+                Column(Modifier.weight(1f)) {
+                    // "Episode 3 · 23 Jun 2022"; the number is dropped when the
+                    // name is only "Episode 3" already
                     val date = ep.released?.let {
                         runCatching {
                             java.time.LocalDate.parse(it.take(10))
                                 .format(java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy"))
                         }.getOrNull()
                     }
-                    if (date != null) Text(date, color = MutedC, fontSize = 12.sp, modifier = Modifier.padding(start = 8.dp))
-                    if (upNext) Text(
-                        "Up next", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(start = 8.dp)
-                            .background(Surface2, RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp),
-                    )
-                }
-                if (!ep.overview.isNullOrEmpty()) {
-                    Text(ep.overview, color = MutedC, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp))
+                    val generic = Regex("""^episode\s*\d+$""", RegexOption.IGNORE_CASE).matches(ep.name.trim())
+                    val kick = listOfNotNull(ep.episode?.takeIf { !generic }?.let { "Episode $it" }, date).joinToString(" · ")
+                    if (kick.isNotEmpty()) Eyebrow(kick, Modifier.padding(bottom = 3.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            ep.name.ifEmpty { "Episode ${ep.episode ?: ""}".trim() },
+                            color = TextC, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                        )
+                        if (upNext) Text(
+                            "Up next", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(start = 8.dp)
+                                .background(FillC, RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp),
+                        )
+                    }
+                    if (!ep.overview.isNullOrEmpty()) {
+                        Text(ep.overview, color = MutedC, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp))
+                    }
                 }
             }
         }
@@ -3259,23 +3309,29 @@ private fun LibraryScreen(
                     }
                 }
                 else -> if (up.isNotEmpty()) {
-                    item(key = "uphead") { RowHeader("Upcoming", null, null) }
+                    val shows = up.map { it.series.id }.distinct().size
+                    item(key = "uphead") { RowHeader("Upcoming", "$shows series", null) }
                     var lastDay = ""
+                    var firstOfDay = false
                     up.forEach { row ->
                         val day = Library.dayLabel(row.time)
                         if (day != lastDay) {
                             lastDay = day
+                            firstOfDay = true
                             item(key = "day/" + row.time) {
-                                Text(day.uppercase(), color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
-                                    letterSpacing = 1.6.sp, modifier = Modifier.padding(top = 14.dp, bottom = 8.dp))
+                                Eyebrow(day, Modifier.padding(top = 18.dp, bottom = 4.dp))
                             }
                         }
+                        val first = firstOfDay
+                        firstOfDay = false
                         item(key = "up/" + row.series.id + "/" + row.ep.id) {
-                            FocusCard(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                            // a list, like the episodes: hairlines between rows, no tiles
+                            Column {
+                                if (!first) Box(Modifier.fillMaxWidth().height(1.dp).background(LineC))
+                            FocusCard(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth(),
                                 onClick = { onPlayEpisode(row.series, row.ep) }) {
                                 Row(
-                                    Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(12.dp))
-                                        .border(1.dp, LineC, RoundedCornerShape(12.dp)).padding(10.dp),
+                                    Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                                 ) {
@@ -3300,6 +3356,7 @@ private fun LibraryScreen(
                                         )
                                     }
                                 }
+                            }
                             }
                         }
                     }
@@ -3553,63 +3610,11 @@ private fun EpisodesScreen(
             val i = eps.indexOfFirst { it.id == upNextId }
             if (i >= 0) listState.scrollToItem(maxOf(0, i - 1))
         }
-        LazyColumn(Modifier.fillMaxWidth(), state = listState, verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
+        LazyColumn(Modifier.fillMaxWidth(), state = listState, contentPadding = PaddingValues(bottom = 20.dp)) {
             if (episodes.isEmpty()) items(6) { SkeletonRow(112.dp, 63.dp, circle = false) }
-            items(eps, key = { it.id }) { ep ->
-                FocusCard(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth(), onClick = { onPlayEpisode(ep) }) {
-                    Row(
-                        Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(12.dp))
-                            .border(1.dp, if (ep.id == upNextId) Color(0x73FFFFFF) else LineC, RoundedCornerShape(12.dp)).padding(10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        // watched tick / part-way bar, from the local progress store
-                        val pr = Progress.get(ctx, item.type, ep.id)
-                        Box {
-                            val thumbMod = Modifier.width(112.dp).height(63.dp).clip(RoundedCornerShape(12.dp)).background(Color.Black)
-                            if (ep.thumbnail != null) {
-                                AsyncImage(model = ep.thumbnail, contentDescription = null, contentScale = ContentScale.Crop, modifier = thumbMod)
-                            } else {
-                                Box(thumbMod, contentAlignment = Alignment.Center) {
-                                    Text(ep.episode?.toString() ?: "•", color = MutedC, fontWeight = FontWeight.Black, fontSize = 18.sp)
-                                }
-                            }
-                            if (pr?.done == true) {
-                                Box(
-                                    Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp)
-                                        .background(Color(0xD10B0B0F), CircleShape),
-                                    contentAlignment = Alignment.Center,
-                                ) { Text("✓", color = Color(0xFF46D369), fontSize = 11.sp, fontWeight = FontWeight.Black) }
-                            } else if (pr != null && pr.pos > 0 && pr.dur > 0) {
-                                Box(Modifier.align(Alignment.BottomStart).width(112.dp).height(4.dp).background(Color(0x8C000000))) {
-                                    Box(Modifier.fillMaxWidth((pr.pos.toFloat() / pr.dur).coerceIn(0f, 1f)).fillMaxSize().background(Red))
-                                }
-                            }
-                        }
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                (ep.episode?.let { "$it. " } ?: "") + ep.name,
-                                color = TextC, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                            )
-                            val date = ep.released?.let {
-                                runCatching {
-                                    java.time.LocalDate.parse(it.take(10))
-                                        .format(java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy"))
-                                }.getOrNull()
-                            }
-                            val sub = listOfNotNull(date, ep.overview?.takeIf { o -> o.isNotEmpty() }).joinToString(" — ")
-                            if (sub.isNotEmpty()) {
-                                Text(sub, color = MutedC, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp))
-                            }
-                        }
-                        if (ep.id == upNextId) {
-                            Text(
-                                "Up next", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.background(Surface2, RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 5.dp),
-                            )
-                        }
-                    }
-                }
+            items(eps.size, key = { eps[it].id }) { i ->
+                val ep = eps[i]
+                EpisodeRow(itemType = item.type, ep = ep, upNext = ep.id == upNextId, first = i == 0, onClick = { onPlayEpisode(ep) })
             }
         }
     }

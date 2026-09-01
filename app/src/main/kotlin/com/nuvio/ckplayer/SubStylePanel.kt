@@ -112,7 +112,7 @@ internal fun SubStylePanel(onDone: () -> Unit) {
         ) {
             Chip("Reset", false) { SubStyle.reset(ctx) }
             Spacer(Modifier.weight(1f))
-            Chip("Done", true, onDone)
+            Chip("Done", true, onClick = onDone)
         }
     }
 }
