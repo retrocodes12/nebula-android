@@ -48,9 +48,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.36.0.apk
+          cp "$APK" Nebula-1.37.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.36.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.36.0 Nebula-1.36.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.36.0" \
-            --notes "Stream rows rebuilt: a resolution plate leads each row, the release name is cleaned of emoji and repetition, and size and bitrate sit in their own spec column. Nothing is said twice."
+          gh release delete v1.37.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.37.0 Nebula-1.37.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.37.0" \
+            --notes "Home and streams get their edges back: artwork now runs to every edge of the screen instead of floating in boxes, Continue Watching reads its episode off the art, and the stream list header carries the episode with quiet filter chips."

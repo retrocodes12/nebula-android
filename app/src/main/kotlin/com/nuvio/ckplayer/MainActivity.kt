@@ -108,6 +108,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
@@ -956,50 +957,66 @@ private fun MetaCard(m: MetaItem, modifier: Modifier = Modifier, onClick: () -> 
 /** A Continue watching card: poster, how much is left, and a resume bar. */
 @Composable
 private fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick: () -> Unit, onRemove: () -> Unit) {
+    // episode identity reads off the artwork itself — a wrapped two-line title
+    // under a poster was the single biggest source of visual noise on Home
+    val parts = r.name.split(" · ")
+    val tag = parts.getOrNull(1)?.takeIf { Regex("""^S\d+E\d+${'$'}""", RegexOption.IGNORE_CASE).matches(it.trim()) }
+        ?.let { it.trim().replace(Regex("""(?i)^s(\d+)e(\d+)${'$'}"""), "S$1 E$2") }
+    val title = if (tag != null) parts[0] else r.name
+    val sub = if (tag != null) parts.drop(2).joinToString(" · ").ifEmpty { null } else null
+    val left = r.dur - r.pos
     Box(modifier) {
-        FocusCard(shape = RoundedCornerShape(12.dp), onClick = onClick) {
-            Column(Modifier.padding(2.dp)) {
-                Box(
-                    Modifier.fillMaxWidth().aspectRatio(thumbRatio(r.shape))
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(SurfaceC)
-                        .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(12.dp)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (r.poster != null) {
-                        AsyncImage(
-                            model = r.poster, contentDescription = r.name,
-                            contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
-                        )
-                    } else {
+        FocusCard(shape = RoundedCornerShape(14.dp), onClick = onClick) {
+            Box(
+                Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(SurfaceC)
+                    .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(14.dp)),
+            ) {
+                if (r.poster != null) {
+                    AsyncImage(
+                        model = r.poster, contentDescription = r.name,
+                        contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
                             r.name.filter { it.isLetterOrDigit() }.take(2).uppercase().ifEmpty { "••" },
                             color = Color(0xFF3A3A45), fontSize = 22.sp, fontWeight = FontWeight.Black,
                         )
                     }
-                    val pct = if (r.dur > 0) (r.pos.toFloat() / r.dur).coerceIn(0f, 1f) else 0f
-                    Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(4.dp).background(Color(0x8C000000))) {
-                        Box(Modifier.fillMaxWidth(pct).fillMaxSize().background(Red))
-                    }
                 }
-                Text(
-                    r.name, color = TextC, fontSize = 13.sp, fontFamily = Sans, fontWeight = FontWeight.Medium,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp,
-                    modifier = Modifier.padding(top = 7.dp, start = 2.dp, end = 2.dp),
-                )
-                val left = r.dur - r.pos
-                if (left > 0) Text(
-                    fmtTime(left) + " left", style = labelStyle(12, FaintC),
-                    maxLines = 1, modifier = Modifier.padding(top = 2.dp, start = 2.dp),
-                )
+                Box(Modifier.matchParentSize().background(Brush.verticalGradient(
+                    0f to Color(0x00000000), 0.45f to Color(0x40000000), 1f to Color(0xE6000000))))
+                Column(Modifier.align(Alignment.BottomStart).padding(start = 11.dp, end = 11.dp, bottom = 10.dp)) {
+                    val kicker = listOfNotNull(tag, left.takeIf { it > 0 }?.let { fmtTime(it) + " left" })
+                        .joinToString("  ·  ")
+                    if (kicker.isNotEmpty()) Text(
+                        kicker, color = Color(0xE0EBEBF5), fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                        letterSpacing = 0.4.sp, maxLines = 1,
+                    )
+                    Text(
+                        title, color = Color.White, fontSize = 15.sp, fontFamily = Sans,
+                        fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 1.dp),
+                    )
+                    if (sub != null) Text(
+                        sub, color = Color(0xB3EBEBF5), fontSize = 12.sp, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                val pct = if (r.dur > 0) (r.pos.toFloat() / r.dur).coerceIn(0f, 1f) else 0f
+                Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(Color(0x66000000))) {
+                    Box(Modifier.fillMaxWidth(pct).fillMaxSize().background(Red))
+                }
             }
         }
         IconButton(
             onClick = onRemove,
-            modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(28.dp)
-                .background(Color(0x9E000000), RoundedCornerShape(12.dp)),
+            modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).size(26.dp)
+                .background(Color(0x8A000000), CircleShape),
         ) {
-            Icon(Icons.Filled.Close, contentDescription = "Remove from Continue watching", tint = MutedC, modifier = Modifier.size(16.dp))
+            Icon(Icons.Filled.Close, contentDescription = "Remove from Continue watching", tint = Color(0xCCFFFFFF), modifier = Modifier.size(14.dp))
         }
     }
 }
@@ -1189,7 +1206,7 @@ private fun UpdateCard(version: String, notes: String, onDismiss: () -> Unit) {
 private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit) {
     val ctx = LocalContext.current
     val first = rows.firstOrNull() ?: return
-    val picks = remember(first) { first.items.filter { it.background != null || it.poster != null }.take(5) }
+    val picks = remember(first) { first.items.filter { it.background != null || it.poster != null }.take(6) }
     if (picks.isEmpty()) return
     var idx by remember(picks) { mutableStateOf(0) }
     LaunchedEffect(picks) {
@@ -1197,11 +1214,9 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit) {
     }
     val m = picks[idx]
     var inList by remember(m.id) { mutableStateOf(Library.inList(ctx, m.type, m.id)) }
-    Box(
-        Modifier.fillMaxWidth().height(340.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .clickable { onOpen(first.addon, m) },
-    ) {
+    // the board owns the top of the screen edge to edge and dissolves into it
+    val heroH = (LocalConfiguration.current.screenHeightDp * 0.58f).dp
+    Box(Modifier.fillMaxWidth().height(heroH).clickable { onOpen(first.addon, m) }) {
         AsyncImage(
             model = m.background ?: m.poster, contentDescription = m.name,
             contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize(),
@@ -1209,56 +1224,79 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit) {
         Box(
             Modifier.matchParentSize().background(
                 Brush.verticalGradient(
-                    0f to Color(0x3D000000), 0.35f to Color(0x14000000),
-                    0.72f to Color(0xB3000000), 1f to Color(0xF2000000),
+                    0f to Color(0x8A000000), 0.22f to Color(0x1A000000),
+                    0.58f to Color(0x8A000000), 0.82f to Color(0xE0000000), 1f to Color(0xFF000000),
                 )
             )
         )
-        Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
-            val facts = listOfNotNull(
-                m.releaseInfo, m.imdbRating?.let { "★ $it" },
-            ).joinToString("  ·  ")
-            if (facts.isNotEmpty()) Text(
-                facts.uppercase(), color = Color(0xC7EBEBF5), fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold, letterSpacing = 1.4.sp,
-                modifier = Modifier.padding(bottom = 6.dp),
-            )
+        Row(
+            Modifier.align(Alignment.TopStart).padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("◆ ", color = Red, fontSize = 18.sp)
+            Text("Nebula", color = TextC, fontSize = 22.sp, fontFamily = Sans,
+                fontWeight = FontWeight.Bold, letterSpacing = (-0.6).sp)
+        }
+        Column(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 22.dp).padding(bottom = 18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
             if (m.logo != null) {
                 AsyncImage(
                     model = m.logo, contentDescription = m.name,
-                    modifier = Modifier.height(64.dp).padding(bottom = 8.dp),
-                    alignment = Alignment.CenterStart,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.heightIn(max = 104.dp).fillMaxWidth(0.78f).padding(bottom = 12.dp),
                 )
             } else {
                 Text(
-                    m.name, color = TextC, fontSize = 30.sp, fontWeight = FontWeight.Bold,
-                    letterSpacing = (-0.8).sp, lineHeight = 33.sp, maxLines = 2,
-                    overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 8.dp),
+                    m.name, color = TextC, fontSize = 32.sp, fontWeight = FontWeight.Bold,
+                    letterSpacing = (-1).sp, lineHeight = 35.sp, maxLines = 2,
+                    textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(bottom = 10.dp),
                 )
             }
-            m.description?.let {
-                Text(
-                    it, color = Color(0xD1EBEBF5), fontSize = 13.sp, lineHeight = 18.sp,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(bottom = 12.dp),
-                )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val facts = listOfNotNull(
+                if (m.type == "series") "Series" else "Movie",
+                m.releaseInfo,
+                m.imdbRating?.let { "\u2605 $it" },
+            ).joinToString("  \u2022  ")
+            Text(
+                facts, color = Color(0xD1EBEBF5), fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            Row(
+                Modifier.padding(top = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Button(
                     onClick = { onOpen(first.addon, m) },
                     colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Text("Details", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 6.dp))
-                }
+                    shape = RoundedCornerShape(50),
+                    contentPadding = PaddingValues(horizontal = 26.dp, vertical = 12.dp),
+                ) { Text("View Details", fontSize = 15.sp, fontWeight = FontWeight.SemiBold) }
                 Button(
                     onClick = {
                         inList = Library.toggle(ctx, m.type, m, first.addon.manifestUrl)
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x66767680)),
-                    shape = RoundedCornerShape(12.dp),
-                ) { Text(if (inList) "✓ My List" else "+ My List", color = TextC, fontWeight = FontWeight.SemiBold) }
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x3DFFFFFF)),
+                    shape = RoundedCornerShape(50),
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
+                ) { Text(if (inList) "\u2713 Saved" else "+ My List", color = TextC, fontSize = 15.sp, fontWeight = FontWeight.SemiBold) }
+            }
+            Row(
+                Modifier.padding(top = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                picks.forEachIndexed { i, _ ->
+                    Box(
+                        Modifier.height(4.dp)
+                            .width(if (i == idx) 20.dp else 4.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(if (i == idx) Color.White else Color(0x59FFFFFF))
+                    )
+                }
             }
         }
     }
@@ -1320,8 +1358,13 @@ private fun HomeScreen(
         st.loading = false
     }
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
+    val heroing = st.rows.isNotEmpty() && st.hasAddons
+    Column(Modifier.fillMaxSize().padding(top = if (heroing) 0.dp else 16.dp)) {
+        // with a hero the brand rides on the artwork instead of pushing it down
+        if (!heroing) Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 8.dp),
+        ) {
             Text("◆ ", color = Red, fontSize = 18.sp)
             Text("Nebula", color = TextC, fontSize = 22.sp, fontFamily = Sans,
                 fontWeight = FontWeight.Bold, letterSpacing = (-0.6).sp)
@@ -1339,7 +1382,7 @@ private fun HomeScreen(
         }
         when {
             !st.hasAddons -> Column(
-                Modifier.fillMaxWidth().padding(top = 36.dp)
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 36.dp)
                     .background(SurfaceC, RoundedCornerShape(12.dp))
                     .border(1.dp, LineC, RoundedCornerShape(12.dp)).padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -1380,12 +1423,15 @@ private fun HomeScreen(
                 if (st.rows.isNotEmpty()) item(key = "hero") { HeroHeader(st.rows, onOpen) }
                 if (st.continueRows.isNotEmpty()) item(key = "continue") {
                     Column {
-                        RowHeader("Continue watching", null, null)
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Box(Modifier.padding(horizontal = 16.dp)) { RowHeader("Continue watching", null, null) }
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp),
+                        ) {
                             items(st.continueRows, key = { Progress.key(it.type, it.id) }) { r ->
                                 ContinueCard(
                                     r,
-                                    Modifier.width(if (r.shape == "landscape") 210.dp else 124.dp),
+                                    Modifier.width(250.dp),
                                     onClick = { onResume(r) },
                                     onRemove = {
                                         Progress.clear(ctx, r.type, r.id)
@@ -1399,11 +1445,18 @@ private fun HomeScreen(
                 items(st.rows, key = { it.addon.manifestUrl + "/" + it.catalog.type + "/" + it.catalog.id }) { r ->
                     val multi = st.rows.count { it.addon.manifestUrl == r.addon.manifestUrl } > 1
                     Column {
-                        RowHeader(
-                            r.addon.name,
-                            if (multi) "${r.catalog.name} · ${r.catalog.type.replaceFirstChar { it.uppercase() }}" else null,
-                        ) { onSeeAll(r.addon, r.catalog) }
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        // the catalog name only earns space when it says something
+                        // the add-on's own name does not
+                        val sub = r.catalog.name.takeIf { multi && !it.startsWith(r.addon.name, true) }
+                        Box(Modifier.padding(horizontal = 16.dp)) {
+                            RowHeader(if (multi) "${r.addon.name} · ${r.catalog.name}" else r.addon.name, sub) {
+                                onSeeAll(r.addon, r.catalog)
+                            }
+                        }
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp),
+                        ) {
                             items(r.items) { m ->
                                 MetaCard(m, Modifier.width(if (m.posterShape == "landscape") 210.dp else 124.dp)) { onOpen(r.addon, m) }
                             }
@@ -1412,7 +1465,7 @@ private fun HomeScreen(
                 }
                 // add-ons unreachable but Continue watching kept the screen useful
                 if (st.rows.isEmpty() && !st.loading) item(key = "retry") {
-                    Column(Modifier.fillMaxWidth().padding(top = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("Couldn’t reach your add-ons right now.", color = MutedC, fontSize = 14.sp,
                             modifier = Modifier.padding(bottom = 10.dp))
                         Chip("Retry", false) { st.invalidate() }
@@ -2678,8 +2731,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
         }
         loading = false
     }
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
-        BackBar("", status, onBack)
+    Column(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
             item(key = "hero") {
                 // episode context header — art, S/E kicker, episode title, series name
@@ -2690,36 +2742,51 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
                 val parts = item.name.split(" · ")
                 val heroTitle = if (parts.size >= 3) parts.drop(2).joinToString(" · ") else parts.lastOrNull() ?: item.name
                 val heroSub = if (parts.size >= 2) parts[0] else null
-                Box(Modifier.fillMaxWidth().height(190.dp).clip(RoundedCornerShape(18.dp)).background(SurfaceC)) {
+                Box(Modifier.fillMaxWidth().height(260.dp).background(SurfaceC)) {
                     if (art != null) AsyncImage(model = art, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
                     Box(Modifier.matchParentSize().background(Brush.verticalGradient(
-                        0f to Color(0x33000000), 0.5f to Color(0x14000000), 1f to Color(0xE6000000))))
-                    Column(Modifier.align(Alignment.BottomStart).padding(14.dp)) {
-                        if (kick != null) Text(kick, color = Color(0xD9EBEBF5), fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.2.sp)
-                        Text(heroTitle, color = TextC, fontSize = 24.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (heroSub != null) Text(heroSub, color = MutedC, fontSize = 13.sp)
+                        0f to Color(0x8A000000), 0.26f to Color(0x1F000000),
+                        0.62f to Color(0x8A000000), 0.86f to Color(0xE6000000), 1f to Color(0xFF000000))))
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.align(Alignment.TopStart).padding(12.dp).size(40.dp)
+                            .background(Color(0x8A000000), CircleShape),
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White, modifier = Modifier.size(21.dp))
+                    }
+                    Column(Modifier.align(Alignment.BottomStart).padding(start = 16.dp, end = 16.dp, bottom = 14.dp)) {
+                        if (kick != null) Text(kick, color = Color(0xE6EBEBF5), fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.4.sp)
+                        Text(heroTitle, color = TextC, fontSize = 26.sp, fontWeight = FontWeight.Bold,
+                            letterSpacing = (-0.8).sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 5.dp))
+                        if (heroSub != null) Text(heroSub, color = Color(0xB8EBEBF5), fontSize = 13.sp, modifier = Modifier.padding(top = 2.dp))
+                        Text(status, color = FaintC, fontFamily = Mono, fontSize = 11.sp,
+                            letterSpacing = 0.8.sp, modifier = Modifier.padding(top = 8.dp))
                     }
                 }
             }
             if (sections.size > 1) item(key = "filters") {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 10.dp)) {
-                    item { Chip("↻", false) { filter = null; reload++ } }
-                    item { Chip("All", filter == null) { filter = null } }
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                ) {
+                    item { StreamFilterChip("↻", false) { filter = null; reload++ } }
+                    item { StreamFilterChip("All", filter == null) { filter = null } }
                     items(sections.size) { i ->
-                        Chip(sections[i].first, filter == sections[i].first) { filter = sections[i].first }
+                        StreamFilterChip(sections[i].first, filter == sections[i].first) { filter = sections[i].first }
                     }
                 }
             }
-            if (loading && sections.isEmpty()) items(4) { SkeletonRow(42.dp, 42.dp, circle = true) }
+            if (loading && sections.isEmpty()) items(4) { Box(Modifier.padding(horizontal = 16.dp)) { SkeletonRow(42.dp, 42.dp, circle = true) } }
             sections.filter { filter == null || it.first == filter }.forEachIndexed { sectionIndex, (addonName, streams) ->
                 if (sections.size > 1) item(key = "head/$sectionIndex") {
                     Text(
                         addonName, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold,
-                        modifier = Modifier.padding(top = 6.dp),
+                        modifier = Modifier.padding(horizontal = 16.dp).padding(top = 6.dp),
                     )
                 }
             items(streams) { s ->
-                StreamRow(s, addonName, item.name, onPlay)
+                Box(Modifier.padding(horizontal = 16.dp)) { StreamRow(s, addonName, item.name, onPlay) }
             }
             }
         }
@@ -2730,6 +2797,25 @@ internal fun partyDisplayName(ctx: Context): String {
     val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     return p.getString("party_name", null)?.takeIf { it.isNotBlank() }
         ?: android.os.Build.MODEL.take(24).ifBlank { "Android" }
+}
+
+/** Quiet outlined filter — only the active one carries fill. */
+@Composable
+private fun StreamFilterChip(label: String, on: Boolean, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    Text(
+        label,
+        color = if (on) Color.Black else if (focused) TextC else MutedC,
+        fontSize = 13.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (on) Color.White else Color.Transparent)
+            .border(1.dp, if (on) Color.Transparent else if (focused) Color.White else LineC, RoundedCornerShape(50))
+            .clickable(interactionSource = interaction, indication = null) { onClick() }
+            .padding(horizontal = 15.dp, vertical = 8.dp),
+    )
 }
 
 /** A stream row: resolution plate, release name, badges, and a right-hand
