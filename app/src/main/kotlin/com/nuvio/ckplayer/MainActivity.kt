@@ -41,6 +41,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -93,10 +94,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
@@ -444,13 +447,19 @@ private class PartyUi {
     var code by mutableStateOf<String?>(null)
     var isHost by mutableStateOf(false)
     var count by mutableStateOf(1)
+    var names by mutableStateOf<List<String>>(emptyList())
+    val reactions = androidx.compose.runtime.mutableStateListOf<Triple<Long, String, String>>()
+    fun react(emoji: String, name: String) {
+        reactions.add(Triple(System.nanoTime(), emoji, name))
+        if (reactions.size > 8) reactions.removeAt(0)
+    }
     var status by mutableStateOf<String?>(null)
     @Volatile var lastState: PartyState? = null
     var lastSeekAt = 0L
     fun active() = code != null
     fun reset() {
         session?.leave(); session = null
-        code = null; isHost = false; count = 1; lastState = null
+        code = null; isHost = false; count = 1; lastState = null; names = emptyList()
     }
 }
 private val partyUi = PartyUi()
@@ -559,7 +568,17 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                             stack = listOf(Screen.Home, Screen.Play(ev.stream.url, ev.stream.title, ev.stream.subs, ev.stream.type, ev.stream.id, ev.stream.name ?: ev.stream.title, ev.stream.poster, ev.stream.addonUrl))
                         }
                     }
-                    is PartyEvent.Peers -> partyUi.count = ev.count
+                    is PartyEvent.Peers -> {
+                        val old = partyUi.names
+                        partyUi.count = ev.count
+                        partyUi.names = ev.names
+                        if (old.isNotEmpty() && ev.names.isNotEmpty()) {
+                            val gone = old.toMutableList()
+                            ev.names.forEach { n -> if (!gone.remove(n)) partyUi.status = "$n joined — ${ev.count} watching" }
+                            gone.forEach { n -> partyUi.status = "$n left — ${ev.count} watching" }
+                        }
+                    }
+                    is PartyEvent.React -> partyUi.react(ev.emoji, ev.name)
                     PartyEvent.Promoted -> { partyUi.isHost = true; partyUi.status = "You are now the party host" }
                     is PartyEvent.Ended -> { partyUi.reset(); partyUi.status = ev.reason }
                     is PartyEvent.Error -> partyUi.status = ev.message
@@ -569,14 +588,16 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
             fun partyStart(stream: PartyStreamDesc) {
                 partyUi.reset()
                 partyUi.status = "Starting party…"
-                partyUi.session = PartySession(scope) { partyEvent(it) }.also { it.create(stream) }
+                partyUi.session = PartySession(scope) { partyEvent(it) }
+                    .also { it.displayName = partyDisplayName(ctx); it.create(stream) }
             }
             fun partyJoin(codeRaw: String) {
                 val code = codeRaw.trim().replace(" ", "").uppercase()
                 if (code.length < 4) { partyUi.status = "Enter the party code first"; return }
                 partyUi.reset()
                 partyUi.status = "Joining party…"
-                partyUi.session = PartySession(scope) { partyEvent(it) }.also { it.join(code) }
+                partyUi.session = PartySession(scope) { partyEvent(it) }
+                    .also { it.displayName = partyDisplayName(ctx); it.join(code) }
             }
             fun partyLeave() { partyUi.reset(); partyUi.status = "Left the party" }
             LaunchedEffect(partyUi.status) {
@@ -1682,7 +1703,36 @@ private fun SettingsScreen(
             SettingsRow(Icons.Filled.Extension, "Add-ons", "Add and manage your add-ons", true, onAddons)
             SettingsRow(Icons.Filled.ClosedCaption, "Subtitle style", "Size, colour, background and font of captions", true, onSubtitles)
             SettingsRow(Icons.Filled.Sync, "Sync between devices", "Add-ons, progress and My List follow you", true, onSync)
-            SettingsRow(Icons.Filled.Groups, "Watch party", "Watch in sync with friends using a code", false, onParty)
+            SettingsRow(Icons.Filled.Groups, "Watch party", "Watch in sync with friends using a code", true, onParty)
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Party name", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text("How you appear to friends in a party", color = MutedC, fontSize = 13.sp)
+                }
+                val ctx2 = LocalContext.current
+                var pname by remember {
+                    mutableStateOf(ctx2.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("party_name", "") ?: "")
+                }
+                OutlinedTextField(
+                    value = pname,
+                    onValueChange = { v ->
+                        pname = v.take(40)
+                        ctx2.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("party_name", pname.trim()).apply()
+                    },
+                    placeholder = { Text(android.os.Build.MODEL.take(24), color = MutedC) },
+                    singleLine = true,
+                    modifier = Modifier.width(150.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color.White, unfocusedBorderColor = Line2, cursorColor = Red,
+                        focusedTextColor = TextC, unfocusedTextColor = TextC,
+                    ),
+                )
+            }
         }
         SettingsHeader("ABOUT")
         SettingsGroup {
@@ -2511,6 +2561,35 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
     }
 }
 
+internal fun partyDisplayName(ctx: Context): String {
+    val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    return p.getString("party_name", null)?.takeIf { it.isNotBlank() }
+        ?: android.os.Build.MODEL.take(24).ifBlank { "Android" }
+}
+
+/** One party reaction, floating up and fading like the web player's. */
+@Composable
+private fun BoxScope.ReactionFloat(emoji: String, name: String) {
+    var t by remember { mutableStateOf(0f) }
+    LaunchedEffect(Unit) {
+        androidx.compose.animation.core.animate(
+            0f, 1f, animationSpec = androidx.compose.animation.core.tween(2600)
+        ) { v, _ -> t = v }
+    }
+    val x = remember { (12 + (0..70).random()) / 100f }
+    Column(
+        Modifier.align(Alignment.BottomStart)
+            .fillMaxWidth(x)
+            .padding(bottom = 140.dp)
+            .offset(y = (-(t * 280)).dp)
+            .alpha(if (t < 0.12f) t / 0.12f else if (t > 0.78f) (1f - t) / 0.22f else 1f),
+        horizontalAlignment = Alignment.End,
+    ) {
+        Text(emoji, fontSize = 40.sp)
+        if (name.isNotEmpty()) Text(name, color = Color.White, fontSize = 11.sp)
+    }
+}
+
 /** One row of the in-player subtitle picker. */
 @Composable
 private fun SubMenuRow(label: String, active: Boolean, onClick: () -> Unit) {
@@ -2943,6 +3022,20 @@ private fun PlayerScreen(
                 else onPartyStart(PartyStreamDesc(url, title, subs, contentType, contentId, contentName, poster, addonUrl))
                 chromeTouchedAt = System.currentTimeMillis()
             },
+            onInvite = {
+                partyUi.code?.let { c ->
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        setType("text/plain")
+                        putExtra(Intent.EXTRA_TEXT, "Watch with me on Nebula — join party $c: https://play.rifflehq.in/?party=$c")
+                    }
+                    runCatching { context.startActivity(Intent.createChooser(send, "Invite to watch party")) }
+                }
+            },
+            onReact = { e ->
+                partyUi.session?.sendReact(e)
+                partyUi.react(e, "")
+                chromeTouchedAt = System.currentTimeMillis()
+            },
             onSubtitles = {
                 if (addonSubs.isEmpty()) {
                     runCatching {
@@ -2986,6 +3079,10 @@ private fun PlayerScreen(
                 }
             },
         )
+        // Party reactions float up from the bottom
+        partyUi.reactions.forEach { r ->
+            key(r.first) { ReactionFloat(r.second, r.third) }
+        }
         // Subtitle style panel (the Style pill toggles it)
         if (subStyleOpen && !pip) {
             Box(Modifier.align(Alignment.CenterEnd).padding(end = 20.dp)) {

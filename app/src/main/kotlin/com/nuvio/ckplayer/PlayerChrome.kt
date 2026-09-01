@@ -128,6 +128,8 @@ internal fun TitleCardChrome(
     onSeekTo: (Long) -> Unit,
     onNext: () -> Unit,
     onParty: () -> Unit,
+    onInvite: () -> Unit = {},
+    onReact: (String) -> Unit = {},
     onSubtitles: () -> Unit,
     onSubStyle: () -> Unit,
     onAudio: () -> Unit,
@@ -214,6 +216,12 @@ internal fun TitleCardChrome(
                     if (qualityLabel != null) GlassPill("Quality", qualityLabel, onClick = onQuality)
                     GlassPill("Speed", speedLabel, onClick = onSpeedCycle)
                     GlassPill(if (partyActive) "Leave party" else "Party", onClick = onParty)
+                    if (partyActive) {
+                        GlassPill("Invite", onClick = onInvite)
+                        listOf("\uD83D\uDC4D", "\uD83D\uDE02", "\u2764\uFE0F", "\uD83D\uDD25").forEach { e ->
+                            GlassPill(e, onClick = { onReact(e) })
+                        }
+                    }
                 }
 
                 var trackWidth by remember { mutableStateOf(1) }

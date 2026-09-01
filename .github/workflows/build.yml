@@ -48,9 +48,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.31.0.apk
+          cp "$APK" Nebula-1.32.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.31.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.31.0 Nebula-1.31.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.31.0" \
-            --notes "Watch parties get better for viewers: the host's title identity now travels with the stream, so subtitles, watch progress and resume work for everyone in the party."
+          gh release delete v1.32.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.32.0 Nebula-1.32.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.32.0" \
+            --notes "Watch party, socialised: share an invite link straight from the player, react with emoji that float on everyone's screen, see who's watching by name, and set your party name in Settings."

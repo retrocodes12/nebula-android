@@ -36,7 +36,8 @@ sealed interface PartyEvent {
     data class Joined(val code: String, val stream: PartyStreamDesc?, val state: PartyState?, val count: Int) : PartyEvent
     data class State(val state: PartyState) : PartyEvent
     data class StreamSwitch(val stream: PartyStreamDesc) : PartyEvent
-    data class Peers(val count: Int) : PartyEvent
+    data class Peers(val count: Int, val names: List<String> = emptyList()) : PartyEvent
+    data class React(val emoji: String, val name: String) : PartyEvent
     data object Promoted : PartyEvent
     data class Ended(val reason: String) : PartyEvent
     data class Error(val message: String) : PartyEvent
@@ -77,15 +78,21 @@ class PartySession(
     private var retryUntil = 0L
     private var wakeToastShown = false
 
+    var displayName: String = "Guest"
+
+    fun sendReact(emoji: String) {
+        ws?.send(JSONObject().put("t", "react").put("emoji", emoji.take(8)).toString())
+    }
+
     fun create(stream: PartyStreamDesc, code: String? = null) = connect { sock ->
-        sock.send(JSONObject().put("t", "create").put("name", "Host").apply {
+        sock.send(JSONObject().put("t", "create").put("name", displayName).apply {
             if (code != null) put("code", code)
             put("stream", streamJson(stream))
         }.toString())
     }
 
     fun join(code: String) = connect { sock ->
-        sock.send(JSONObject().put("t", "join").put("code", code).put("name", "Guest").toString())
+        sock.send(JSONObject().put("t", "join").put("code", code).put("name", displayName).toString())
     }
 
     fun sendState(playing: Boolean, pos: Double, live: Boolean) {
@@ -145,7 +152,10 @@ class PartySession(
                         )
                         "state" -> PartyEvent.State(parseState(m))
                         "stream" -> m.optJSONObject("stream")?.let { PartyEvent.StreamSwitch(parseStream(it)) }
-                        "peers" -> PartyEvent.Peers(m.optInt("count", 1))
+                        "peers" -> PartyEvent.Peers(m.optInt("count", 1), m.optJSONArray("names")?.let { arr ->
+                            (0 until arr.length()).mapNotNull { i -> arr.optString(i).ifEmpty { null } }
+                        } ?: emptyList())
+                        "react" -> PartyEvent.React(m.optString("emoji"), m.optString("name"))
                         "host" -> PartyEvent.Promoted
                         "end" -> PartyEvent.Ended(m.optString("reason").ifEmpty { "Party ended." })
                         "error" -> PartyEvent.Error(m.optString("message").ifEmpty { "Party error." })
