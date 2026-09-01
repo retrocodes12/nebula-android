@@ -31,7 +31,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -1892,7 +1891,7 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                             translationY = if (dragging) dragOffset else 0f
                             val s = if (lifted) 1.02f else 1f
                             scaleX = s; scaleY = s
-                            shadowElevation = if (raised) 22f else 0f
+                            shadowElevation = if (raised) 18.dp.toPx() else 0f
                             shape = RoundedCornerShape(12.dp)
                             clip = false
                         }
@@ -1959,7 +1958,10 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                                             else -> false
                                         }
                                     }
-                                    .focusable(true, grip)
+                                    // clickable, not focusable: it swallows the tap
+                                    // that would otherwise open the add-on, and still
+                                    // gives the D-pad something to land on
+                                    .clickable(interactionSource = grip, indication = null) {}
                                     .pointerInput(a.manifestUrl) {
                                         detectDragGesturesAfterLongPress(
                                             onDragStart = {
