@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit
 object Cloud {
     private const val BASE = "https://play.rifflehq.in/cloud"
     private const val PREFS = "ckplayer"
-    private val SYNC_KEYS = listOf("addons", "progress", "library", "sub_style")
+    private val SYNC_KEYS = listOf("addons", "progress", "library", "sub_style", "ratings")
     private val JSON_MT = "application/json".toMediaType()
 
     private val http = OkHttpClient.Builder()
@@ -57,7 +57,7 @@ object Cloud {
 
     // ---------- HTTP ----------
     private class HttpFail(val code: Int) : RuntimeException("HTTP $code")
-    private suspend fun api(ctx: Context, method: String, path: String, body: JSONObject?): JSONObject =
+    internal suspend fun api(ctx: Context, method: String, path: String, body: JSONObject?): JSONObject =
         withContext(Dispatchers.IO) {
             val b = Request.Builder().url(BASE + path)
             if (linked(ctx)) b.header("Authorization", "Bearer ${gid(ctx)}.${secret(ctx)}")
@@ -159,6 +159,7 @@ object Cloud {
         "addons" -> loadAddons(ctx).isNotEmpty()
         "progress" -> Progress.all(ctx).isNotEmpty()
         "library" -> Library.all(ctx).length() > 0
+        "ratings" -> Ratings.all(ctx).length() > 0
         "sub_style" -> SubStyle.at(ctx) > 0
         else -> false
     }
@@ -203,6 +204,7 @@ object Cloud {
         "addons" -> mergeAddons(ctx, remote)
         "progress" -> mergeProgress(ctx, remote)
         "library" -> mergeLibrary(ctx, remote)
+        "ratings" -> mergeRatings(ctx, remote)
         "sub_style" -> mergeSubStyle(ctx, remote)
         else -> false to false
     }
@@ -246,6 +248,7 @@ object Cloud {
             o.toString()
         }
         "library" -> Library.all(ctx).toString()
+        "ratings" -> Ratings.all(ctx).toString()
         "sub_style" -> {
             val style = JSONObject()
             SubStyle.get(ctx).forEach { (k, v) -> style.put(k, v) }
@@ -403,6 +406,23 @@ object Cloud {
             if (r == null || local.getJSONObject(k).optLong("at") > r.optLong("at")) localNewer = true
         }
         if (changed) Library.replaceAll(ctx, local)
+        return changed to localNewer
+    }
+
+    private fun mergeRatings(ctx: Context, remote: JSONObject): Pair<Boolean, Boolean> {
+        val local = Ratings.all(ctx)
+        var changed = false
+        var localNewer = false
+        for (k in remote.keys()) {
+            val r = remote.optJSONObject(k) ?: continue
+            val l = local.optJSONObject(k)
+            if (l == null || r.optLong("at") > l.optLong("at")) { local.put(k, r); changed = true }
+        }
+        for (k in local.keys()) {
+            val r = remote.optJSONObject(k)
+            if (r == null || local.getJSONObject(k).optLong("at") > r.optLong("at")) localNewer = true
+        }
+        if (changed) Ratings.replaceAll(ctx, local)
         return changed to localNewer
     }
 }

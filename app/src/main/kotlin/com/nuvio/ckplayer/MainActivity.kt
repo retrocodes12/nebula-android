@@ -85,6 +85,7 @@ import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Palette
@@ -96,6 +97,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -193,6 +195,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Prefs.load(this)
+        Social.load(this)
         // only honor the launch intent on a fresh start — a recreated activity
         // (process restore, config change) must not jump back into the player
         pendingPlay.value = if (savedInstanceState == null) parsePlayIntent(intent) else null
@@ -351,6 +354,7 @@ private sealed interface Screen {
     data object Settings : Screen
     data object SettingsSubtitles : Screen
     data object SettingsLayout : Screen
+    data object Friends : Screen
     data object SettingsPlayback : Screen
     data object SettingsSync : Screen
     data object SettingsParty : Screen
@@ -834,8 +838,16 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 onPlayback = { push(Screen.SettingsPlayback) },
                                 onSync = { push(Screen.SettingsSync) },
                                 onParty = { push(Screen.SettingsParty) },
+                                onFriends = { push(Screen.Friends) },
                             )
                             is Screen.SettingsLayout -> SettingsLayoutScreen(onBack = { pop() })
+                            is Screen.Friends -> FriendsScreen(
+                                onBack = { pop() },
+                                onOpen = { m ->
+                                    val a = loadAddons(ctx).firstOrNull() ?: return@FriendsScreen
+                                    openMeta(a, m)
+                                },
+                            )
                             is Screen.SettingsPlayback -> SettingsPlaybackScreen(
                                 onBack = { pop() },
                                 onSubtitles = { push(Screen.SettingsSubtitles) },
@@ -1288,6 +1300,304 @@ private fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick:
             val pct = if (r.dur > 0) (r.pos.toFloat() / r.dur).coerceIn(0f, 1f) else 0f
             Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(Color(0x66000000))) {
                 Box(Modifier.fillMaxWidth(pct).fillMaxSize().background(Red))
+            }
+        }
+    }
+}
+
+// ---------- ratings + friends (experimental) ----------
+
+/** Star row on a title page: tap to rate 1–5, tap the same star to clear. */
+@Composable
+private fun RatingStars(item: MetaItem) {
+    val ctx = LocalContext.current
+    var cur by remember(item.id) { mutableStateOf(Ratings.get(ctx, item.type, item.id)) }
+    Row(
+        Modifier.padding(top = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        for (i in 1..5) {
+            Icon(
+                Icons.Filled.Star, contentDescription = "$i star${if (i > 1) "s" else ""}",
+                tint = if (i <= cur) Red else Color(0x40EBEBF5),
+                modifier = Modifier.size(30.dp).clip(RoundedCornerShape(8.dp))
+                    .clickable {
+                        cur = if (i == cur) 0 else i
+                        Ratings.set(ctx, item.type, item, cur)
+                    }
+                    .padding(2.dp),
+            )
+        }
+        Text(
+            if (cur > 0) "Your rating" else "Rate it",
+            color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(start = 10.dp),
+        )
+    }
+}
+
+/** Pick a friend to send this title to. */
+@Composable
+private fun RecommendSheet(type: String, item: MetaItem, onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var friends by remember { mutableStateOf<List<Pair<String, String>>?>(null) }  // code to name
+    LaunchedEffect(Unit) {
+        val fr = Social.friends(ctx)
+        friends = (0 until (fr?.length() ?: 0)).mapNotNull { i ->
+            val f = fr!!.optJSONObject(i) ?: return@mapNotNull null
+            val c = f.optString("code"); if (c.isEmpty()) return@mapNotNull null
+            c to f.optString("name").ifEmpty { c }
+        }
+    }
+    val list = friends ?: return
+    CardSheet(
+        title = item.name, sub = "Recommend to…", poster = item.poster, shape = item.posterShape,
+        actions = if (list.isEmpty()) listOf(
+            SheetAction(Icons.Filled.Groups, "No friends yet — add one in Friends") {},
+        ) else list.take(8).map { (fCode, fName) ->
+            SheetAction(Icons.Filled.Favorite, fName) {
+                scope.launch {
+                    val ok = Social.recommend(ctx, fCode, type, item)
+                    android.widget.Toast.makeText(
+                        ctx,
+                        if (ok) "Recommended to $fName" else "Could not send that",
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
+        },
+        onDismiss = onDismiss,
+    )
+}
+
+/** One friend-profile item parsed out of their (untrusted) published doc. */
+private fun profItems(a: org.json.JSONArray?): List<JSONObject> =
+    (0 until (a?.length() ?: 0)).mapNotNull { i ->
+        val o = a!!.optJSONObject(i) ?: return@mapNotNull null
+        if (o.optString("id").isEmpty() || o.optString("name").isEmpty()) null else o
+    }
+
+@Composable
+private fun FriendsScreen(onBack: () -> Unit, onOpen: (MetaItem) -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf("") }
+    var codeIn by remember { mutableStateOf("") }
+    var friends by remember { mutableStateOf<List<JSONObject>?>(null) }
+    var inbox by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
+    var openCode by remember { mutableStateOf<String?>(null) }
+    var reload by remember { mutableStateOf(0) }
+
+    LaunchedEffect(reload, Social.on) {
+        if (!Social.on) return@LaunchedEffect
+        Social.publishSoon(ctx)
+        friends = null
+        val fr = Social.friends(ctx)
+        friends = (0 until (fr?.length() ?: 0)).mapNotNull { fr!!.optJSONObject(it) }
+        val ib = Social.inbox(ctx)
+        inbox = (0 until (ib?.length() ?: 0)).mapNotNull { ib!!.optJSONObject(it) }.reversed()
+    }
+
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 110.dp),
+    ) {
+        item(key = "top") {
+            Column {
+                BackBar("Friends", if (Social.on) "Code ${Social.code}" else "Experimental", onBack)
+                if (status.isNotEmpty()) Text(status, color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(bottom = 8.dp))
+            }
+        }
+        if (!Social.on) {
+            item(key = "pitch") {
+                Column(
+                    Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(16.dp))
+                        .border(1.dp, LineC, RoundedCornerShape(16.dp)).padding(18.dp),
+                ) {
+                    Text("Rate. Share. Recommend.", color = TextC, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Rate what you watch, see what your friends are watching, and trade " +
+                            "recommendations. Turning it on shares your ratings, recent watches and " +
+                            "My List — with friends you add by code, and no one else.",
+                        color = MutedC, fontSize = 14.sp, lineHeight = 21.sp,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 14.dp),
+                    )
+                    Button(
+                        onClick = {
+                            if (busy) return@Button
+                            busy = true; status = "Setting up…"
+                            scope.launch {
+                                status = Social.enable(ctx) ?: ""
+                                busy = false; reload++
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
+                        shape = RoundedCornerShape(12.dp),
+                    ) { Text("Turn on Friends", fontWeight = FontWeight.SemiBold) }
+                }
+            }
+            return@LazyColumn
+        }
+        item(key = "add") {
+            Row(Modifier.padding(bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = codeIn, onValueChange = { codeIn = it.take(10) },
+                    placeholder = { Text("Friend’s code", color = MutedC) },
+                    singleLine = true, modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color.White, unfocusedBorderColor = Line2, cursorColor = Red,
+                        focusedTextColor = TextC, unfocusedTextColor = TextC,
+                    ),
+                )
+                Button(
+                    onClick = {
+                        scope.launch {
+                            val (name, err) = Social.addFriend(ctx, codeIn)
+                            status = err ?: "You and $name are now friends."
+                            if (err == null) { codeIn = ""; reload++ }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.padding(start = 10.dp),
+                ) { Text("Add", fontWeight = FontWeight.SemiBold) }
+            }
+        }
+        if (inbox.isNotEmpty()) {
+            item(key = "inboxhead") {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
+                    Text("Recommended to you", color = TextC, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    Text("Clear", color = MutedC, fontSize = 13.sp,
+                        modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                            .clickable { scope.launch { Social.inboxClear(ctx); reload++ } }
+                            .padding(6.dp))
+                }
+            }
+            items(inbox.take(10), key = { it.optLong("at").toString() + it.optString("c") }) { rec ->
+                val it2 = rec.optJSONObject("i") ?: return@items
+                Row(
+                    Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                        .background(SurfaceC, RoundedCornerShape(12.dp))
+                        .border(1.dp, LineC, RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable {
+                            onOpen(MetaItem(it2.optString("id"), if (it2.optString("type") == "series") "series" else "movie",
+                                it2.optString("name"), it2.optString("poster").ifEmpty { null }))
+                        }
+                        .padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    val poster = it2.optString("poster")
+                    if (poster.startsWith("http")) AsyncImage(
+                        model = poster, contentDescription = null, contentScale = ContentScale.Crop,
+                        modifier = Modifier.width(34.dp).height(50.dp).clip(RoundedCornerShape(7.dp)).background(Color.Black),
+                    )
+                    Column(Modifier.padding(start = 12.dp)) {
+                        Text(
+                            "${rec.optString("f").ifEmpty { "A friend" }} recommends ${it2.optString("name")}",
+                            color = TextC, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        )
+                        val note = rec.optString("n")
+                        if (note.isNotEmpty()) Text("“$note”", color = MutedC, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        }
+        item(key = "frhead") { Text("Friends", color = TextC, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp, bottom = 8.dp)) }
+        when (val fl = friends) {
+            null -> item(key = "frload") { Text("Loading…", color = MutedC, fontSize = 14.sp) }
+            else -> if (fl.isEmpty()) {
+                item(key = "frempty") {
+                    Text("No friends yet — trade codes and their watching shows up here.",
+                        color = MutedC, fontSize = 14.sp, lineHeight = 20.sp)
+                }
+            } else {
+                items(fl, key = { it.optString("code") }) { f ->
+                    val fCode = f.optString("code")
+                    val prof = runCatching { JSONObject(f.optString("profile").ifEmpty { "{}" }) }.getOrDefault(JSONObject())
+                    Column(Modifier.padding(bottom = 10.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .background(SurfaceC, RoundedCornerShape(14.dp))
+                                .border(1.dp, if (openCode == fCode) Line2 else LineC, RoundedCornerShape(14.dp))
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { openCode = if (openCode == fCode) null else fCode }
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                Modifier.size(40.dp).background(Red, CircleShape),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(f.optString("name").ifEmpty { "?" }.take(1).uppercase(),
+                                    color = OnAccent, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Column(Modifier.padding(start = 12.dp).weight(1f)) {
+                                Text(f.optString("name").ifEmpty { fCode }, color = TextC, fontSize = 15.sp,
+                                    fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("${prof.optJSONArray("ratings")?.length() ?: 0} rated", color = MutedC, fontSize = 12.sp)
+                            }
+                            Text(if (openCode == fCode) "Hide" else "View", color = MutedC, fontSize = 13.sp)
+                        }
+                        if (openCode == fCode) {
+                            FriendRow("Watched recently", profItems(prof.optJSONArray("recent")).map { r ->
+                                if (r.optString("type") == "series")
+                                    JSONObject(r.toString()).put("id", r.optString("id").substringBefore(':'))
+                                else r
+                            }, onOpen)
+                            FriendRow("Rated", profItems(prof.optJSONArray("ratings")), onOpen)
+                            FriendRow("Their list", profItems(prof.optJSONArray("list")), onOpen)
+                        }
+                    }
+                }
+                item(key = "froff") {
+                    Text("Turn off Friends", color = MutedC, fontSize = 13.sp,
+                        modifier = Modifier.padding(top = 12.dp).clip(RoundedCornerShape(8.dp))
+                            .clickable { scope.launch { Social.disable(ctx); reload++ } }
+                            .padding(6.dp))
+                }
+            }
+        }
+    }
+}
+
+/** A titled poster row from a friend's profile. */
+@Composable
+private fun FriendRow(title: String, items: List<JSONObject>, onOpen: (MetaItem) -> Unit) {
+    if (items.isEmpty()) return
+    Text(title, color = MutedC, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(top = 10.dp, bottom = 6.dp))
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        items(items.take(15), key = { it.optString("type") + it.optString("id") }) { r ->
+            Column(Modifier.width(96.dp)) {
+                Box(
+                    Modifier.fillMaxWidth().aspectRatio(2f / 3f)
+                        .clip(RoundedCornerShape(10.dp)).background(SurfaceC)
+                        .clickable {
+                            onOpen(MetaItem(r.optString("id"), if (r.optString("type") == "series") "series" else "movie",
+                                r.optString("name"), r.optString("poster").ifEmpty { null }))
+                        },
+                ) {
+                    val poster = r.optString("poster")
+                    if (poster.startsWith("http")) AsyncImage(
+                        model = poster, contentDescription = r.optString("name"),
+                        contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
+                    )
+                    val stars = r.optInt("rating", 0)
+                    if (stars > 0) Text(
+                        "★ $stars", color = Red, fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(5.dp)
+                            .background(Color(0xB8000000), RoundedCornerShape(7.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+                Text(r.optString("name"), color = MutedC, fontSize = 12.sp, maxLines = 2,
+                    overflow = TextOverflow.Ellipsis, lineHeight = 15.sp,
+                    modifier = Modifier.padding(top = 5.dp))
             }
         }
     }
@@ -2165,6 +2475,7 @@ private fun SettingsScreen(
     onPlayback: () -> Unit,
     onSync: () -> Unit,
     onParty: () -> Unit,
+    onFriends: () -> Unit,
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -2188,6 +2499,7 @@ private fun SettingsScreen(
             SettingsRow(Icons.Filled.Extension, "Add-ons", "Add, rank and manage your add-ons", true, onAddons)
             SettingsRow(Icons.Filled.Sync, "Sync between devices", "Add-ons, progress and My List follow you", true, onSync)
             SettingsRow(Icons.Filled.Groups, "Watch party", "Watch in sync with friends using a code", true, onParty)
+            SettingsRow(Icons.Filled.Favorite, "Friends", "Rate, share and recommend — experimental", true, onFriends)
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -2600,6 +2912,8 @@ private fun DetailScreen(
     var full by remember(ck) { mutableStateOf(metaFullCache[ck]) }
     var metaTried by remember(ck) { mutableStateOf(metaFullCache[ck] != null) }
     var inList by remember(ck) { mutableStateOf(Library.inList(ctx, item.type, item.id)) }
+    var recOpen by remember(ck) { mutableStateOf(false) }
+    if (recOpen) RecommendSheet(item.type, item) { recOpen = false }
 
     LaunchedEffect(ck) {
         if (full != null) return@LaunchedEffect
@@ -2791,7 +3105,13 @@ private fun DetailScreen(
                 colors = ButtonDefaults.buttonColors(containerColor = Surface2),
                 shape = RoundedCornerShape(12.dp),
             ) { Text(if (inList) "✓ In My List" else "+ My List", color = TextC, fontWeight = FontWeight.SemiBold) }
+            if (Social.on) Button(
+                onClick = { recOpen = true },
+                colors = ButtonDefaults.buttonColors(containerColor = Surface2),
+                shape = RoundedCornerShape(12.dp),
+            ) { Text("Recommend", color = TextC, fontWeight = FontWeight.SemiBold) }
         }
+        RatingStars(item)
         } }   // header item
 
         if (item.type == "series") {
@@ -3823,6 +4143,7 @@ private fun PlayerScreen(
         onDispose {
             // last word on the resume point before the player goes away
             runCatching { snapshotProgress() }
+            runCatching { Social.publishSoon(context) }   // friends see the freshly watched title
             exo.removeListener(l); runCatching { session?.release() }; exo.release()
             if (activePipPlayer.value === exo) activePipPlayer.value = null
             // Clears (API 31+) auto-enter so backing out of the player can't PiP the browse UI.
