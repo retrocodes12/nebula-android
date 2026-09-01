@@ -31,6 +31,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -51,6 +52,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -770,6 +772,27 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 }
             }
 
+            // Home used to appear the instant the shell was ready and then fill
+            // in row by row, so the first thing anyone saw was an empty screen.
+            // This holds it back until a catalogue has actually landed.
+            var booting by remember { mutableStateOf(true) }
+            if (booting) LaunchedEffect(Unit) {
+                val started = System.currentTimeMillis()
+                // whichever comes first: real rows, a verdict, or the cap
+                while (System.currentTimeMillis() - started < BOOT_MAX_MS) {
+                    val settled = homeState.rows.isNotEmpty() ||
+                        !homeState.hasAddons ||
+                        (!homeState.loading && homeState.sig != null)
+                    if (settled && System.currentTimeMillis() - started >= BOOT_MIN_MS) break
+                    delay(50)
+                }
+                val held = System.currentTimeMillis() - started
+                if (held < BOOT_MIN_MS) delay(BOOT_MIN_MS - held)  // never a flicker
+                booting = false
+            }
+            // anything but Home is its own destination and must not wait on catalogues
+            LaunchedEffect(stack.last()) { if (stack.last() !is Screen.Home) booting = false }
+
             Box(Modifier.fillMaxSize()) {
                 val current = stack.last()
                 Box(Modifier.fillMaxSize()) {
@@ -898,12 +921,63 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                         BottomBar(current, onTab = { setTab(it) }, modifier = Modifier.align(Alignment.BottomCenter))
                     }
                 }
+                // outside the screen Box so it covers the nav bar too
+                AnimatedVisibility(visible = booting, enter = fadeIn(tween(0)), exit = fadeOut(tween(320))) {
+                    BootScreen()
+                }
             }
         }
     }
 }
 
 // ---------- shared pieces ----------
+
+private const val BOOT_MIN_MS = 550L    // below this it reads as a flicker, not a screen
+private const val BOOT_MAX_MS = 3200L   // a stuck add-on must never strand anyone here
+
+/** What you look at while the first catalogue is on its way. */
+@Composable
+private fun BootScreen() {
+    Box(Modifier.fillMaxSize().background(Bg), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Canvas(Modifier.size(30.dp)) {
+                    // the same diamond the rail wears
+                    val c = size.minDimension / 2f
+                    drawPath(
+                        androidx.compose.ui.graphics.Path().apply {
+                            moveTo(c, 0f); lineTo(size.width, c); lineTo(c, size.height); lineTo(0f, c); close()
+                        },
+                        Red,
+                    )
+                }
+                Text(
+                    "Nebula", color = TextC, fontSize = 30.sp, fontFamily = Sans,
+                    fontWeight = FontWeight.Bold, letterSpacing = (-0.9).sp,
+                    modifier = Modifier.padding(start = 11.dp),
+                )
+            }
+            // An indeterminate sweep, not a percentage — we cannot know how long
+            // an add-on will take, and a fake bar that stalls is worse than none.
+            val sweep = rememberInfiniteTransition(label = "boot")
+            val x by sweep.animateFloat(
+                initialValue = -1.05f, targetValue = 3.55f,
+                animationSpec = infiniteRepeatable(tween(1050), RepeatMode.Restart),
+                label = "sweep",
+            )
+            Box(
+                Modifier.padding(top = 26.dp).width(132.dp).height(3.dp)
+                    .clip(RoundedCornerShape(2.dp)).background(Color(0x1AFFFFFF)),
+            ) {
+                Box(
+                    Modifier.fillMaxWidth(0.4f).fillMaxHeight()
+                        .graphicsLayer { translationX = x * size.width }
+                        .clip(RoundedCornerShape(2.dp)).background(Red),
+                )
+            }
+        }
+    }
+}
 
 /** Card wrapper: scales up + white border when focused (TV D-pad) or pressed. */
 @Composable
