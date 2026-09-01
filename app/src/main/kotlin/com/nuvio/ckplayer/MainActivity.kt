@@ -1603,7 +1603,7 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
             Column {
                 BackBar("Add-ons", null, onBack)
                 Text(
-                    "Add an add-on by its manifest URL and its catalogs show up on Home. HLS · DASH · DASH+ClearKey.",
+                    "Add an add-on by its manifest URL and its catalogs show up on Home.",
                     color = MutedC, fontSize = 14.sp, modifier = Modifier.padding(bottom = 10.dp),
                 )
             }
@@ -1833,7 +1833,7 @@ private fun SettingsScreen(
             SettingsRow(Icons.Filled.Shield, "Privacy Policy", "No accounts, no tracking — how Nebula handles data", true) {
                 runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.rifflehq.in/privacy.html"))) }
             }
-            SettingsRow(Icons.Filled.Info, "Nebula for Android", "v$version · HLS · DASH · DASH+ClearKey", false, null)
+            SettingsRow(Icons.Filled.Info, "Nebula for Android", "v$version · plays every add-on format, on-device", false, null)
         }
         Spacer(Modifier.height(110.dp))
     }
