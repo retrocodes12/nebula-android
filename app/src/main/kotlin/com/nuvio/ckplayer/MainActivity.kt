@@ -1160,10 +1160,8 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit) {
             )
         )
         Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
-            val seasonCount = m.videos.map { it.season }.filter { it > 0 }.distinct().size
             val facts = listOfNotNull(
                 m.releaseInfo, m.imdbRating?.let { "★ $it" },
-                if (seasonCount > 0) "$seasonCount season" + (if (seasonCount > 1) "s" else "") else null,
             ).joinToString("  ·  ")
             if (facts.isNotEmpty()) Text(
                 facts.uppercase(), color = Color(0xC7EBEBF5), fontSize = 11.sp,
@@ -1927,6 +1925,8 @@ private fun DetailScreen(
             full?.releaseInfo ?: item.releaseInfo,
             full?.runtime,
             (full?.imdbRating ?: item.imdbRating)?.let { "★ $it" },
+            full?.videos?.map { it.season }?.filter { it > 0 }?.distinct()?.size
+                ?.takeIf { it > 0 }?.let { "$it season" + (if (it > 1) "s" else "") },
             full?.genres?.take(3)?.joinToString(" · ")?.ifEmpty { null },
         ).joinToString("   ·   ")
         if (facts.isNotEmpty()) Text(
