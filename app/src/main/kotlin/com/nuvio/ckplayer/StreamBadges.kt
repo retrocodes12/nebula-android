@@ -4,11 +4,12 @@ import kotlin.math.roundToInt
 
 /**
  * Stream-card badges: the Elite "fusion" pack (the default set), matched
- * against a stream's raw name+title text. First hit per group wins, and
- * within a group the table runs specific -> generic (HDR10+ before HDR).
+ * against a stream's raw name+title text. First hit per group becomes a
+ * badge, and within a group the table runs specific -> generic (HDR10+
+ * before HDR). Badge art is bundled in assets, trimmed and downscaled.
  */
 object StreamBadges {
-    private const val BASE = "https://raw.githubusercontent.com/leonevz/Elite-Badges/main/Badges/"
+    private const val BASE = "file:///android_asset/badges/"
 
     private val PACK: List<Triple<String, Regex, String>> = listOf(
         Triple("resolution", Regex("""\b(4k|2160p|uhd|ultra\s*hd)\b""", RegexOption.IGNORE_CASE), "4k_ultra_hd.png"),
@@ -44,17 +45,28 @@ object StreamBadges {
         Triple("audio-channels", Regex("""\b(5\.1|5-1|6ch|6\s*channel)\b""", RegexOption.IGNORE_CASE), "5_1_audio.png"),
     )
 
-    fun badges(raw: String): List<String> {
+    data class Match(val badges: List<String>, val fired: List<Regex>)
+
+    fun match(raw: String): Match {
         val seen = HashSet<String>()
-        val out = ArrayList<String>()
+        val badges = ArrayList<String>()
+        val fired = ArrayList<Regex>()
         for ((group, re, file) in PACK) {
-            if (out.size >= 7) break
-            if (group in seen || !re.containsMatchIn(raw)) continue
+            if (!re.containsMatchIn(raw)) continue
+            fired.add(re)                              // every match cleans the text line
+            if (group in seen || badges.size >= 6) continue
             seen.add(group)
-            out.add(BASE + file)
+            badges.add(BASE + file)
         }
-        return out
+        return Match(badges, fired)
     }
+
+    private val RE_SIZE = Regex("""(\d+(?:[.,]\d+)?)\s*(GB|GiB|MB|MiB)\b""", RegexOption.IGNORE_CASE)
+    private val RE_BITRATE = Regex("""~?\s*(\d+(?:\.\d+)?)\s*Mbps\b""", RegexOption.IGNORE_CASE)
+    private val RE_SOURCE = Regex("""\bsource\s*:?\s+(.+)""", RegexOption.IGNORE_CASE)
+    private val RE_SEEDS_EMOJI = Regex("""\uD83D\uDC64\s*(\d+)""")
+    private val RE_SEEDS_TEXT = Regex("""\b(?:seeds?|seeders?)[:\s]+(\d+)""", RegexOption.IGNORE_CASE)
+    private val RE_BULLET = Regex("""\s*[\u00b7\u2022]\s*""")
 
     private fun fmtBytes(n: Long): String {
         val g = n / 1073741824.0
@@ -65,25 +77,27 @@ object StreamBadges {
 
     data class Facts(val facts: String, val desc: String)
 
-    /** Size, seeders and provider pulled out of the stream text; lines that only
-        carried those (Torrentio's emoji line) are consumed, the rest is desc. */
-    fun facts(videoSize: Long, text: String): Facts {
+    /** Size, bitrate, seeders and provider pulled out of the stream text; lines
+        that only carried those are consumed, bullet-style tokens the badges
+        already show are dropped, and whatever remains becomes the desc. */
+    fun facts(videoSize: Long, text: String, fired: List<Regex> = emptyList()): Facts {
         var size: String? = if (videoSize > 0) fmtBytes(videoSize) else null
         var seeds: String? = null
         var provider: String? = null
+        var bitrate: String? = null
         val desc = ArrayList<String>()
         for (ln in text.split("\n")) {
             val factLine = ln.contains("\uD83D\uDC64") || ln.contains("\uD83D\uDCBE") || ln.contains('\u2699')
             if (size == null) {
-                Regex("""(\d+(?:[.,]\d+)?)\s*(GB|GiB|MB|MiB)\b""", RegexOption.IGNORE_CASE).find(ln)?.let { m ->
+                RE_SIZE.find(ln)?.let { m ->
                     val u = m.groupValues[2]
                     size = m.groupValues[1].replace(',', '.') + " " +
                         (if (u.length == 3) u[0].uppercaseChar() + "iB" else u.uppercase())
                 }
             }
+            if (bitrate == null) RE_BITRATE.find(ln)?.let { bitrate = it.groupValues[1] + " Mbps" }
             if (seeds == null) {
-                val m = Regex("""\uD83D\uDC64\s*(\d+)""").find(ln)
-                    ?: Regex("""\b(?:seeds?|seeders?)[:\s]+(\d+)""", RegexOption.IGNORE_CASE).find(ln)
+                val m = RE_SEEDS_EMOJI.find(ln) ?: RE_SEEDS_TEXT.find(ln)
                 if (m != null) seeds = m.groupValues[1]
             }
             if (provider == null) {
@@ -94,9 +108,28 @@ object StreamBadges {
                     if (pv.isNotEmpty()) provider = pv
                 }
             }
-            if (!factLine && ln.isNotBlank()) desc.add(ln.trim())
+            if (factLine || ln.isBlank()) continue
+            if (ln.contains('\u00b7') || ln.contains('\u2022')) {
+                // bullet-style metadata: drop what the badges and facts already say
+                val kept = ArrayList<String>()
+                for (tok in ln.split(RE_BULLET)) {
+                    if (tok.isEmpty()) continue
+                    val src = RE_SOURCE.find(tok)
+                    if (src != null) { if (provider == null) provider = src.groupValues[1].trim(); continue }
+                    if (RE_BITRATE.containsMatchIn(tok) || RE_SIZE.containsMatchIn(tok)) continue
+                    if (fired.any { it.containsMatchIn(tok) }) continue
+                    kept.add(tok)
+                }
+                if (kept.isNotEmpty()) desc.add(kept.joinToString(" \u00b7 "))
+            } else {
+                desc.add(ln.trim())
+            }
         }
-        val facts = listOfNotNull(size, seeds?.let { "$it seeds" }, provider).joinToString("  \u00b7  ")
-        return Facts(facts, desc.joinToString(" \u00b7 "))
+        val factsList = ArrayList<String>()
+        size?.let { factsList.add(it) }
+        bitrate?.let { factsList.add(it) }
+        seeds?.let { factsList.add(it + " seeds") }
+        provider?.let { factsList.add(it) }
+        return Facts(factsList.joinToString("  \u00b7  "), desc.joinToString(" \u00b7 "))
     }
 }

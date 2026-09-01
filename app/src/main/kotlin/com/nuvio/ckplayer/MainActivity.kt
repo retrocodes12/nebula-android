@@ -2452,7 +2452,8 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
                         }
                         Column(Modifier.weight(1f)) {
                             Text(s.name.replace("\n", " ").ifEmpty { "Stream" }, color = TextC, fontSize = 15.sp, fontFamily = Sans, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            val badges = remember(s.url) { StreamBadges.badges(s.name + "\n" + s.title) }
+                            val m = remember(s.url) { StreamBadges.match(s.name + "\n" + s.title) }
+                            val badges = m.badges
                             if (badges.isNotEmpty()) {
                                 Row(
                                     Modifier.padding(top = 5.dp),
@@ -2468,7 +2469,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
                                     }
                                 }
                             }
-                            val f = remember(s.url) { StreamBadges.facts(s.videoSize, s.title) }
+                            val f = remember(s.url) { StreamBadges.facts(s.videoSize, s.title, m.fired) }
                             if (f.facts.isNotEmpty()) Text(f.facts, color = MutedC, fontSize = 12.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
                             if (f.desc.isNotEmpty()) Text(f.desc, style = labelStyle(12), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
                         }
