@@ -87,6 +87,7 @@ import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Sync
@@ -104,6 +105,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -189,6 +192,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Prefs.load(this)
         // only honor the launch intent on a fresh start — a recreated activity
         // (process restore, config change) must not jump back into the player
         pendingPlay.value = if (savedInstanceState == null) parsePlayIntent(intent) else null
@@ -279,7 +283,10 @@ private val inPipMode = mutableStateOf(false)
 // ---------- Nebula palette (matches the web/webOS player: flat, restrained) ----------
 // Editorial palette: warm cream ink on near-black, hairlines for structure,
 // red kept to the mark and to progress. Mirrors the shared HTML player.
-internal val Red = Color(0xFFE50914)
+// The accent is a getter over Prefs state, so picking a new one in Settings
+// recomposes everything that wears it — no restart, no plumbing.
+internal val Red: Color get() = Prefs.accentColor
+internal val OnAccent: Color get() = Prefs.onAccent
 private val Bg = Color(0xFF000000)
 internal val SurfaceC = Color(0xFF1C1C1E)     // secondary system background
 internal val Surface2 = Color(0xFF2C2C2E)     // tertiary
@@ -326,11 +333,12 @@ private fun labelStyle(size: Int = 13, color: Color = MutedC) = TextStyle(
     color = color,
 )
 
-private val DarkColors = darkColorScheme(
+// a getter, so the scheme follows the accent pref
+private val DarkColors get() = darkColorScheme(
     primary = Red,
     background = Bg,
     surface = SurfaceC,
-    onPrimary = Color.White,
+    onPrimary = OnAccent,
     onBackground = TextC,
     onSurface = TextC,
 )
@@ -342,6 +350,8 @@ private sealed interface Screen {
     data object Addons : Screen
     data object Settings : Screen
     data object SettingsSubtitles : Screen
+    data object SettingsLayout : Screen
+    data object SettingsPlayback : Screen
     data object SettingsSync : Screen
     data object SettingsParty : Screen
     data class Detail(val addon: Addon, val item: MetaItem) : Screen
@@ -389,6 +399,8 @@ private class SeriesChain {
     fun clear() { episodes = emptyList(); index = -1; name = ""; addon = null }
 }
 private val seriesChain = SeriesChain()
+// which item auto stream selection already fired for (survives the screen)
+private var autoPlayedFor: String? = null
 
 /** One catalog's worth of content, tagged with where it came from. */
 private class CatRow(val addon: Addon, val catalog: CatalogRef, val items: List<MetaItem>)
@@ -818,9 +830,15 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                             )
                             is Screen.Settings -> SettingsScreen(
                                 onAddons = { push(Screen.Addons) },
-                                onSubtitles = { push(Screen.SettingsSubtitles) },
+                                onLayout = { push(Screen.SettingsLayout) },
+                                onPlayback = { push(Screen.SettingsPlayback) },
                                 onSync = { push(Screen.SettingsSync) },
                                 onParty = { push(Screen.SettingsParty) },
+                            )
+                            is Screen.SettingsLayout -> SettingsLayoutScreen(onBack = { pop() })
+                            is Screen.SettingsPlayback -> SettingsPlaybackScreen(
+                                onBack = { pop() },
+                                onSubtitles = { push(Screen.SettingsSubtitles) },
                             )
                             is Screen.SettingsSubtitles -> SettingsSubtitlesScreen(onBack = { pop() })
                             is Screen.SettingsSync -> SettingsSyncScreen(
@@ -1410,7 +1428,7 @@ private fun UpdateCard(version: String, notes: String, onDismiss: () -> Unit) {
 
     Row(
         Modifier.fillMaxWidth()
-            .background(Red, RoundedCornerShape(12.dp))
+            .background(Color(0xFFE50914), RoundedCornerShape(12.dp))
             .padding(start = 14.dp, top = 12.dp, end = 6.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1637,7 +1655,7 @@ private fun HomeScreen(
         st.loading = false
     }
 
-    val heroing = st.rows.isNotEmpty() && st.hasAddons
+    val heroing = st.rows.isNotEmpty() && st.hasAddons && Prefs.showHero
     Column(Modifier.fillMaxSize().padding(top = if (heroing) 0.dp else 16.dp)) {
         // with a hero the brand rides on the artwork instead of pushing it down
         if (!heroing) Row(
@@ -1674,7 +1692,7 @@ private fun HomeScreen(
                 )
                 Button(
                     onClick = onGoAddons,
-                    colors = ButtonDefaults.buttonColors(containerColor = Red),
+                    colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
                     shape = RoundedCornerShape(12.dp),
                 ) { Text("Add an add-on", fontWeight = FontWeight.SemiBold) }
             }
@@ -1699,8 +1717,8 @@ private fun HomeScreen(
                 Chip("Retry", false) { st.invalidate() }
             }
             else -> LazyColumn(state = st.listState, contentPadding = PaddingValues(bottom = 104.dp)) {
-                if (st.rows.isNotEmpty()) item(key = "hero") { HeroHeader(st.rows, onOpen) }
-                if (st.continueRows.isNotEmpty()) item(key = "continue") {
+                if (st.rows.isNotEmpty() && Prefs.showHero) item(key = "hero") { HeroHeader(st.rows, onOpen) }
+                if (st.continueRows.isNotEmpty() && Prefs.showContinue) item(key = "continue") {
                     Column {
                         Box(Modifier.padding(horizontal = 16.dp)) { RowHeader("Continue watching", null, null) }
                         LazyRow(
@@ -1710,7 +1728,7 @@ private fun HomeScreen(
                             items(st.continueRows, key = { Progress.key(it.type, it.id) }) { r ->
                                 ContinueCard(
                                     r,
-                                    Modifier.width(250.dp),
+                                    Modifier.width(250.dp * Prefs.posterScale),
                                     onClick = { onResume(r) },
                                     onLongClick = { sheetFor = r },
                                 )
@@ -1734,7 +1752,7 @@ private fun HomeScreen(
                             contentPadding = PaddingValues(horizontal = 16.dp),
                         ) {
                             items(r.items) { m ->
-                                MetaCard(m, Modifier.width(if (m.posterShape == "landscape") 210.dp else 124.dp)) { onOpen(r.addon, m) }
+                                MetaCard(m, Modifier.width((if (m.posterShape == "landscape") 210.dp else 124.dp) * Prefs.posterScale)) { onOpen(r.addon, m) }
                             }
                         }
                     }
@@ -1838,7 +1856,7 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit) {
                         RowHeader(r.addon.name, "${r.items.size} result" + (if (r.items.size > 1) "s" else ""), null)
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             items(r.items) { m ->
-                                MetaCard(m, Modifier.width(if (m.posterShape == "landscape") 210.dp else 124.dp)) { onOpen(r.addon, m) }
+                                MetaCard(m, Modifier.width((if (m.posterShape == "landscape") 210.dp else 124.dp) * Prefs.posterScale)) { onOpen(r.addon, m) }
                             }
                         }
                     }
@@ -1931,7 +1949,7 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                                 }.onFailure { status = "Could not load: ${it.message}"; statusErr = true }
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = Red),
+                        colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
                         shape = RoundedCornerShape(12.dp),
                     ) { Text("Add add-on", fontWeight = FontWeight.SemiBold) }
                 }
@@ -1994,7 +2012,7 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                                     .background(Red, RoundedCornerShape(12.dp)),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Text(a.name.take(1).uppercase(), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                                Text(a.name.take(1).uppercase(), color = OnAccent, fontSize = 20.sp, fontWeight = FontWeight.Black)
                             }
                         }
                         Column(Modifier.weight(1f)) {
@@ -2143,7 +2161,8 @@ private fun SettingsRow(
 @Composable
 private fun SettingsScreen(
     onAddons: () -> Unit,
-    onSubtitles: () -> Unit,
+    onLayout: () -> Unit,
+    onPlayback: () -> Unit,
     onSync: () -> Unit,
     onParty: () -> Unit,
 ) {
@@ -2164,8 +2183,9 @@ private fun SettingsScreen(
         )
         SettingsHeader("GENERAL")
         SettingsGroup {
-            SettingsRow(Icons.Filled.Extension, "Add-ons", "Add and manage your add-ons", true, onAddons)
-            SettingsRow(Icons.Filled.ClosedCaption, "Subtitle style", "Size, colour, background and font of captions", true, onSubtitles)
+            SettingsRow(Icons.Filled.Palette, "Layout", "Theme, Home rows and poster size", true, onLayout)
+            SettingsRow(Icons.Filled.PlayArrow, "Playback", "Player, subtitles, languages and auto-play", true, onPlayback)
+            SettingsRow(Icons.Filled.Extension, "Add-ons", "Add, rank and manage your add-ons", true, onAddons)
             SettingsRow(Icons.Filled.Sync, "Sync between devices", "Add-ons, progress and My List follow you", true, onSync)
             SettingsRow(Icons.Filled.Groups, "Watch party", "Watch in sync with friends using a code", true, onParty)
             Row(
@@ -2233,6 +2253,165 @@ private fun SettingsSubtitlesScreen(onBack: () -> Unit) {
     }
 }
 
+/** A titled switch row for the settings pages. */
+@Composable
+private fun SettingsToggle(title: String, sub: String, checked: Boolean, divider: Boolean = true, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable { onChange(!checked) }
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Text(sub, color = MutedC, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 2.dp))
+        }
+        Switch(
+            checked = checked, onCheckedChange = onChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = OnAccent, checkedTrackColor = Red,
+                uncheckedThumbColor = Color(0xFF8E8E93), uncheckedTrackColor = Surface2,
+                uncheckedBorderColor = Color.Transparent,
+            ),
+        )
+    }
+    if (divider) Box(Modifier.fillMaxWidth().padding(start = 14.dp).height(1.dp).background(LineC))
+}
+
+/** A titled row of choice chips. */
+@Composable
+private fun SettingsChips(title: String, sub: String?, options: List<Pair<String, String>>, selected: String, divider: Boolean = true, onPick: (String) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
+        Text(title, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        if (sub != null) Text(sub, color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(top = 2.dp))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 10.dp)) {
+            items(options, key = { it.first }) { o ->
+                Chip(o.second, selected == o.first) { onPick(o.first) }
+            }
+        }
+    }
+    if (divider) Box(Modifier.fillMaxWidth().padding(start = 14.dp).height(1.dp).background(LineC))
+}
+
+@Composable
+private fun SettingsLayoutScreen(onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp).padding(top = 20.dp, bottom = 110.dp),
+    ) {
+        BackBar("Layout", null, onBack)
+        SettingsHeader("THEME")
+        SettingsGroup {
+            // swatch grid: three per row, tick on the current one
+            Column(Modifier.fillMaxWidth().padding(14.dp)) {
+                Prefs.ACCENTS.chunked(3).forEachIndexed { ri, row ->
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = if (ri == 0) 0.dp else 18.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                    ) {
+                        row.forEach { (key, label, color) ->
+                            val on = Prefs.accent == key
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.width(84.dp).clip(RoundedCornerShape(14.dp))
+                                    .clickable { Prefs.setAccent(ctx, key) }.padding(vertical = 6.dp),
+                            ) {
+                                Box(
+                                    Modifier.size(52.dp).clip(CircleShape).background(color)
+                                        .border(if (on) 3.dp else 0.dp, if (on) Color.White else Color.Transparent, CircleShape),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    if (on) Text("✓", color = if (key == "white") Color.Black else Color.White,
+                                        fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                }
+                                Text(
+                                    label, color = if (on) TextC else MutedC, fontSize = 12.sp,
+                                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium,
+                                    maxLines = 1, modifier = Modifier.padding(top = 8.dp),
+                                )
+                            }
+                        }
+                        // keep a short last row left-packed at the same rhythm
+                        repeat(3 - row.size) { Box(Modifier.width(84.dp)) }
+                    }
+                }
+            }
+        }
+        SettingsHeader("HOME")
+        SettingsGroup {
+            SettingsToggle("Featured carousel", "The full-bleed showcase at the top of Home", Prefs.showHero) { Prefs.setShowHero(ctx, it) }
+            SettingsToggle("Continue watching", "Pick up where you left off, right on Home", Prefs.showContinue) { Prefs.setShowContinue(ctx, it) }
+            SettingsChips(
+                "Poster size", "How large cards render everywhere",
+                listOf("0.85" to "Compact", "1.0" to "Standard", "1.18" to "Large"),
+                when (Prefs.posterScale) { 0.85f -> "0.85"; 1.18f -> "1.18"; else -> "1.0" },
+                divider = false,
+            ) { Prefs.setPosterScale(ctx, it.toFloat()) }
+        }
+    }
+}
+
+@Composable
+private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) {
+    val ctx = LocalContext.current
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp).padding(top = 20.dp, bottom = 110.dp),
+    ) {
+        BackBar("Playback", null, onBack)
+        SettingsHeader("PLAYER")
+        SettingsGroup {
+            SettingsToggle(
+                "Touch gestures",
+                "Double-tap the edges to skip 10s, swipe to seek",
+                Prefs.gestures,
+            ) { Prefs.setGestures(ctx, it) }
+            SettingsToggle(
+                "Hold to speed",
+                "Hold the player surface to race ahead; release to resume",
+                Prefs.holdSpeed,
+            ) { Prefs.setHoldSpeed(ctx, it) }
+            SettingsChips(
+                "Hold speed", null,
+                listOf("1.5" to "1.5×", "2.0" to "2×", "3.0" to "3×"),
+                when (Prefs.holdRate) { 1.5f -> "1.5"; 3.0f -> "3.0"; else -> "2.0" },
+                divider = false,
+            ) { Prefs.setHoldRate(ctx, it.toFloat()) }
+        }
+        SettingsHeader("LANGUAGES")
+        SettingsGroup {
+            SettingsChips(
+                "Audio language", "Preferred track when a stream carries several",
+                Prefs.LANGS, Prefs.audioLang,
+            ) { Prefs.setAudioLang(ctx, it) }
+            SettingsChips(
+                "Subtitle language", "Preferred captions when a stream carries several",
+                Prefs.LANGS, Prefs.subLang,
+                divider = false,
+            ) { Prefs.setSubLang(ctx, it) }
+        }
+        SettingsHeader("SUBTITLES")
+        SettingsGroup {
+            SettingsRow(Icons.Filled.ClosedCaption, "Subtitle style", "Size, colour, background and font of captions", false, onSubtitles)
+        }
+        SettingsHeader("STREAMS")
+        SettingsGroup {
+            SettingsToggle(
+                "Auto stream selection",
+                "Skip the stream list: play the best source from your highest-ranked add-on",
+                Prefs.autoStream,
+            ) { Prefs.setAutoStream(ctx, it) }
+            SettingsToggle(
+                "Auto-play next episode",
+                "Count down and roll into the next episode when one ends",
+                Prefs.autoPlayNext,
+                divider = false,
+            ) { Prefs.setAutoPlayNext(ctx, it) }
+        }
+    }
+}
+
 @Composable
 private fun SettingsSyncScreen(onBack: () -> Unit, onSynced: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
@@ -2276,7 +2455,7 @@ private fun PartyPanel(onJoin: (String) -> Unit) {
             )
             Button(
                 onClick = { onJoin(partyCode) },
-                colors = ButtonDefaults.buttonColors(containerColor = Red),
+                colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
                 shape = RoundedCornerShape(12.dp),
             ) { Text("Join", fontWeight = FontWeight.SemiBold) }
         }
@@ -2322,7 +2501,7 @@ private fun SyncPanel(onSynced: () -> Unit) {
                         }
                     },
                     enabled = !busy,
-                    colors = ButtonDefaults.buttonColors(containerColor = Red),
+                    colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
                     shape = RoundedCornerShape(12.dp),
                 ) { Text("Start syncing", fontWeight = FontWeight.SemiBold) }
             }
@@ -2369,7 +2548,7 @@ private fun SyncPanel(onSynced: () -> Unit) {
                         }
                     },
                     enabled = !busy,
-                    colors = ButtonDefaults.buttonColors(containerColor = Red),
+                    colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Link another device", fontWeight = FontWeight.SemiBold, maxLines = 1) }
@@ -2954,7 +3133,7 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
         if (loading && items.isEmpty()) {
             val a = shimmerAlpha()
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 140.dp),
+                columns = GridCells.Adaptive(minSize = 140.dp * Prefs.posterScale),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 contentPadding = PaddingValues(bottom = 20.dp),
@@ -2968,7 +3147,7 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
             }
         } else {
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 140.dp),
+                columns = GridCells.Adaptive(minSize = 140.dp * Prefs.posterScale),
                 state = st.gridState,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -3143,6 +3322,15 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
                     sections = out.toList()
                     val n = out.sumOf { it.second.size }
                     status = "$n stream${if (n > 1) "s" else ""}" + (if (out.size > 1) " from ${out.size} add-ons" else "")
+                    // Auto selection: the first stream of the highest-priority add-on
+                    // that answered. Guarded by id, not screen state — this screen's
+                    // state dies while the player is up, and re-firing on the way
+                    // back would trap the user in playback forever.
+                    if (Prefs.autoStream && autoPlayedFor != item.id) {
+                        autoPlayedFor = item.id
+                        onPlay(streams.first())
+                        return@LaunchedEffect
+                    }
                 }
             }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; failures++ }
         }
@@ -3415,6 +3603,7 @@ private fun PlayerScreen(
     var isFullscreen by remember { mutableStateOf(false) }
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
     var skipFlash by remember { mutableStateOf<Triple<Int, Int, Long>?>(null) } // zone (-1/+1), total secs, stamp
+    var heldSpeed by remember { mutableStateOf<Float?>(null) }                  // speed to restore after hold-to-speed
     var dragSeek by remember { mutableStateOf<Pair<Long, Long>?>(null) }        // target ms, delta ms
     val exo = remember {
         ExoPlayer.Builder(context)
@@ -3430,7 +3619,18 @@ private fun PlayerScreen(
             )
             .setHandleAudioBecomingNoisy(true)
             .build()
-            .apply { playWhenReady = true }
+            .apply {
+                playWhenReady = true
+                // "" means follow the device, which is ExoPlayer's own default
+                if (Prefs.audioLang.isNotEmpty() || Prefs.subLang.isNotEmpty()) {
+                    trackSelectionParameters = trackSelectionParameters.buildUpon()
+                        .apply {
+                            if (Prefs.audioLang.isNotEmpty()) setPreferredAudioLanguage(Prefs.audioLang)
+                            if (Prefs.subLang.isNotEmpty()) setPreferredTextLanguage(Prefs.subLang)
+                        }
+                        .build()
+                }
+            }
     }
     // Publishes to the platform so the lock screen, the output switcher and the
     // play/pause button on a headset all reach this player. Released alongside
@@ -3614,7 +3814,7 @@ private fun PlayerScreen(
             override fun onPlaybackStateChanged(state: Int) {
                 if (state != Player.STATE_ENDED) return
                 snapshotProgress(done = true)          // ticks it off the episode list
-                if (nextEpisode != null && !upnextDismissed) { upnextOpen = true; upnextCounting = true }
+                if (nextEpisode != null && !upnextDismissed) { upnextOpen = true; upnextCounting = Prefs.autoPlayNext }
             }
         }
         exo.addListener(l)
@@ -3737,7 +3937,7 @@ private fun PlayerScreen(
                     .pointerInput(Unit) {
                         detectTapGestures(
                             onTap = { pos ->
-                                val zone = tapZone(pos.x, size.width)
+                                val zone = if (Prefs.gestures) tapZone(pos.x, size.width) else 0
                                 val f = skipFlash
                                 if (zone != 0 && f != null && f.first == zone &&
                                     System.currentTimeMillis() - f.third < 900
@@ -3745,10 +3945,22 @@ private fun PlayerScreen(
                                 else { chromeVisible = !chromeVisible; chromeTouchedAt = System.currentTimeMillis() }
                             },
                             onDoubleTap = { pos ->
-                                val zone = tapZone(pos.x, size.width)
+                                val zone = if (Prefs.gestures) tapZone(pos.x, size.width) else 0
                                 if (zone != 0) doSkip(zone)
                                 else { chromeVisible = !chromeVisible; chromeTouchedAt = System.currentTimeMillis() }
-                            }
+                            },
+                            // Hold the surface to race ahead; letting go restores the
+                            // speed you actually chose, not a hardcoded 1×.
+                            onLongPress = {
+                                if (Prefs.holdSpeed) {
+                                    heldSpeed = exo.playbackParameters.speed
+                                    exo.setPlaybackSpeed(Prefs.holdRate)
+                                }
+                            },
+                            onPress = {
+                                tryAwaitRelease()
+                                heldSpeed?.let { exo.setPlaybackSpeed(it); heldSpeed = null }
+                            },
                         )
                     }
                     .pointerInput(Unit) {
@@ -3968,6 +4180,16 @@ private fun PlayerScreen(
                 }
             }
         }
+        // Hold-to-speed chip: shown for exactly as long as the finger is down.
+        if (heldSpeed != null) Text(
+            "▶▶ ${if (Prefs.holdRate % 1f == 0f) Prefs.holdRate.toInt().toString() else Prefs.holdRate.toString()}×",
+            color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 54.dp)
+                .background(Color(0x8C000000), RoundedCornerShape(50))
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        )
         // Transient ±10s indicator on the tapped side.
         skipFlash?.let { f ->
             Text(
