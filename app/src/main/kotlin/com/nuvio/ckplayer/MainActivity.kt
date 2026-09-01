@@ -2028,6 +2028,7 @@ private fun DetailScreen(
     val ctx = LocalContext.current
     val ck = item.type + ":" + item.id
     var full by remember(ck) { mutableStateOf(metaFullCache[ck]) }
+    var metaTried by remember(ck) { mutableStateOf(metaFullCache[ck] != null) }
     var inList by remember(ck) { mutableStateOf(Library.inList(ctx, item.type, item.id)) }
 
     LaunchedEffect(ck) {
@@ -2041,6 +2042,7 @@ private fun DetailScreen(
             }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
             if (m != null) { metaFullCache[ck] = m; full = m; break }
         }
+        metaTried = true
     }
 
     val resume = remember(ck, full) {
@@ -2071,16 +2073,21 @@ private fun DetailScreen(
         var selectedSeason by remember(ck) { mutableStateOf<Int?>(null) }
         var upNextId by remember(ck) { mutableStateOf<String?>(null) }
         var epsLoading by remember(ck) { mutableStateOf(item.type == "series") }
-        if (item.type == "series") LaunchedEffect(ck) {
-            val order = listOf(addon) + loadAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
-            var found: List<Episode> = emptyList()
-            for (a in order) {
-                val ok = runCatching {
-                    if (a.manifestUrl != addon.manifestUrl && !manifestFor(a.manifestUrl).canMeta(item.type, item.id)) return@runCatching false
-                    val vids = Stremio.loadSeriesVideos(a.base, item.type, item.id)
-                    if (vids.isNotEmpty()) { found = vids; true } else false
-                }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrDefault(false)
-                if (ok) break
+        if (item.type == "series") LaunchedEffect(ck, full, metaTried) {
+            // the full meta comes from the same /meta endpoint and already carries
+            // the videos — re-fetching them was a second identical request per open
+            var found: List<Episode> = full?.videos.orEmpty()
+            if (found.isEmpty()) {
+                if (!metaTried) return@LaunchedEffect            // still loading — wait for it
+                val order = listOf(addon) + loadAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
+                for (a in order) {
+                    val ok = runCatching {
+                        if (a.manifestUrl != addon.manifestUrl && !manifestFor(a.manifestUrl).canMeta(item.type, item.id)) return@runCatching false
+                        val vids = Stremio.loadSeriesVideos(a.base, item.type, item.id)
+                        if (vids.isNotEmpty()) { found = vids; true } else false
+                    }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrDefault(false)
+                    if (ok) break
+                }
             }
             epsLoading = false
             if (found.isEmpty()) return@LaunchedEffect
