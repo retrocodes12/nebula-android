@@ -1,6 +1,9 @@
 package com.nuvio.ckplayer
 
 import android.content.Context
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -17,16 +20,24 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 /**
- * Nebula Cloud sync client — the same account-less pairing the web/TV player
- * uses: a 6-character code links devices into a group, then add-ons, watch
- * progress and My List flow both ways, newest change winning per record.
+ * Nebula Cloud client — sync plus the Nebula Profile that carries it.
+ *
+ * A profile is an @handle and a password, nothing else: no email, no tracking.
+ * Every device that signs in gets a token of its own (revocable one by one from
+ * any signed-in device), and add-ons, watch progress, My List, ratings and the
+ * subtitle style flow between them, newest change winning per record.
  *
  * The WIRE FORMAT IS THE WEB PLAYER'S, verbatim — that is the whole point
- * (one group spans Android, web, desktop and TV). Two impedance mismatches are
+ * (one profile spans Android, web, desktop and TV). Two impedance mismatches are
  * handled here and only here:
  *   - positions/durations travel in SECONDS (web-style); Android stores ms.
  *   - the add-on list carries no timestamps locally, so this layer keeps its
  *     own added/removed stamps (prefs "addons_sync"), exactly like the web's.
+ *
+ * Installs from before profiles hold a group master secret from a link code;
+ * [Account.boot] trades it for a device token and the device shows as "legacy"
+ * until a profile is added to the group. The profile actions themselves
+ * (sign in, create, recover, devices, TV codes) live in [Account].
  */
 object Cloud {
     private const val BASE = "https://play.rifflehq.in/cloud"
@@ -44,11 +55,40 @@ object Cloud {
 
     /** Called (on main) after a pull changed local state, with the keys that changed. */
     @Volatile var onApplied: ((Set<String>) -> Unit)? = null
+    /** Called (on main) when a signed request came back 401 — the token was revoked elsewhere. */
+    @Volatile var onSignedOut: (() -> Unit)? = null
+
+    /** The profile this device is signed in to, if any (Compose state). */
+    var profile by mutableStateOf<Profile?>(null); private set
+    /** Devices on the profile, from the last [Account.refreshProfile]. */
+    var devices by mutableStateOf<List<DeviceRec>>(emptyList()); internal set
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private fun gid(ctx: Context) = prefs(ctx).getString("cloud_gid", null)
     private fun secret(ctx: Context) = prefs(ctx).getString("cloud_secret", null)
-    fun linked(ctx: Context) = !gid(ctx).isNullOrEmpty() && !secret(ctx).isNullOrEmpty()
+    private fun token(ctx: Context) = prefs(ctx).getString("cloud_token", null)
+    internal fun hasToken(ctx: Context) = !token(ctx).isNullOrEmpty()
+    /** A device token replaces the master secret for good. */
+    internal fun setToken(ctx: Context, t: String) = prefs(ctx).edit().putString("cloud_token", t).remove("cloud_secret").apply()
+    fun linked(ctx: Context) = !gid(ctx).isNullOrEmpty() && (!token(ctx).isNullOrEmpty() || !secret(ctx).isNullOrEmpty())
+    /** "out" (nothing), "in" (a profile), or "legacy" (a link-code group with no profile yet). */
+    fun state(ctx: Context): String = if (!linked(ctx)) "out" else if (profile != null) "in" else "legacy"
+
+    fun load(ctx: Context) {
+        profile = parseProfile(runCatching { JSONObject(prefs(ctx).getString("profile", "") ?: "") }.getOrNull())
+    }
+    private fun parseProfile(o: JSONObject?): Profile? {
+        val h = o?.optString("handle") ?: return null
+        if (h.isEmpty()) return null
+        return Profile(h, o.optString("name").ifEmpty { h }, o.optString("avatar").ifEmpty { Account.AVATARS[0] })
+    }
+    /** Accepts any server object carrying handle/name/avatar (a creds reply, /me, a PUT reply). */
+    internal fun setProfile(ctx: Context, o: JSONObject?) {
+        val p = parseProfile(o)
+        profile = p
+        val json = if (p == null) "" else JSONObject().put("handle", p.handle).put("name", p.name).put("avatar", p.avatar).toString()
+        prefs(ctx).edit().putString("profile", json).apply()
+    }
 
     private fun jsonPref(ctx: Context, key: String): JSONObject =
         runCatching { JSONObject(prefs(ctx).getString(key, "{}") ?: "{}") }.getOrDefault(JSONObject())
@@ -56,67 +96,70 @@ object Cloud {
         prefs(ctx).edit().putString(key, o.toString()).apply()
 
     // ---------- HTTP ----------
-    private class HttpFail(val code: Int) : RuntimeException("HTTP $code")
-    internal suspend fun api(ctx: Context, method: String, path: String, body: JSONObject?): JSONObject =
+    class HttpFail(val code: Int, val error: String) : RuntimeException("HTTP $code $error")
+    /** One call to the cloud. `auth = false` is for the public profile routes (sign-in, TV code). */
+    internal suspend fun api(ctx: Context, method: String, path: String, body: JSONObject?, auth: Boolean = true): JSONObject =
         withContext(Dispatchers.IO) {
             val b = Request.Builder().url(BASE + path)
-            if (linked(ctx)) b.header("Authorization", "Bearer ${gid(ctx)}.${secret(ctx)}")
+            val signed = auth && linked(ctx)
+            if (signed) b.header("Authorization", "Bearer ${gid(ctx)}.${token(ctx) ?: secret(ctx)}")
+            val payload = (body ?: JSONObject()).toString().toRequestBody(JSON_MT)
             when (method) {
-                "POST" -> b.post((body ?: JSONObject()).toString().toRequestBody(JSON_MT))
-                "PUT" -> b.put((body ?: JSONObject()).toString().toRequestBody(JSON_MT))
+                "POST" -> b.post(payload)
+                "PUT" -> b.put(payload)
+                "DELETE" -> b.delete(payload)
                 else -> b.get()
             }
             http.newCall(b.build()).execute().use { r ->
-                if (!r.isSuccessful) throw HttpFail(r.code)
-                JSONObject(r.body?.string() ?: "{}")
+                val text = r.body?.string() ?: "{}"
+                if (!r.isSuccessful) {
+                    val err = runCatching { JSONObject(text).optString("error") }.getOrDefault("")
+                    // a dead credential: the device was signed out from elsewhere, or the profile is gone
+                    if (r.code == 401 && signed) credentialDead(ctx)
+                    throw HttpFail(r.code, err)
+                }
+                JSONObject(text)
             }
         }
 
-    // ---------- linking ----------
-    /** Start a fresh sync group; returns the first join code (or null on failure). */
-    suspend fun createGroup(ctx: Context): String? = runCatching {
-        val g = api(ctx, "POST", "/v1/group", JSONObject())
+    /** Take a credential set {gid, token, profile} as this device's identity. */
+    internal fun adopt(ctx: Context, r: JSONObject, fresh: Boolean) {
         prefs(ctx).edit()
-            .putString("cloud_gid", g.getString("gid"))
-            .putString("cloud_secret", g.getString("secret"))
+            .putString("cloud_gid", r.getString("gid"))
+            .putString("cloud_token", r.getString("token"))
+            .remove("cloud_secret")
             .putString("cloud_revs", "{}")
             .putString("cloud_dirty", "{}")
             .apply()
-        SYNC_KEYS.forEach { k -> if (hasContent(ctx, k)) scope.launch { pushKey(ctx, k) } }
-        mintCode(ctx)
-    }.getOrNull()
-
-    /** A fresh 15-minute join code for an already-linked device. */
-    suspend fun mintCode(ctx: Context): String? = runCatching {
-        val body = JSONObject().put("gid", gid(ctx)).put("secret", secret(ctx))
-        api(ctx, "POST", "/v1/link", body).getString("code")
-    }.getOrNull()
-
-    /** Redeem a code from another device. Returns null on success, else a user-facing error. */
-    suspend fun join(ctx: Context, codeRaw: String): String? {
-        val code = codeRaw.trim().replace(" ", "").uppercase()
-        if (code.length < 6) return "Enter the 6-character code first."
-        return runCatching {
-            val g = api(ctx, "POST", "/v1/join", JSONObject().put("code", code))
-            prefs(ctx).edit()
-                .putString("cloud_gid", g.getString("gid"))
-                .putString("cloud_secret", g.getString("secret"))
-                .putString("cloud_revs", "{}")
-                .putString("cloud_dirty", "{}")
-                .apply()
-            pullAll(ctx, force = true)
-            null
-        }.getOrElse {
-            if ((it as? HttpFail)?.code == 404) "That code was not found — it may have expired."
-            else "Could not reach the sync server."
+        setProfile(ctx, r.optJSONObject("profile"))
+        devices = emptyList()
+        Social.reset(ctx)                       // Friends state belongs to the identity, not the device
+        lastPullAt = 0
+        val app = ctx.applicationContext
+        if (fresh) {
+            // a brand-new profile: what this device holds IS the profile's data
+            SYNC_KEYS.forEach { k -> if (hasContent(app, k)) scope.launch { pushKey(app, k) } }
+        } else {
+            // merge; newer local records push back on their own
+            scope.launch { pullAll(app, force = true); Social.refresh(app) }
         }
     }
 
-    fun leave(ctx: Context) {
+    /** Forget the credential on this device only; nothing local is deleted. */
+    fun forget(ctx: Context) {
         prefs(ctx).edit()
-            .remove("cloud_gid").remove("cloud_secret")
+            .remove("cloud_gid").remove("cloud_secret").remove("cloud_token").remove("profile")
             .putString("cloud_revs", "{}").putString("cloud_dirty", "{}")
             .apply()
+        profile = null
+        devices = emptyList()
+        Social.reset(ctx)
+    }
+
+    private suspend fun credentialDead(ctx: Context) {
+        if (!linked(ctx)) return
+        forget(ctx)
+        withContext(Dispatchers.Main) { onSignedOut?.invoke() }
     }
 
     // ---------- push ----------
@@ -142,6 +185,14 @@ object Cloud {
             pushJobs[k]?.cancel()
             scope.launch { pushKey(app, k) }
         }
+    }
+
+    /** Push every dirty doc now and wait — for the moment before this device lets go of its credential. */
+    suspend fun flushAndWait(ctx: Context) {
+        if (!linked(ctx)) return
+        val app = ctx.applicationContext
+        val d = jsonPref(ctx, "cloud_dirty")
+        for (k in d.keys()) { pushJobs[k]?.cancel(); pushKey(app, k) }
     }
 
     private suspend fun pushKey(ctx: Context, key: String) {

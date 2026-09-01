@@ -15,56 +15,102 @@ import org.json.JSONObject
 
 /**
  * Friends — the experimental Letterboxd-shaped layer. The identity is the
- * cloud sync group wearing a permanent 7-char code; profiles (name, recent
- * watches, ratings, My List) are pushed to the relay and served only to
- * mutual friends. Opt-in, and disable deletes it server-side.
+ * Nebula Profile: friends add each other by @handle, and what is shared (name,
+ * recent watches, ratings, My List) is served only to mutual friends. Opt-in,
+ * and disable deletes it server-side. Installs from before profiles still wear
+ * their 7-character friend code, which keeps working.
  */
 object Social {
     private const val PREFS = "ckplayer"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pubJob: Job? = null
+    private val OLD_CODE = Regex("^[A-Z2-9]{7}$")
 
     var on by mutableStateOf(false); private set
     var code by mutableStateOf(""); private set
+    var handle by mutableStateOf(""); private set
 
     fun load(ctx: Context) {
         val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         on = p.getBoolean("social_on", false)
         code = p.getString("social_code", "") ?: ""
+        handle = p.getString("social_handle", "") ?: ""
     }
 
     private fun store(ctx: Context) {
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putBoolean("social_on", on).putString("social_code", code).apply()
+            .putBoolean("social_on", on).putString("social_code", code).putString("social_handle", handle).apply()
+    }
+
+    /** What friends type to find me: the handle, or the old code. */
+    val myKey: String get() = if (handle.isNotEmpty()) "@$handle" else code
+
+    /** Local forget only — the switch lives with the profile, not the device. */
+    fun reset(ctx: Context) {
+        pubJob?.cancel()
+        on = false; code = ""; handle = ""; store(ctx)
+    }
+
+    /** Pull the server's view of Friends after signing in or booting. */
+    suspend fun refresh(ctx: Context) {
+        if (!Cloud.linked(ctx)) return
+        runCatching {
+            val r = Cloud.api(ctx, "GET", "/v1/social/me", null)
+            on = r.optBoolean("on")
+            code = if (on) r.optString("code") else ""
+            handle = if (on) r.optString("handle") else ""
+            store(ctx)
+        }
     }
 
     fun displayName(ctx: Context): String =
-        (ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("party_name", "") ?: "")
-            .trim().ifEmpty { android.os.Build.MODEL.take(24) }
+        Cloud.profile?.name?.trim()?.ifEmpty { null }
+            ?: (ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("party_name", "") ?: "")
+                .trim().ifEmpty { android.os.Build.MODEL.take(24) }
 
-    /** Turns Friends on, minting a sync group first if this device has none. */
+    /** Turns Friends on. A profile IS the identity friends look for, so one is required. */
     suspend fun enable(ctx: Context): String? {
-        if (!Cloud.linked(ctx) && Cloud.createGroup(ctx) == null) return "Could not reach the server."
+        val p = Cloud.profile ?: return "Friends find each other by @handle — sign in or create a profile first."
         return runCatching {
             val r = Cloud.api(ctx, "POST", "/v1/social/enable", JSONObject().put("name", displayName(ctx)))
-            on = true; code = r.getString("code"); store(ctx)
+            on = true; code = r.optString("code"); handle = r.optString("handle").ifEmpty { p.handle }; store(ctx)
             publishSoon(ctx)
             null
-        }.getOrDefault("Could not reach the server.")
+        }.getOrElse { Account.errorText(it) }
     }
 
     suspend fun disable(ctx: Context) {
         runCatching { Cloud.api(ctx, "POST", "/v1/social/disable", JSONObject()) }
-        on = false; code = ""; store(ctx)
+        on = false; code = ""; handle = ""; store(ctx)
     }
 
-    suspend fun addFriend(ctx: Context, codeRaw: String): Pair<String?, String?> {
-        val c = codeRaw.trim().replace(" ", "").uppercase()
-        if (c.length < 7) return null to "Enter the 7-character friend code."
+    /** `{handle}` or `{code}` for a friend card — what the server's social routes take. */
+    fun friendRef(f: JSONObject): JSONObject {
+        val h = f.optString("handle")
+        return if (h.isNotEmpty()) JSONObject().put("handle", h) else JSONObject().put("code", f.optString("code"))
+    }
+    fun friendKey(f: JSONObject): String = f.optString("handle").ifEmpty { null }?.let { "@$it" } ?: f.optString("code")
+    fun friendLabel(f: JSONObject): String = f.optString("name").ifEmpty { friendKey(f) }.ifEmpty { "A friend" }
+
+    /** Add a friend by @handle (or one of the old 7-character codes). Returns (their label, null) or (null, error). */
+    suspend fun addFriend(ctx: Context, raw: String): Pair<String?, String?> {
+        val typed = raw.replace(Regex("\\s"), "")
+        val ref = if (OLD_CODE.matches(typed)) JSONObject().put("code", typed)
+        else {
+            val h = Account.cleanHandle(typed)
+            if (!Account.handleOk(h)) return null to "Enter a friend’s @handle."
+            JSONObject().put("handle", h)
+        }
         return runCatching {
-            val r = Cloud.api(ctx, "POST", "/v1/social/friend", JSONObject().put("code", c))
-            r.optString("name").ifEmpty { "your friend" } to null
-        }.getOrDefault(null to "No one has that code.")
+            val r = Cloud.api(ctx, "POST", "/v1/social/friend", ref)
+            friendLabel(r) to null
+        }.getOrElse {
+            null to when ((it as? Cloud.HttpFail)?.code) {
+                409 -> "They have a profile, but Friends is off on their side."
+                404 -> "No one has that handle."
+                else -> Account.errorText(it)
+            }
+        }
     }
 
     suspend fun friends(ctx: Context): JSONArray? = runCatching {
@@ -79,10 +125,10 @@ object Social {
         runCatching { Cloud.api(ctx, "POST", "/v1/social/inbox_clear", JSONObject()) }
     }
 
-    suspend fun recommend(ctx: Context, friendCode: String, type: String, m: MetaItem): Boolean = runCatching {
+    suspend fun recommend(ctx: Context, friend: JSONObject, type: String, m: MetaItem): Boolean = runCatching {
         Cloud.api(
             ctx, "POST", "/v1/social/recommend",
-            JSONObject().put("code", friendCode).put(
+            friendRef(friend).put(
                 "item",
                 JSONObject().put("type", type).put("id", m.id).put("name", m.name).put("poster", m.poster ?: ""),
             ),

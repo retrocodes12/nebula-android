@@ -94,7 +94,6 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -198,6 +197,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Prefs.load(this)
+        Cloud.load(this)
         Social.load(this)
         // only honor the launch intent on a fresh start — a recreated activity
         // (process restore, config change) must not jump back into the player
@@ -293,20 +293,20 @@ private val inPipMode = mutableStateOf(false)
 // recomposes everything that wears it — no restart, no plumbing.
 internal val Red: Color get() = Prefs.accentColor
 internal val OnAccent: Color get() = Prefs.onAccent
-private val Bg = Color(0xFF000000)
+internal val Bg = Color(0xFF000000)
 internal val SurfaceC = Color(0xFF1C1C1E)     // secondary system background
 internal val Surface2 = Color(0xFF2C2C2E)     // tertiary
-private val LineC = Color(0x1AFFFFFF)        // hairline separator
+internal val LineC = Color(0x1AFFFFFF)        // hairline separator
 internal val Line2 = Color(0x29FFFFFF)
 internal val MutedC = Color(0x99EBEBF5)       // secondary label
-private val FaintC = Color(0x4DEBEBF5)       // tertiary label
+internal val FaintC = Color(0x4DEBEBF5)       // tertiary label
 private val FillC = Color(0x3D767680)        // control fill
 internal val TextC = Color(0xFFFFFFFF)
 
 // Three registers and nothing between: a display serif for titles, one
 // grotesque for the interface, a mono for every number and label.
-private val Sans = FontFamily(Font(R.font.geist))
-private val Mono = FontFamily(Font(R.font.geistmono))
+internal val Sans = FontFamily(Font(R.font.geist))
+internal val Mono = FontFamily(Font(R.font.geistmono))
 private val Serif = Sans                     // display and UI share one family, as on Apple platforms
 
 /** Everything unstyled falls back to the interface grotesque, not the system face. */
@@ -331,7 +331,7 @@ private val NebulaTypography = Typography().run {
 }
 
 /** Secondary label: same family, lighter colour, tight tracking. */
-private fun labelStyle(size: Int = 13, color: Color = MutedC) = TextStyle(
+internal fun labelStyle(size: Int = 13, color: Color = MutedC) = TextStyle(
     fontFamily = Sans,
     fontSize = size.sp,
     fontWeight = FontWeight.Normal,
@@ -359,7 +359,7 @@ private sealed interface Screen {
     data object SettingsLayout : Screen
     data object Friends : Screen
     data object SettingsPlayback : Screen
-    data object SettingsSync : Screen
+    data object Profile : Screen
     data object SettingsParty : Screen
     data class Detail(val addon: Addon, val item: MetaItem) : Screen
     data class Catalog(val addon: Addon, val initial: CatalogRef? = null) : Screen
@@ -724,6 +724,10 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                     if ("progress" in keys) homeState.invalidateContinue()
                     if ("library" in keys) libraryVersion++
                 }
+                Cloud.onSignedOut = {
+                    android.widget.Toast.makeText(ctx, "This device was signed out of your profile. Nothing on it was deleted.", android.widget.Toast.LENGTH_LONG).show()
+                }
+                Account.boot(ctx)            // pre-profile installs trade the master secret for a device token
                 Cloud.pullAll(ctx)
                 while (true) { delay(300_000); Cloud.pullAll(ctx) }
             }
@@ -839,13 +843,14 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 onAddons = { push(Screen.Addons) },
                                 onLayout = { push(Screen.SettingsLayout) },
                                 onPlayback = { push(Screen.SettingsPlayback) },
-                                onSync = { push(Screen.SettingsSync) },
+                                onProfile = { push(Screen.Profile) },
                                 onParty = { push(Screen.SettingsParty) },
                                 onFriends = { push(Screen.Friends) },
                             )
                             is Screen.SettingsLayout -> SettingsLayoutScreen(onBack = { pop() })
                             is Screen.Friends -> FriendsScreen(
                                 onBack = { pop() },
+                                onProfile = { push(Screen.Profile) },
                                 onOpen = { m ->
                                     val a = loadAddons(ctx).firstOrNull() ?: return@FriendsScreen
                                     openMeta(a, m)
@@ -856,10 +861,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 onSubtitles = { push(Screen.SettingsSubtitles) },
                             )
                             is Screen.SettingsSubtitles -> SettingsSubtitlesScreen(onBack = { pop() })
-                            is Screen.SettingsSync -> SettingsSyncScreen(
-                                onBack = { pop() },
-                                onSynced = { manifestCache.clear(); homeState.invalidate() },
-                            )
+                            is Screen.Profile -> ProfileScreen(onBack = { pop() })
                             is Screen.SettingsParty -> SettingsPartyScreen(onBack = { pop() }, onJoin = { partyJoin(it) })
                             is Screen.Library -> LibraryScreen(
                                 version = libraryVersion,
@@ -1162,7 +1164,7 @@ private fun CardSheet(
 }
 
 @Composable
-private fun BackBar(title: String, sub: String?, onBack: () -> Unit) {
+internal fun BackBar(title: String, sub: String?, onBack: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1372,13 +1374,12 @@ private fun RatingStars(item: MetaItem) {
 private fun RecommendSheet(type: String, item: MetaItem, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    var friends by remember { mutableStateOf<List<Pair<String, String>>?>(null) }  // code to name
+    var friends by remember { mutableStateOf<List<JSONObject>?>(null) }
     LaunchedEffect(Unit) {
         val fr = Social.friends(ctx)
         friends = (0 until (fr?.length() ?: 0)).mapNotNull { i ->
             val f = fr!!.optJSONObject(i) ?: return@mapNotNull null
-            val c = f.optString("code"); if (c.isEmpty()) return@mapNotNull null
-            c to f.optString("name").ifEmpty { c }
+            if (Social.friendKey(f).isEmpty()) null else f
         }
     }
     val list = friends ?: return
@@ -1386,10 +1387,11 @@ private fun RecommendSheet(type: String, item: MetaItem, onDismiss: () -> Unit) 
         title = item.name, sub = "Recommend to…", poster = item.poster, shape = item.posterShape,
         actions = if (list.isEmpty()) listOf(
             SheetAction(Icons.Filled.Groups, "No friends yet — add one in Friends") {},
-        ) else list.take(8).map { (fCode, fName) ->
+        ) else list.take(8).map { f ->
+            val fName = Social.friendLabel(f)
             SheetAction(Icons.Filled.Favorite, fName) {
                 scope.launch {
-                    val ok = Social.recommend(ctx, fCode, type, item)
+                    val ok = Social.recommend(ctx, f, type, item)
                     android.widget.Toast.makeText(
                         ctx,
                         if (ok) "Recommended to $fName" else "Could not send that",
@@ -1402,6 +1404,22 @@ private fun RecommendSheet(type: String, item: MetaItem, onDismiss: () -> Unit) 
     )
 }
 
+/** Profile monogram: one of the eight Nebula colours behind the first letter of the name. */
+internal fun avatarColor(hex: String): Color =
+    if (Regex("^#[0-9A-Fa-f]{6}$").matches(hex)) Color(android.graphics.Color.parseColor(hex)) else Color(0xFF636366)
+
+@Composable
+internal fun Avatar(hex: String, name: String, size: Dp, dim: Boolean = false) {
+    val bg = if (dim) Surface2 else avatarColor(hex)
+    val ink = if (dim) MutedC else if (hex.equals("#F2F2F7", ignoreCase = true)) Bg else Color.White
+    Box(Modifier.size(size).background(bg, CircleShape), contentAlignment = Alignment.Center) {
+        Text(
+            name.trim().removePrefix("@").ifEmpty { "?" }.take(1).uppercase(), color = ink,
+            fontSize = (size.value * 0.42f).sp, fontWeight = FontWeight.Bold, fontFamily = Sans,
+        )
+    }
+}
+
 /** One friend-profile item parsed out of their (untrusted) published doc. */
 private fun profItems(a: org.json.JSONArray?): List<JSONObject> =
     (0 until (a?.length() ?: 0)).mapNotNull { i ->
@@ -1410,7 +1428,7 @@ private fun profItems(a: org.json.JSONArray?): List<JSONObject> =
     }
 
 @Composable
-private fun FriendsScreen(onBack: () -> Unit, onOpen: (MetaItem) -> Unit) {
+private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (MetaItem) -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
@@ -1437,7 +1455,7 @@ private fun FriendsScreen(onBack: () -> Unit, onOpen: (MetaItem) -> Unit) {
     ) {
         item(key = "top") {
             Column {
-                BackBar("Friends", if (Social.on) "Code ${Social.code}" else "Experimental", onBack)
+                BackBar("Friends", if (Social.on) Social.myKey else "Experimental", onBack)
                 if (status.isNotEmpty()) Text(status, color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(bottom = 8.dp))
             }
         }
@@ -1451,13 +1469,15 @@ private fun FriendsScreen(onBack: () -> Unit, onOpen: (MetaItem) -> Unit) {
                     Text(
                         "Rate what you watch, see what your friends are watching, and trade " +
                             "recommendations. Turning it on shares your ratings, recent watches and " +
-                            "My List — with friends you add by code, and no one else.",
+                            "My List — with friends you add by @handle, and no one else.",
                         color = MutedC, fontSize = 14.sp, lineHeight = 21.sp,
                         modifier = Modifier.padding(top = 8.dp, bottom = 14.dp),
                     )
+                    val hasProfile = Cloud.profile != null
                     Button(
                         onClick = {
                             if (busy) return@Button
+                            if (!hasProfile) { onProfile(); return@Button }
                             busy = true; status = "Setting up…"
                             scope.launch {
                                 status = Social.enable(ctx) ?: ""
@@ -1466,7 +1486,11 @@ private fun FriendsScreen(onBack: () -> Unit, onOpen: (MetaItem) -> Unit) {
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
                         shape = RoundedCornerShape(12.dp),
-                    ) { Text("Turn on Friends", fontWeight = FontWeight.SemiBold) }
+                    ) { Text(if (hasProfile) "Turn on Friends" else "Sign in to use Friends", fontWeight = FontWeight.SemiBold) }
+                    if (!hasProfile) Text(
+                        "Friends find each other by @handle, so Friends needs a Nebula Profile.",
+                        color = FaintC, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp),
+                    )
                 }
             }
             return@LazyColumn
@@ -1474,8 +1498,8 @@ private fun FriendsScreen(onBack: () -> Unit, onOpen: (MetaItem) -> Unit) {
         item(key = "add") {
             Row(Modifier.padding(bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(
-                    value = codeIn, onValueChange = { codeIn = it.take(10) },
-                    placeholder = { Text("Friend’s code", color = MutedC) },
+                    value = codeIn, onValueChange = { codeIn = it.take(24) },
+                    placeholder = { Text("Friend’s @handle", color = MutedC) },
                     singleLine = true, modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -1528,7 +1552,7 @@ private fun FriendsScreen(onBack: () -> Unit, onOpen: (MetaItem) -> Unit) {
                     )
                     Column(Modifier.padding(start = 12.dp)) {
                         Text(
-                            "${rec.optString("f").ifEmpty { "A friend" }} recommends ${it2.optString("name")}",
+                            "${rec.optString("f").ifEmpty { rec.optString("h").ifEmpty { null }?.let { "@$it" } ?: "A friend" }} recommends ${it2.optString("name")}",
                             color = TextC, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
                             maxLines = 2, overflow = TextOverflow.Ellipsis,
                         )
@@ -1543,12 +1567,12 @@ private fun FriendsScreen(onBack: () -> Unit, onOpen: (MetaItem) -> Unit) {
             null -> item(key = "frload") { Text("Loading…", color = MutedC, fontSize = 14.sp) }
             else -> if (fl.isEmpty()) {
                 item(key = "frempty") {
-                    Text("No friends yet — trade codes and their watching shows up here.",
+                    Text("No friends yet — add one by @handle and their watching shows up here.",
                         color = MutedC, fontSize = 14.sp, lineHeight = 20.sp)
                 }
             } else {
-                items(fl, key = { it.optString("code") }) { f ->
-                    val fCode = f.optString("code")
+                items(fl, key = { Social.friendKey(it) }) { f ->
+                    val fCode = Social.friendKey(f)
                     val prof = runCatching { JSONObject(f.optString("profile").ifEmpty { "{}" }) }.getOrDefault(JSONObject())
                     Column(Modifier.padding(bottom = 10.dp)) {
                         Row(
@@ -1560,17 +1584,15 @@ private fun FriendsScreen(onBack: () -> Unit, onOpen: (MetaItem) -> Unit) {
                                 .padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Box(
-                                Modifier.size(40.dp).background(Red, CircleShape),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(f.optString("name").ifEmpty { "?" }.take(1).uppercase(),
-                                    color = OnAccent, fontSize = 17.sp, fontWeight = FontWeight.Bold)
-                            }
+                            Avatar(f.optString("avatar"), f.optString("name").ifEmpty { f.optString("handle") }, 40.dp)
                             Column(Modifier.padding(start = 12.dp).weight(1f)) {
-                                Text(f.optString("name").ifEmpty { fCode }, color = TextC, fontSize = 15.sp,
+                                Text(Social.friendLabel(f), color = TextC, fontSize = 15.sp,
                                     fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text("${prof.optJSONArray("ratings")?.length() ?: 0} rated", color = MutedC, fontSize = 12.sp)
+                                val handle = f.optString("handle")
+                                Text(
+                                    (if (handle.isNotEmpty()) "@$handle · " else "") + "${prof.optJSONArray("ratings")?.length() ?: 0} rated",
+                                    color = MutedC, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                )
                             }
                             Text(if (openCode == fCode) "Hide" else "View", color = MutedC, fontSize = 13.sp)
                         }
@@ -2470,7 +2492,7 @@ private fun SettingsHeader(text: String) {
 }
 
 @Composable
-private fun SettingsGroup(content: @Composable () -> Unit) {
+internal fun SettingsGroup(content: @Composable () -> Unit) {
     Column(
         Modifier.fillMaxWidth()
             .background(SurfaceC, RoundedCornerShape(18.dp))
@@ -2517,7 +2539,7 @@ private fun SettingsScreen(
     onAddons: () -> Unit,
     onLayout: () -> Unit,
     onPlayback: () -> Unit,
-    onSync: () -> Unit,
+    onProfile: () -> Unit,
     onParty: () -> Unit,
     onFriends: () -> Unit,
 ) {
@@ -2536,12 +2558,13 @@ private fun SettingsScreen(
             "Settings", color = TextC, fontSize = 34.sp, fontFamily = Sans, fontWeight = FontWeight.Bold,
             letterSpacing = (-1).sp, modifier = Modifier.padding(top = 24.dp),
         )
+        Spacer(Modifier.height(16.dp))
+        ProfileCard(onProfile)
         SettingsHeader("GENERAL")
         SettingsGroup {
             SettingsRow(Icons.Filled.Palette, "Layout", "Theme, Home rows and poster size", true, onLayout)
             SettingsRow(Icons.Filled.PlayArrow, "Playback", "Player, subtitles, languages and auto-play", true, onPlayback)
             SettingsRow(Icons.Filled.Extension, "Add-ons", "Add, rank and manage your add-ons", true, onAddons)
-            SettingsRow(Icons.Filled.Sync, "Sync between devices", "Add-ons, progress and My List follow you", true, onSync)
             SettingsRow(Icons.Filled.Groups, "Watch party", "Watch in sync with friends using a code", true, onParty)
             SettingsRow(Icons.Filled.Favorite, "Friends", "Rate, share and recommend — experimental", true, onFriends)
             Row(
@@ -2563,7 +2586,7 @@ private fun SettingsScreen(
                         pname = v.take(40)
                         ctx2.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("party_name", pname.trim()).apply()
                     },
-                    placeholder = { Text(android.os.Build.MODEL.take(24), color = MutedC) },
+                    placeholder = { Text(Cloud.profile?.name?.takeIf { it.isNotBlank() } ?: android.os.Build.MODEL.take(24), color = MutedC) },
                     singleLine = true,
                     modifier = Modifier.width(150.dp),
                     shape = RoundedCornerShape(12.dp),
@@ -2590,7 +2613,7 @@ private fun SettingsScreen(
                     }
                 }
             }
-            SettingsRow(Icons.Filled.Shield, "Privacy Policy", "No accounts, no tracking — how Nebula handles data", true) {
+            SettingsRow(Icons.Filled.Shield, "Privacy Policy", "No email, no tracking — how Nebula handles data", true) {
                 runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.rifflehq.in/privacy.html"))) }
             }
             SettingsRow(Icons.Filled.Info, "Nebula for Android", "v$version · plays every add-on format, on-device", false, null)
@@ -2769,14 +2792,6 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
 }
 
 @Composable
-private fun SettingsSyncScreen(onBack: () -> Unit, onSynced: () -> Unit) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
-        BackBar("Sync", null, onBack)
-        SyncPanel(onSynced = onSynced)
-    }
-}
-
-@Composable
 private fun SettingsPartyScreen(onBack: () -> Unit, onJoin: (String) -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
         BackBar("Watch party", null, onBack)
@@ -2819,124 +2834,6 @@ private fun PartyPanel(onJoin: (String) -> Unit) {
             "To start one: play a stream, then tap the party button in the player. Friends enter your code here and watch in sync.",
             color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp),
         )
-    }
-}
-
-// ---------- sync between devices ----------
-@Composable
-private fun SyncPanel(onSynced: () -> Unit) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var linked by remember { mutableStateOf(Cloud.linked(ctx)) }
-    var codeIn by remember { mutableStateOf("") }
-    var shownCode by remember { mutableStateOf<String?>(null) }
-    var msg by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
-    Column(
-        Modifier.fillMaxWidth()
-            .background(SurfaceC, RoundedCornerShape(12.dp))
-            .border(1.dp, LineC, RoundedCornerShape(12.dp))
-            .padding(18.dp)
-    ) {
-        Text("SYNC BETWEEN DEVICES", color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp)
-        Text(
-            if (linked) "Syncing is on — add-ons, progress and My List follow you between linked devices."
-            else "Add-ons, progress and your list stay on this device until you link another.",
-            color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp),
-        )
-        if (!linked) {
-            Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(
-                    onClick = {
-                        busy = true; msg = null
-                        scope.launch {
-                            val c = Cloud.createGroup(ctx)
-                            if (c != null) { linked = true; shownCode = c }
-                            else msg = "Could not reach the sync server."
-                            busy = false
-                        }
-                    },
-                    enabled = !busy,
-                    colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
-                    shape = RoundedCornerShape(12.dp),
-                ) { Text("Start syncing", fontWeight = FontWeight.SemiBold) }
-            }
-            Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = codeIn, onValueChange = { codeIn = it },
-                    placeholder = { Text("Code from another device", color = MutedC) },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color.White, unfocusedBorderColor = Line2, cursorColor = Red,
-                        focusedTextColor = TextC, unfocusedTextColor = TextC,
-                    ),
-                )
-                Button(
-                    onClick = {
-                        busy = true; msg = "Linking…"
-                        scope.launch {
-                            val err = Cloud.join(ctx, codeIn)
-                            if (err == null) {
-                                linked = true; codeIn = ""; msg = "Linked — pulling your things…"
-                                onSynced()
-                            } else msg = err
-                            busy = false
-                        }
-                    },
-                    enabled = !busy,
-                    colors = ButtonDefaults.buttonColors(containerColor = Surface2),
-                    shape = RoundedCornerShape(12.dp),
-                ) { Text("Link", color = TextC, fontWeight = FontWeight.SemiBold) }
-            }
-        } else {
-            // two content-sized buttons do not fit a phone row — the second one
-            // wrapped mid-label. Primary owns the width; the exit is quiet below.
-            Column(Modifier.padding(top = 12.dp)) {
-                Button(
-                    onClick = {
-                        busy = true
-                        scope.launch {
-                            shownCode = Cloud.mintCode(ctx)
-                            if (shownCode == null) msg = "Could not get a link code."
-                            busy = false
-                        }
-                    },
-                    enabled = !busy,
-                    colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Link another device", fontWeight = FontWeight.SemiBold, maxLines = 1) }
-                Text(
-                    "Stop syncing on this device",
-                    color = MutedC, fontSize = 14.sp, maxLines = 1,
-                    modifier = Modifier.fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .clickable {
-                            Cloud.leave(ctx); linked = false; shownCode = null
-                            msg = "Sync is off for this device. Nothing was deleted."
-                        }
-                        .padding(vertical = 12.dp),
-                    textAlign = TextAlign.Center,
-                )
-            }
-        }
-        shownCode?.let { c ->
-            Text(
-                c.toCharArray().joinToString(" "),
-                color = TextC, fontFamily = Mono, fontSize = 30.sp, fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(top = 14.dp)
-                    .background(Surface2, RoundedCornerShape(12.dp)).padding(vertical = 14.dp),
-            )
-            Text(
-                "On the other device: Add-ons › Sync › enter this code. It works for 15 minutes.",
-                color = FaintC, fontSize = 12.sp, textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-            )
-        }
-        msg?.let { Text(it, color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp)) }
     }
 }
 
@@ -3729,6 +3626,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
 internal fun partyDisplayName(ctx: Context): String {
     val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     return p.getString("party_name", null)?.takeIf { it.isNotBlank() }
+        ?: Cloud.profile?.name?.takeIf { it.isNotBlank() }?.take(40)
         ?: android.os.Build.MODEL.take(24).ifBlank { "Android" }
 }
 
