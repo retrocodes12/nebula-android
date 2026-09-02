@@ -94,6 +94,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Palette
@@ -122,6 +124,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -171,6 +174,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
@@ -187,6 +191,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
@@ -306,24 +312,31 @@ private val inPipMode = mutableStateOf(false)
 // recomposes everything that wears it — no restart, no plumbing.
 internal val Red: Color get() = Prefs.accentColor
 internal val OnAccent: Color get() = Prefs.onAccent
-internal val Bg = Color(0xFF000000)
-internal val SurfaceC = Color(0xFF1C1C1E)     // secondary system background
-internal val Surface2 = Color(0xFF2C2C2E)     // tertiary
+// Surface (Settings › Appearance): Black is today's palette; Pure black turns every panel off for
+// OLED and leaves the hairlines to draw them; Graphite lifts the ground and the panels a step.
+internal val Bg: Color get() = when (Prefs.surface) { "graphite" -> Color(0xFF0B0B0E); else -> Color(0xFF000000) }
+internal val SurfaceC: Color get() = when (Prefs.surface) {          // secondary system background
+    "pure" -> Color(0xFF000000); "graphite" -> Color(0xFF141418); else -> Color(0xFF1C1C1E)
+}
+internal val Surface2: Color get() = when (Prefs.surface) {          // tertiary
+    "pure" -> Color(0xFF121214); "graphite" -> Color(0xFF1C1C22); else -> Color(0xFF2C2C2E)
+}
 internal val LineC = Color(0x1AFFFFFF)        // hairline separator
 internal val Line2 = Color(0x29FFFFFF)
 internal val MutedC = Color(0x99EBEBF5)       // secondary label
 internal val FaintC = Color(0x4DEBEBF5)       // tertiary label
-private val FillC = Color(0x3D767680)        // control fill
+private val FillC: Color get() = if (Prefs.surface == "pure") Color(0x2E767680) else Color(0x3D767680)   // control fill
 internal val TextC = Color(0xFFFFFFFF)
 
 // Three registers and nothing between: a display serif for titles, one
 // grotesque for the interface, a mono for every number and label.
-internal val Sans = FontFamily(Font(R.font.geist))
+private val Geist = FontFamily(Font(R.font.geist))
+/** The interface face: Geist, or the device's own when Settings › Appearance says System. */
+internal val Sans: FontFamily get() = if (Prefs.font == "system") FontFamily.Default else Geist
 internal val Mono = FontFamily(Font(R.font.geistmono))
-private val Serif = Sans                     // display and UI share one family, as on Apple platforms
 
 /** Everything unstyled falls back to the interface grotesque, not the system face. */
-private val NebulaTypography = Typography().run {
+private val NebulaTypography: Typography get() = Typography().run {
     Typography(
         displayLarge = displayLarge.copy(fontFamily = Sans),
         displayMedium = displayMedium.copy(fontFamily = Sans),
@@ -370,7 +383,10 @@ private sealed interface Screen {
     data object Settings : Screen
     data object SettingsSubtitles : Screen
     data object SettingsLayout : Screen
-    data object SettingsHome : Screen
+    data object SettingsHome : Screen          // the rows manager
+    data object SettingsHomeOpts : Screen      // Settings › Home
+    data object SettingsStreams : Screen
+    data object SettingsAdvanced : Screen
     data object Friends : Screen
     data object SettingsPlayback : Screen
     data object Profile : Screen
@@ -378,7 +394,8 @@ private sealed interface Screen {
     data class Detail(val addon: Addon, val item: MetaItem) : Screen
     data class Catalog(val addon: Addon, val initial: CatalogRef? = null) : Screen
     data class Episodes(val addon: Addon, val item: MetaItem) : Screen
-    data class Streams(val addon: Addon, val item: MetaItem, val startOver: Boolean = false) : Screen
+    // decided: the viewer already chose Resume or Start over (a sheet), so "When you come back · Ask" asks nothing more
+    data class Streams(val addon: Addon, val item: MetaItem, val startOver: Boolean = false, val decided: Boolean = false) : Screen
     data class Play(
         val url: String,
         val title: String,
@@ -415,7 +432,12 @@ private class SeriesChain {
         episodes = vids.sortedWith(compareBy({ it.season == 0 }, { it.season }, { it.episode ?: 0 }))
         index = -1
     }
-    fun next(): Episode? = if (index >= 0) episodes.getOrNull(index + 1) else null
+    /** The episode after the current one — unless it is not out yet and Settings › Home hides those. */
+    fun next(): Episode? {
+        val n = if (index >= 0) episodes.getOrNull(index + 1) else null
+        if (n != null && !Prefs.cwUnaired && isUnaired(n)) return null
+        return n
+    }
     fun label(ep: Episode): String =
         (if (name.isNotEmpty()) "$name · " else "") +
             "S${ep.season}" + (ep.episode?.let { "E$it" } ?: "") +
@@ -423,6 +445,14 @@ private class SeriesChain {
     fun clear() { episodes = emptyList(); index = -1; name = ""; addon = null }
 }
 private val seriesChain = SeriesChain()
+/** An episode whose release date is still ahead of today. Undated episodes count as out. */
+internal fun isUnaired(ep: Episode): Boolean {
+    val d = ep.released?.let { runCatching { java.time.LocalDate.parse(it.take(10)) }.getOrNull() } ?: return false
+    return d.isAfter(java.time.LocalDate.now())
+}
+/** The card radius Settings › Appearance chose: Square 4 · Rounded 12 · Round 18 (dp). */
+internal fun cardRadius(): Int = when (Prefs.cardCorners) { "square" -> 4; "round" -> 18; else -> 12 }
+internal fun cardShape() = RoundedCornerShape(cardRadius().dp)
 // which item auto stream selection already fired for (survives the screen)
 private var autoPlayedFor: String? = null
 
@@ -437,6 +467,8 @@ internal suspend fun manifestFor(url: String): ManifestInfo =
 
 /** Session cache of full metas (the detail page enhances from these). */
 private val metaFullCache = mutableMapOf<String, FullMeta>()
+/** Settings › Advanced › Clear cached artwork and add-on lists: the manifests and the title pages. */
+internal fun clearContentCaches() { manifestCache.clear(); metaFullCache.clear() }
 
 /** The newest still-in-progress episode of a series. Episode ids are
     "<seriesId>:…" where seriesId itself may contain colons (kitsu:12345),
@@ -556,10 +588,14 @@ internal fun loadAddons(ctx: Context): List<Addon> {
                 o.optString("name", "Add-on"),
                 o.optString("base", Stremio.baseOf(o.getString("url"))),
                 o.optString("logo").ifEmpty { null },
+                enabled = !o.optBoolean("off", false),     // the web player's field: `off` = installed, feeding nothing
             )
         }
     }.getOrDefault(emptyList())
 }
+/** The add-ons that feed content — Home, search, streams, subtitles, metadata. A switched-off
+    add-on stays installed and ranked but is never asked for anything. */
+internal fun activeAddons(ctx: Context): List<Addon> = loadAddons(ctx).filter { it.enabled }
 /**
  * Resuming an episode from Continue watching bypasses the picker, so rebuild the
  * chain in the background — otherwise "next episode" would be dead there.
@@ -568,7 +604,7 @@ internal fun loadAddons(ctx: Context): List<Addon> {
 private suspend fun hydrateSeriesChain(ctx: Context, addon: Addon, type: String, episodeId: String) {
     val seriesId = episodeId.substringBefore(':')
     if (seriesId.isEmpty() || seriesId == episodeId) return
-    val order = listOf(addon) + loadAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
+    val order = listOf(addon) + activeAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
     for (a in order) {
         val vids = runCatching {
             if (a.manifestUrl != addon.manifestUrl && !manifestFor(a.manifestUrl).canMeta(type, seriesId)) {
@@ -591,7 +627,7 @@ internal fun saveAddonsRaw(ctx: Context, list: List<Addon>) {
     list.forEach {
         arr.put(
             JSONObject().put("url", it.manifestUrl).put("name", it.name)
-                .put("base", it.base).put("logo", it.logo ?: "")
+                .put("base", it.base).put("logo", it.logo ?: "").put("off", !it.enabled)
         )
     }
     ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("addons", arr.toString()).apply()
@@ -607,6 +643,10 @@ private fun saveAddons(ctx: Context, list: List<Addon>) {
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
 fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
+    // Text size (Settings › Appearance) scales every sp in the app on top of the device's own setting
+    val baseDensity = LocalDensity.current
+    val density = Density(baseDensity.density, baseDensity.fontScale * Prefs.textScale)
+    CompositionLocalProvider(LocalDensity provides density) {
     MaterialTheme(colorScheme = DarkColors, typography = NebulaTypography) {
         Surface(Modifier.fillMaxSize(), color = Bg) {
             var stack by remember { mutableStateOf(listOf<Screen>(Screen.Home)) }
@@ -778,19 +818,20 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 push(Screen.Detail(a, item))
             }
 
-            /** Resume something from the Continue watching row (or start it over). */
-            fun openProgress(r: ProgressRec, fresh: Boolean = false) {
-                val addons = loadAddons(ctx)
+            /** Resume something from the Continue watching row (or start it over). `decided` = the
+                viewer picked Resume/Start over on a sheet, so the streams page does not ask again. */
+            fun openProgress(r: ProgressRec, fresh: Boolean = false, decided: Boolean = false) {
+                val addons = activeAddons(ctx)
                 val a = addons.firstOrNull { it.manifestUrl == r.addonUrl } ?: addons.firstOrNull() ?: return
                 seriesChain.clear()
-                push(Screen.Streams(a, MetaItem(r.id, r.type, r.name, r.poster, r.shape), startOver = fresh))
+                push(Screen.Streams(a, MetaItem(r.id, r.type, r.name, r.poster, r.shape), startOver = fresh, decided = decided))
                 if (r.type == "series") scope.launch { hydrateSeriesChain(ctx, a, r.type, r.id) }
             }
 
             /** The title page behind a Continue watching card — the series, not the
                 episode, since the card's id is whichever episode was last played. */
             fun openProgressDetails(r: ProgressRec) {
-                val addons = loadAddons(ctx)
+                val addons = activeAddons(ctx)
                 val a = addons.firstOrNull { it.manifestUrl == r.addonUrl } ?: addons.firstOrNull() ?: return
                 val id = if (r.type == "series") r.id.substringBefore(':') else r.id
                 push(Screen.Detail(a, MetaItem(id, r.type, r.name.split(" · ").first(), r.poster, r.shape)))
@@ -846,6 +887,10 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 val held = System.currentTimeMillis() - started
                 if (held < BOOT_MIN_MS) delay(BOOT_MIN_MS - held)  // never a flicker
                 booting = false
+                // the web player's boot toast, behind Settings › Advanced › Welcome message at start
+                if (Prefs.welcome && stack.last() is Screen.Home) {
+                    Toasts.show(if (homeState.hasAddons) "Welcome back." else "Ready. Add your add-on to begin.")
+                }
             }
             // anything but Home is its own destination and must not wait on catalogues
             LaunchedEffect(stack.last()) { if (stack.last() !is Screen.Home) booting = false }
@@ -859,7 +904,11 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                         // one 180 ms cross-fade per screen change; the in-place episode hop (Play → Play)
                         // keeps the same player composition, so it is not a change here
                         contentKey = { s -> if (s is Screen.Play) "play" else s },
-                        transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(180)) },
+                        // Motion: Reduced cuts between screens instead of fading
+                        transitionSpec = {
+                            val ms = if (Prefs.reducedMotion) 0 else 180
+                            fadeIn(tween(ms)) togetherWith fadeOut(tween(ms))
+                        },
                         label = "screen",
                     ) { s ->
                         Box(Modifier.fillMaxSize()) {
@@ -870,7 +919,8 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 onSeeAll = { a, c -> push(Screen.Catalog(a, c)) },
                                 onGoAddons = { push(Screen.Addons) },
                                 onResume = { r -> openProgress(r) },
-                                onStartOver = { r -> openProgress(r, fresh = true) },
+                                onSheetResume = { r -> openProgress(r, decided = true) },
+                                onStartOver = { r -> openProgress(r, fresh = true, decided = true) },
                                 onDetails = { r -> openProgressDetails(r) },
                                 onCustomise = { push(Screen.SettingsHome) },
                             )
@@ -888,18 +938,28 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                             is Screen.Settings -> SettingsScreen(
                                 onAddons = { push(Screen.Addons) },
                                 onLayout = { push(Screen.SettingsLayout) },
+                                onHome = { push(Screen.SettingsHomeOpts) },
                                 onPlayback = { push(Screen.SettingsPlayback) },
+                                onStreams = { push(Screen.SettingsStreams) },
                                 onProfile = { push(Screen.Profile) },
                                 onParty = { push(Screen.SettingsParty) },
                                 onFriends = { push(Screen.Friends) },
+                                onAdvanced = { push(Screen.SettingsAdvanced) },
                             )
-                            is Screen.SettingsLayout -> SettingsLayoutScreen(onBack = { pop() }, onRows = { push(Screen.SettingsHome) })
+                            is Screen.SettingsLayout -> SettingsLayoutScreen(onBack = { pop() })
+                            is Screen.SettingsHomeOpts -> SettingsHomeScreen(onBack = { pop() }, onRows = { push(Screen.SettingsHome) })
+                            is Screen.SettingsStreams -> SettingsStreamsScreen(onBack = { pop() })
+                            is Screen.SettingsAdvanced -> SettingsAdvancedScreen(
+                                onBack = { pop() },
+                                onClearCache = { clearContentCaches(); homeState.invalidate() },
+                                onReset = { homeState.invalidate() },
+                            )
                             is Screen.SettingsHome -> SettingsHomeRowsScreen(onBack = { pop() })
                             is Screen.Friends -> FriendsScreen(
                                 onBack = { pop() },
                                 onProfile = { push(Screen.Profile) },
                                 onOpen = { m ->
-                                    val a = loadAddons(ctx).firstOrNull() ?: return@FriendsScreen
+                                    val a = activeAddons(ctx).firstOrNull() ?: return@FriendsScreen
                                     openMeta(a, m)
                                 },
                             )
@@ -914,18 +974,19 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                             is Screen.Library -> LibraryScreen(
                                 version = libraryVersion,
                                 onResume = { r -> openProgress(r) },
-                                onStartOver = { r -> openProgress(r, fresh = true) },
+                                onSheetResume = { r -> openProgress(r, decided = true) },
+                                onStartOver = { r -> openProgress(r, fresh = true, decided = true) },
                                 onDetails = { r -> openProgressDetails(r) },
                                 onGoHome = { setTab(Screen.Home) },
                                 onGoSearch = { setTab(Screen.Search) },
                                 onOpen = { li ->
-                                    val addons = loadAddons(ctx)
+                                    val addons = activeAddons(ctx)
                                     val a = addons.firstOrNull { it.manifestUrl == li.addonUrl } ?: addons.firstOrNull()
                                     if (a == null) partyUi.status = "Add an add-on first"
                                     else push(Screen.Detail(a, MetaItem(li.id, li.type, li.name, li.poster, li.shape)))
                                 },
                                 onPlayEpisode = { li, ep ->
-                                    val addons = loadAddons(ctx)
+                                    val addons = activeAddons(ctx)
                                     val a = addons.firstOrNull { it.manifestUrl == li.addonUrl } ?: addons.firstOrNull()
                                     if (a == null) partyUi.status = "Add an add-on first"
                                     else {
@@ -983,6 +1044,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 s.addon, s.item,
                                 onBack = { pop() },
                                 fresh = s.startOver,
+                                decided = s.decided,
                                 onPlay = { st, from, byHand, fresh ->
                                     // remembered so the next episode keeps this source and quality
                                     NextEp.notePick(ctx, st, from, byHand)
@@ -1029,6 +1091,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 ToastHost(Modifier.align(Alignment.TopCenter).padding(horizontal = 24.dp))
             }
         }
+    }
     }
 }
 
@@ -1094,12 +1157,16 @@ internal fun FocusCard(
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val haptics = LocalHapticFeedback.current
-    val zoom by animateFloatAsState(if (focused) 1.09f else 1f, tween(300), label = "zoom")
-    val lift by animateFloatAsState(if (focused) 22f else 0f, tween(300), label = "lift")
+    // Focus zoom (Settings › Appearance) sets how much a card grows; Motion: Reduced grows nothing
+    // and draws the white ring instead, so focus stays visible from the couch
+    val reduced = Prefs.reducedMotion
+    val zoom by animateFloatAsState(if (focused && !reduced) Prefs.focusScale else 1f, tween(if (reduced) 0 else 300), label = "zoom")
+    val lift by animateFloatAsState(if (focused && !reduced) 22f else 0f, tween(if (reduced) 0 else 300), label = "lift")
     Box(
         modifier
             .scale(zoom)
             .shadow(lift.dp, shape, clip = false)
+            .then(if (reduced) Modifier.border(2.dp, if (focused) Color.White else Color.Transparent, shape) else Modifier)
             .clip(shape)
             .combinedClickable(
                 interactionSource = interaction,
@@ -1306,18 +1373,22 @@ internal fun MetaCard(
     onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
-    FocusCard(shape = RoundedCornerShape(12.dp), modifier = modifier, onClick = onClick, onLongClick = onLongClick) {
+    // Wide cards everywhere (Settings › Home) turns every poster row into 16:9 art
+    val wide = Prefs.landscapeRows || m.posterShape == "landscape"
+    val shape = cardShape()
+    FocusCard(shape = shape, modifier = modifier, onClick = onClick, onLongClick = onLongClick) {
         Column(Modifier.padding(2.dp)) {
             Box(
-                Modifier.fillMaxWidth().aspectRatio(thumbRatio(m.posterShape))
-                    .clip(RoundedCornerShape(12.dp))
+                Modifier.fillMaxWidth().aspectRatio(if (wide) 16f / 9f else thumbRatio(m.posterShape))
+                    .clip(shape)
                     .background(SurfaceC)
-                    .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(12.dp)),
+                    .border(1.dp, Color(0x0FFFFFFF), shape),
                 contentAlignment = Alignment.Center,
             ) {
-                if (m.poster != null) {
+                val art = if (wide) (m.background ?: m.poster) else m.poster
+                if (art != null) {
                     AsyncImage(
-                        model = m.poster, contentDescription = m.name,
+                        model = art, contentDescription = m.name,
                         contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
                     )
                 } else {
@@ -1326,7 +1397,7 @@ internal fun MetaCard(
                         color = Color(0xFF3A3A45), fontSize = 22.sp, fontWeight = FontWeight.Black,
                     )
                 }
-                m.imdbRating?.let {
+                if (Prefs.ratings) m.imdbRating?.let {
                     Text(
                         "★ $it", color = Color.White, fontFamily = Mono, fontSize = 10.sp,
                         modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
@@ -1335,18 +1406,23 @@ internal fun MetaCard(
                     )
                 }
             }
-            Text(
+            // Under posters (Settings › Appearance): title and year, the title alone, or nothing
+            if (Prefs.posterLabels != "none") Text(
                 m.name, color = TextC, fontSize = 13.sp, fontFamily = Sans, fontWeight = FontWeight.Medium,
                 maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp,
                 modifier = Modifier.padding(top = 7.dp, start = 2.dp, end = 2.dp),
             )
-            m.releaseInfo?.let {
+            if (Prefs.posterLabels == "both") m.releaseInfo?.let {
                 Text(it, style = labelStyle(11, FaintC), maxLines = 1,
                     modifier = Modifier.padding(top = 2.dp, start = 2.dp))
             }
         }
     }
 }
+
+/** The card width a row gives a title: 16:9 art is wider than a poster; Card size scales both. */
+internal fun rowCardWidth(m: MetaItem): Dp =
+    (if (Prefs.landscapeRows || m.posterShape == "landscape") 210.dp else 124.dp) * Prefs.posterScale
 
 /** "1h 2m left" for the Continue watching chip; never under a minute. */
 internal fun fmtLeft(ms: Long): String {
@@ -1368,7 +1444,11 @@ internal fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick
     val title = if (tag != null) parts[0] else r.name
     val sub = if (tag != null) parts.drop(2).joinToString(" · ").ifEmpty { null } else null
     val left = r.dur - r.pos
-    val shape = RoundedCornerShape(14.dp)
+    val shape = RoundedCornerShape((cardRadius() + 2).dp)
+    if (Prefs.cwStyle == "poster") {
+        ContinuePosterCard(r, title, tag, left, modifier, onClick, onLongClick)
+        return
+    }
     FocusCard(shape = shape, modifier = modifier, onClick = onClick, onLongClick = onLongClick) {
         Box(
             Modifier.fillMaxWidth().aspectRatio(16f / 9f)
@@ -1417,6 +1497,46 @@ internal fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick
         }
     }
 }
+
+/** Continue Watching as a poster (Settings › Home › Continue Watching cards · Poster): the 2:3 art
+    with the resume bar along its foot, the episode eyebrow and title beneath. */
+@Composable
+private fun ContinuePosterCard(
+    r: ProgressRec, title: String, tag: String?, left: Long,
+    modifier: Modifier, onClick: () -> Unit, onLongClick: () -> Unit,
+) {
+    val shape = cardShape()
+    FocusCard(shape = shape, modifier = modifier, onClick = onClick, onLongClick = onLongClick) {
+        Column(Modifier.padding(2.dp)) {
+            Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).clip(shape).background(SurfaceC).border(1.dp, Color(0x0FFFFFFF), shape)) {
+                if (r.poster != null) AsyncImage(
+                    model = r.poster, contentDescription = r.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
+                ) else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(r.name.filter { it.isLetterOrDigit() }.take(2).uppercase().ifEmpty { "••" },
+                        color = Color(0xFF3A3A45), fontSize = 22.sp, fontWeight = FontWeight.Black)
+                }
+                if (left > 0) Text(
+                    fmtLeft(left), color = Ink, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, fontFamily = Sans, maxLines = 1,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
+                        .background(BarGlass, Pill).border(1.dp, Hairline, Pill).padding(horizontal = 7.dp, vertical = 3.dp),
+                )
+                val pct = if (r.dur > 0) (r.pos.toFloat() / r.dur).coerceIn(0f, 1f) else 0f
+                Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(Color(0x66000000))) {
+                    Box(Modifier.fillMaxWidth(pct).fillMaxSize().background(Red))
+                }
+            }
+            if (tag != null) Eyebrow(tag, Modifier.padding(top = 7.dp, start = 2.dp))
+            Text(
+                title, color = TextC, fontSize = 13.sp, fontFamily = Sans, fontWeight = FontWeight.Medium,
+                maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp,
+                modifier = Modifier.padding(top = if (tag != null) 2.dp else 7.dp, start = 2.dp, end = 2.dp),
+            )
+        }
+    }
+}
+
+/** How wide a Continue Watching card is in the Home row: 16:9 art, or a poster the width of the other rows. */
+internal fun continueCardWidth(): Dp = (if (Prefs.cwStyle == "poster") 124.dp else 250.dp) * Prefs.posterScale
 
 // ---------- ratings + friends (experimental) ----------
 
@@ -1859,6 +1979,7 @@ private fun TabItem(label: String, icon: androidx.compose.ui.graphics.vector.Ima
 /** The skeleton material: a soft band sweeping left to right every 1.2 s over the tertiary surface. */
 @Composable
 internal fun shimmerBrush(): Brush {
+    if (Prefs.reducedMotion) return Brush.linearGradient(listOf(Surface2, Surface2))   // a still placeholder, no sweep
     val t = rememberInfiniteTransition(label = "sk")
     val x by t.animateFloat(
         initialValue = -600f, targetValue = 1800f,
@@ -1959,19 +2080,39 @@ private fun UpdateCard(version: String, notes: String, apkUrl: String = Updates.
     type stays legible over the artwork. */
 @Composable
 private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit) {
-    val first = rows.firstOrNull() ?: return
-    val picks = remember(first) { first.items.filter { it.background != null || it.poster != null }.take(6) }
+    // Featured from (Settings › Home): the first row, every row taking turns, or one chosen row
+    val source = Prefs.heroSource
+    val feed: List<CatRow> = remember(rows, source) {
+        when (source) {
+            "all" -> rows
+            "first" -> rows.take(1)
+            else -> rows.filter { HomeRows.key(it.addon, it.catalog) == source }.ifEmpty { rows.take(1) }
+        }
+    }
+    val first = feed.firstOrNull() ?: return
+    val picks: List<Pair<Addon, MetaItem>> = remember(feed) {
+        val out = mutableListOf<Pair<Addon, MetaItem>>()
+        val seen = HashSet<String>()
+        // several rows: one title from each in turn, so the carousel reads as the whole Home
+        for (n in 0 until 6) for (r in feed) {
+            val m = r.items.filter { it.background != null || it.poster != null }.getOrNull(n) ?: continue
+            if (out.size < 6 && seen.add(m.type + ":" + m.id)) out.add(r.addon to m)
+        }
+        out
+    }
     if (picks.isEmpty()) return
     var idx by remember(picks) { mutableStateOf(0) }
-    LaunchedEffect(picks) {
-        while (true) { delay(12_000); idx = (idx + 1) % picks.size }
+    val every = Prefs.heroInterval
+    LaunchedEffect(picks, every) {
+        if (every <= 0) return@LaunchedEffect                  // Featured changes every · Off
+        while (true) { delay(every * 1000L); idx = (idx + 1) % picks.size }
     }
-    val m = picks[idx]
+    val (from, m) = picks[idx]
     // the board owns the top of the screen edge to edge and dissolves into it
     val heroH = (LocalConfiguration.current.screenHeightDp * 0.58f).dp
-    Box(Modifier.fillMaxWidth().height(heroH).clickable { onOpen(first.addon, m) }) {
-        // a slide change dissolves one picture into the next rather than cutting
-        Crossfade(targetState = m, animationSpec = tween(400), label = "heroArt", modifier = Modifier.matchParentSize()) { pick ->
+    Box(Modifier.fillMaxWidth().height(heroH).clickable { onOpen(from, m) }) {
+        // a slide change dissolves one picture into the next rather than cutting (a cut under reduced motion)
+        Crossfade(targetState = m, animationSpec = tween(if (Prefs.reducedMotion) 0 else 400), label = "heroArt", modifier = Modifier.matchParentSize()) { pick ->
             AsyncImage(
                 model = pick.background ?: pick.poster, contentDescription = pick.name,
                 contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
@@ -2015,7 +2156,7 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit) {
             )
             // one white pill; My List lives on the title page
             Button(
-                onClick = { onOpen(first.addon, m) },
+                onClick = { onOpen(from, m) },
                 colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
                 shape = RoundedCornerShape(50),
                 contentPadding = PaddingValues(horizontal = 30.dp, vertical = 13.dp),
@@ -2047,6 +2188,7 @@ private fun HomeScreen(
     onSeeAll: (Addon, CatalogRef) -> Unit,
     onGoAddons: () -> Unit,
     onResume: (ProgressRec) -> Unit = {},
+    onSheetResume: (ProgressRec) -> Unit = onResume,     // Resume chosen on the sheet: already a decision
     onStartOver: (ProgressRec) -> Unit = {},
     onDetails: (ProgressRec) -> Unit = {},
     onCustomise: () -> Unit = {},
@@ -2067,7 +2209,7 @@ private fun HomeScreen(
             poster = r.poster,
             shape = "landscape",
             actions = listOf(
-                SheetAction(Icons.Filled.PlayArrow, "Resume") { onResume(r) },
+                SheetAction(Icons.Filled.PlayArrow, "Resume") { onSheetResume(r) },
                 SheetAction(Icons.Filled.Replay, "Start over") { onStartOver(r) },
                 SheetAction(Icons.Filled.Info, "View details") { onDetails(r) },
                 SheetAction(Icons.Filled.Delete, "Remove from Continue watching", destructive = true) {
@@ -2100,7 +2242,7 @@ private fun HomeScreen(
     // Home's order. Kept unless the add-on list or the arrangement changed, or
     // the rows are older than 5 minutes.
     LaunchedEffect(st.refreshKey) {
-        val addons = loadAddons(ctx)
+        val addons = activeAddons(ctx)
         st.hasAddons = addons.isNotEmpty()
         val sig = addons.joinToString("|") { it.manifestUrl } + "#" + HomeRows.version
         if (st.sig == sig && st.rows.isNotEmpty() && System.currentTimeMillis() - st.builtAt < 300_000) return@LaunchedEffect
@@ -2209,7 +2351,7 @@ private fun HomeScreen(
                             items(st.continueRows, key = { Progress.key(it.type, it.id) }) { r ->
                                 ContinueCard(
                                     r,
-                                    Modifier.width(250.dp * Prefs.posterScale),
+                                    Modifier.width(continueCardWidth()),
                                     onClick = { onResume(r) },
                                     onLongClick = { sheetFor = r },
                                 )
@@ -2228,7 +2370,8 @@ private fun HomeScreen(
                         val title = if (!multi) r.addon.name
                             else r.catalog.name + (if (sameName) " · " + typeLabel(r.catalog.type) else "")
                         Box(Modifier.padding(horizontal = 16.dp)) {
-                            RowHeader(title, if (multi) r.addon.name else null) {
+                            // the add-on eyebrow beside the title: Settings › Home › Add-on names under rows
+                            RowHeader(title, if (multi && Prefs.rowSubline) r.addon.name else null) {
                                 onSeeAll(r.addon, r.catalog)
                             }
                         }
@@ -2237,7 +2380,7 @@ private fun HomeScreen(
                             contentPadding = PaddingValues(horizontal = 16.dp),
                         ) {
                             items(r.items) { m ->
-                                MetaCard(m, Modifier.width((if (m.posterShape == "landscape") 210.dp else 124.dp) * Prefs.posterScale)) { onOpen(r.addon, m) }
+                                MetaCard(m, Modifier.width(rowCardWidth(m))) { onOpen(r.addon, m) }
                             }
                         }
                     }
@@ -2291,7 +2434,7 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
         st.searching = true
         val out = mutableListOf<CatRow>()
         st.sections = emptyList()
-        for (a in loadAddons(ctx)) {
+        for (a in activeAddons(ctx)) {
             runCatching {
                 // An add-on usually advertises search on several catalogs (Cinemeta
                 // has one for movies and one for series) — query them all, or a
@@ -2355,7 +2498,7 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
             st.submitted.isNotBlank() && st.sections.isEmpty() ->
                 Text("No matches for “${st.submitted.trim()}”.", color = MutedC, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
             st.submitted.isBlank() -> SearchIdle(
-                ctx, remember { loadAddons(ctx) },
+                ctx, remember { activeAddons(ctx) },
                 onRecent = { q -> st.query = q; st.submitted = q; RecentSearches.note(ctx, q) },
                 onAddon = onAddon,
             )
@@ -2365,7 +2508,7 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
                         RowHeader(r.addon.name, "${r.items.size} result" + (if (r.items.size > 1) "s" else ""), null)
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             items(r.items) { m ->
-                                MetaCard(m, Modifier.width((if (m.posterShape == "landscape") 210.dp else 124.dp) * Prefs.posterScale)) {
+                                MetaCard(m, Modifier.width(rowCardWidth(m))) {
                                     // a result opened straight from the as-you-type list counts as a search worth keeping
                                     RecentSearches.note(ctx, st.submitted)
                                     onOpen(r.addon, m)
@@ -2510,30 +2653,38 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                         Modifier.fillMaxWidth()
                             .background(if (raised) Surface2 else SurfaceC, RoundedCornerShape(12.dp))
                             .border(1.dp, if (raised) Color(0x3DFFFFFF) else LineC, RoundedCornerShape(12.dp))
-                            .padding(14.dp),
+                            .padding(horizontal = 12.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         if (a.logo != null) {
                             AsyncImage(
                                 model = a.logo, contentDescription = null, contentScale = ContentScale.Crop,
-                                modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(Color.Black),
+                                modifier = Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(Color.Black)
+                                    .alpha(if (a.enabled) 1f else 0.45f),
                             )
                         } else {
                             Box(
-                                Modifier.size(48.dp)
-                                    .background(Red, RoundedCornerShape(12.dp)),
+                                Modifier.size(44.dp)
+                                    .background(if (a.enabled) Red else Surface2, RoundedCornerShape(12.dp)),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Text(a.name.take(1).uppercase(), color = OnAccent, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                                Text(a.name.take(1).uppercase(), color = if (a.enabled) OnAccent else MutedC, fontSize = 20.sp, fontWeight = FontWeight.Black)
                             }
                         }
-                        Column(Modifier.weight(1f)) {
+                        Column(Modifier.weight(1f).alpha(if (a.enabled) 1f else 0.55f)) {
                             Text(a.name, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(
-                                a.manifestUrl.removePrefix("https://").removePrefix("http://"),
+                                if (a.enabled) a.manifestUrl.removePrefix("https://").removePrefix("http://")
+                                else "Off · feeds nothing until switched on",
                                 color = MutedC, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                             )
+                        }
+                        // On/Off without removing: a switched-off add-on stays installed and ranked but
+                        // feeds no rows, search results, streams or subtitles
+                        Chip(if (a.enabled) "On" else "Off", a.enabled, inSeg = true) {
+                            val list = addons.map { if (it.manifestUrl == a.manifestUrl) it.copy(enabled = !it.enabled) else it }
+                            saveAddons(ctx, list); addons = list; onAddonsChanged()
                         }
                         if (addons.size > 1) {
                             val grip = remember { MutableInteractionSource() }
@@ -2604,10 +2755,13 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                                 )
                             }
                         }
-                        IconButton(onClick = {
-                            val list = addons.filterNot { it.manifestUrl == a.manifestUrl }
-                            saveAddons(ctx, list); addons = list; onAddonsChanged()
-                        }) {
+                        IconButton(
+                            onClick = {
+                                val list = addons.filterNot { it.manifestUrl == a.manifestUrl }
+                                saveAddons(ctx, list); addons = list; onAddonsChanged()
+                            },
+                            modifier = Modifier.size(36.dp),
+                        ) {
                             Icon(Icons.Filled.Close, contentDescription = "Remove", tint = MutedC, modifier = Modifier.size(18.dp))
                         }
                     }
@@ -2622,7 +2776,7 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
 // ---------- settings ----------
 /** A section's eyebrow plus the one-line subtitle under it, as the TV console reads. */
 @Composable
-private fun SettingsHeader(text: String, sub: String? = null) {
+internal fun SettingsHeader(text: String, sub: String? = null) {
     Column(Modifier.padding(top = 20.dp, bottom = 8.dp, start = 4.dp)) {
         Text(text, color = MutedC, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.6.sp)
         if (sub != null) Text(sub, color = FaintC, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 3.dp))
@@ -2641,7 +2795,7 @@ internal fun SettingsGroup(content: @Composable () -> Unit) {
 
 /** One settings row: icon tile, title, subtitle. Pass onClick = null for a plain fact row. */
 @Composable
-private fun SettingsRow(
+internal fun SettingsRow(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
     sub: String,
@@ -2676,10 +2830,13 @@ private fun SettingsRow(
 private fun SettingsScreen(
     onAddons: () -> Unit,
     onLayout: () -> Unit,
+    onHome: () -> Unit,
     onPlayback: () -> Unit,
+    onStreams: () -> Unit,
     onProfile: () -> Unit,
     onParty: () -> Unit,
     onFriends: () -> Unit,
+    onAdvanced: () -> Unit,
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -2688,6 +2845,16 @@ private fun SettingsScreen(
     }
     var updSub by remember { mutableStateOf("You're on v$version — tap to check now") }
     var checking by remember { mutableStateOf(false) }
+    // "3 add-ons · 2 on · 1 off" — the list is read on every entry to this screen
+    val addonsSub = remember {
+        val all = loadAddons(ctx)
+        val off = all.count { !it.enabled }
+        when {
+            all.isEmpty() -> "Add, rank and manage your add-ons"
+            off == 0 -> "${all.size} add-on${if (all.size > 1) "s" else ""}, all on · Add, rank and manage"
+            else -> "${all.size} add-on${if (all.size > 1) "s" else ""} · ${all.size - off} on · $off off"
+        }
+    }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp),
@@ -2696,13 +2863,26 @@ private fun SettingsScreen(
             "Settings", color = TextC, fontSize = 34.sp, fontFamily = Sans, fontWeight = FontWeight.Bold,
             letterSpacing = (-1).sp, modifier = Modifier.padding(top = 24.dp),
         )
-        Spacer(Modifier.height(16.dp))
+        // Essential · Everything: the same pages either way; the pages hide their rarer rows in Essential
+        Column(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 16.dp)) {
+            Segmented {
+                Chip("Essential", !Prefs.everything, inSeg = true) { Prefs.setSetMode(ctx, "essential") }
+                Chip("Everything", Prefs.everything, inSeg = true) { Prefs.setSetMode(ctx, "all") }
+            }
+            Text(
+                "Essential keeps the common choices. Everything shows every option.",
+                color = MutedC, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 8.dp, start = 4.dp),
+            )
+        }
         ProfileCard(onProfile)
         SettingsHeader("GENERAL", "How Nebula looks, plays and connects")
         SettingsGroup {
-            SettingsRow(Icons.Filled.Palette, "Layout", "Theme, Home rows and poster size", true, onLayout)
-            SettingsRow(Icons.Filled.PlayArrow, "Playback", "Player, subtitles, languages and auto-play", true, onPlayback)
-            SettingsRow(Icons.Filled.Extension, "Add-ons", "Add, rank and manage your add-ons", true, onAddons)
+            SettingsRow(Icons.Filled.Palette, "Appearance", "Accent, surface, text, font and cards", true, onLayout)
+            SettingsRow(Icons.Filled.Home, "Home", "Featured, Continue Watching, rows and title pages", true, onHome)
+            SettingsRow(Icons.Filled.PlayArrow, "Playback", "Player, next episode, languages and subtitles", true, onPlayback)
+            // the Streams page holds Everything rows only (no E mark in the brief), so Essential does not list it
+            if (Prefs.everything) SettingsRow(Icons.Filled.FilterList, "Streams", "Order, quality floor, details and picking by itself", true, onStreams)
+            SettingsRow(Icons.Filled.Extension, "Add-ons", addonsSub, true, onAddons)
             SettingsRow(Icons.Filled.Groups, "Watch party", "Watch in sync with friends using a code", true, onParty)
             SettingsRow(Icons.Filled.Favorite, "Friends", "Rate, share and recommend — experimental", true, onFriends)
             Row(
@@ -2733,6 +2913,12 @@ private fun SettingsScreen(
                         focusedTextColor = TextC, unfocusedTextColor = TextC,
                     ),
                 )
+            }
+        }
+        if (Prefs.everything) {
+            SettingsHeader("ADVANCED", "The welcome message, a full reset, caches")
+            SettingsGroup {
+                SettingsRow(Icons.Filled.Tune, "Advanced", "Welcome message, reset all settings, clear caches", false, onAdvanced)
             }
         }
         SettingsHeader("ABOUT", "Version, updates and privacy")
@@ -2772,7 +2958,7 @@ private fun SettingsSubtitlesScreen(onBack: () -> Unit) {
 
 /** A titled switch row for the settings pages. */
 @Composable
-private fun SettingsToggle(title: String, sub: String, checked: Boolean, divider: Boolean = true, onChange: (Boolean) -> Unit) {
+internal fun SettingsToggle(title: String, sub: String, checked: Boolean, divider: Boolean = true, onChange: (Boolean) -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickable { onChange(!checked) }
             .padding(horizontal = 14.dp, vertical = 12.dp),
@@ -2797,7 +2983,7 @@ private fun SettingsToggle(title: String, sub: String, checked: Boolean, divider
 
 /** A titled segmented control: the choices sit inside one hairline pill. */
 @Composable
-private fun SettingsChips(title: String, sub: String?, options: List<Pair<String, String>>, selected: String, divider: Boolean = true, onPick: (String) -> Unit) {
+internal fun SettingsChips(title: String, sub: String?, options: List<Pair<String, String>>, selected: String, divider: Boolean = true, onPick: (String) -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
         Text(title, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         if (sub != null) Text(sub, color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(top = 2.dp))
@@ -2811,14 +2997,15 @@ private fun SettingsChips(title: String, sub: String?, options: List<Pair<String
 }
 
 @Composable
-private fun SettingsLayoutScreen(onBack: () -> Unit, onRows: () -> Unit) {
+private fun SettingsLayoutScreen(onBack: () -> Unit) {
     val ctx = LocalContext.current
+    val all = Prefs.everything
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp).padding(top = 20.dp, bottom = 110.dp),
     ) {
-        BackBar("Layout", null, onBack)
-        SettingsHeader("THEME", "The accent colour across the app")
+        BackBar("Appearance", null, onBack)
+        SettingsHeader("ACCENT", "The one colour across the app")
         SettingsGroup {
             // swatch grid: three per row, tick on the current one
             Column(Modifier.fillMaxWidth().padding(14.dp)) {
@@ -2855,17 +3042,49 @@ private fun SettingsLayoutScreen(onBack: () -> Unit, onRows: () -> Unit) {
                 }
             }
         }
-        SettingsHeader("HOME", "What the Home screen shows, and in what order")
+        if (all) {
+            SettingsHeader("LOOK", "Surfaces, type and motion")
+            SettingsGroup {
+                SettingsChips(
+                    "Surface", "How dark the app's panels are · Pure black suits OLED screens",
+                    listOf("black" to "Black", "pure" to "Pure black", "graphite" to "Graphite"), Prefs.surface,
+                ) { Prefs.setSurface(ctx, it) }
+                SettingsChips(
+                    "Text size", "Everything scales with it",
+                    listOf("compact" to "Compact", "standard" to "Standard", "large" to "Large"), Prefs.textSize,
+                ) { Prefs.setTextSize(ctx, it) }
+                SettingsChips(
+                    "Font", "Nebula's own face, or the one your device uses",
+                    listOf("geist" to "Geist", "system" to "System"), Prefs.font,
+                ) { Prefs.setFont(ctx, it) }
+                SettingsChips(
+                    "Focus zoom", "How much a card grows under a remote's focus",
+                    listOf("subtle" to "Subtle", "standard" to "Standard", "bold" to "Bold"), Prefs.focusZoom,
+                ) { Prefs.setFocusZoom(ctx, it) }
+                SettingsChips(
+                    "Motion", "Fades and card growth · Reduced cuts and keeps still",
+                    listOf("full" to "Full", "reduced" to "Reduced"), Prefs.motion, divider = false,
+                ) { Prefs.setMotion(ctx, it) }
+            }
+        }
+        SettingsHeader("CARDS", "Posters everywhere: Home, search, catalogs and My List")
         SettingsGroup {
-            SettingsToggle("Featured carousel", "The full-bleed showcase at the top of Home", Prefs.showHero) { Prefs.setShowHero(ctx, it) }
-            SettingsToggle("Continue watching", "Pick up where you left off, right on Home", Prefs.showContinue) { Prefs.setShowContinue(ctx, it) }
-            SettingsRow(Icons.Filled.ViewAgenda, "Rows", "Choose which catalogs make Home, and arrange them", true, onRows)
-            SettingsChips(
-                "Poster size", "How large cards render everywhere",
-                listOf("0.85" to "Compact", "1.0" to "Standard", "1.18" to "Large"),
-                when (Prefs.posterScale) { 0.85f -> "0.85"; 1.18f -> "1.18"; else -> "1.0" },
-                divider = false,
-            ) { Prefs.setPosterScale(ctx, it.toFloat()) }
+            if (all) {
+                SettingsChips(
+                    "Card size", "How large cards render everywhere",
+                    listOf("0.85" to "Small", "1.0" to "Standard", "1.18" to "Large"),
+                    when (Prefs.posterScale) { 0.85f -> "0.85"; 1.18f -> "1.18"; else -> "1.0" },
+                ) { Prefs.setPosterScale(ctx, it.toFloat()) }
+                SettingsChips(
+                    "Card corners", "How rounded the artwork is cut",
+                    listOf("square" to "Square", "rounded" to "Rounded", "round" to "Round"), Prefs.cardCorners,
+                ) { Prefs.setCardCorners(ctx, it) }
+                SettingsChips(
+                    "Under posters", "What a card says beneath its artwork",
+                    listOf("both" to "Title and year", "title" to "Title only", "none" to "Nothing"), Prefs.posterLabels,
+                ) { Prefs.setPosterLabels(ctx, it) }
+            }
+            SettingsToggle("Ratings on posters", "The star figure in the corner of a card", Prefs.ratings, divider = false) { Prefs.setRatings(ctx, it) }
         }
     }
 }
@@ -2873,29 +3092,52 @@ private fun SettingsLayoutScreen(onBack: () -> Unit, onRows: () -> Unit) {
 @Composable
 private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) {
     val ctx = LocalContext.current
+    val all = Prefs.everything
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp).padding(top = 20.dp, bottom = 110.dp),
     ) {
         BackBar("Playback", null, onBack)
-        SettingsHeader("PLAYER", "Gestures, speed, previews and picture quality")
+        SettingsHeader("PLAYER", if (all) "Gestures, speed, the controls and picture quality" else "Picture quality")
         SettingsGroup {
-            SettingsToggle(
-                "Touch gestures",
-                "Double-tap the edges to skip 10s, swipe to seek",
-                Prefs.gestures,
-            ) { Prefs.setGestures(ctx, it) }
-            SettingsToggle(
-                "Hold to speed",
-                "Hold the player surface to race ahead; release to resume",
-                Prefs.holdSpeed,
-            ) { Prefs.setHoldSpeed(ctx, it) }
-            SettingsChips(
-                "Hold speed", null,
-                listOf("1.5" to "1.5×", "2.0" to "2×", "3.0" to "3×"),
-                when (Prefs.holdRate) { 1.5f -> "1.5"; 3.0f -> "3.0"; else -> "2.0" },
-            ) { Prefs.setHoldRate(ctx, it.toFloat()) }
-            SettingsToggle(
+            // Essential keeps Picture quality alone here; every other row is an Everything row (the brief's E marks)
+            if (all) {
+                SettingsToggle(
+                    "Touch gestures",
+                    "Double-tap the edges to skip ${Prefs.seekStep}s, swipe to seek",
+                    Prefs.gestures,
+                ) { Prefs.setGestures(ctx, it) }
+                SettingsToggle(
+                    "Hold to speed",
+                    "Hold the player surface to race ahead; release to resume",
+                    Prefs.holdSpeed,
+                ) { Prefs.setHoldSpeed(ctx, it) }
+                SettingsChips(
+                    "Hold speed", null,
+                    listOf("1.5" to "1.5×", "2.0" to "2×", "3.0" to "3×"),
+                    when (Prefs.holdRate) { 1.5f -> "1.5"; 3.0f -> "3.0"; else -> "2.0" },
+                ) { Prefs.setHoldRate(ctx, it.toFloat()) }
+                SettingsChips(
+                    "Skip by", "Tap zones, the transport buttons and remote steps",
+                    listOf("5" to "5 s", "10" to "10 s", "15" to "15 s", "30" to "30 s"), Prefs.seekStep.toString(),
+                ) { Prefs.setSeekStep(ctx, it.toInt()) }
+                SettingsChips(
+                    "Speed when a video starts", "Last used remembers the speed you chose",
+                    listOf("1" to "1×", "1.25" to "1.25×", "1.5" to "1.5×", "last" to "Last used"), Prefs.speedDefault,
+                ) { Prefs.setSpeedDefault(ctx, it) }
+                SettingsChips(
+                    "Controls hide after", "How long the controls stay once you stop touching",
+                    listOf("2" to "2 s", "3.5" to "3.5 s", "6" to "6 s"),
+                    when (Prefs.controlsHide) { 2f -> "2"; 6f -> "6"; else -> "3.5" },
+                ) { Prefs.setControlsHide(ctx, it.toFloat()) }
+                SettingsToggle("Clock while controls show", "The time, and when the video ends, top right", Prefs.clock) { Prefs.setClock(ctx, it) }
+                SettingsToggle("Pause board", "Title and synopsis a moment after you pause", Prefs.pauseBoard) { Prefs.setPauseBoard(ctx, it) }
+                SettingsChips(
+                    "Right time pill", "What the pill at the end of the bar counts · a tap on it flips this too",
+                    listOf("left" to "Time left", "total" to "Total"), Prefs.timeDisplay,
+                ) { Prefs.setTimeDisplay(ctx, it) }
+            }
+            if (all) SettingsToggle(
                 "Preview frames while scrubbing",
                 "A picture of where you are about to jump · Turn it off if playback stutters on your TV",
                 Prefs.scrubFrames,
@@ -2905,44 +3147,74 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
                 "Auto adapts to your connection · Start high opens at the best rendition · Data saver caps at 720p",
                 listOf("auto" to "Auto", "high" to "Start high", "saver" to "Data saver"),
                 Prefs.quality,
-                divider = false,
+                divider = all,
             ) { Prefs.setQuality(ctx, it) }
-        }
-        SettingsHeader("LANGUAGES", "Preferred audio and subtitle tracks")
-        SettingsGroup {
-            SettingsChips(
-                "Audio language", "Preferred track when a stream carries several",
-                Prefs.LANGS, Prefs.audioLang,
-            ) { Prefs.setAudioLang(ctx, it) }
-            SettingsChips(
-                "Subtitle language", "Preferred captions when a stream carries several",
-                Prefs.LANGS, Prefs.subLang,
+            if (all) SettingsChips(
+                "Resolution cap", "Never fetch a picture taller than this, whatever the connection allows",
+                listOf("0" to "No cap", "720" to "720p", "1080" to "1080p", "1440" to "1440p"), Prefs.maxRes.toString(),
                 divider = false,
-            ) { Prefs.setSubLang(ctx, it) }
+            ) { Prefs.setMaxRes(ctx, it.toInt()) }
         }
-        SettingsHeader("SUBTITLES", "How captions look on screen")
-        SettingsGroup {
-            SettingsRow(Icons.Filled.ClosedCaption, "Subtitle style", "Size, colour, background and font of captions", false, onSubtitles)
-        }
-        SettingsHeader("STREAMS", "Choosing sources and moving between episodes")
+        SettingsHeader("NEXT EPISODE", "Rolling on, skipping ahead and coming back")
         SettingsGroup {
             SettingsToggle(
-                "Auto stream selection",
-                "Skip the stream list: play the source closest to your last pick from your highest-ranked add-on",
-                Prefs.autoStream,
-            ) { Prefs.setAutoStream(ctx, it) }
+                "Auto-play next episode",
+                "Count down and roll into the next episode when one ends",
+                Prefs.autoPlayNext,
+            ) { Prefs.setAutoPlayNext(ctx, it) }
+            if (all) {
+                SettingsChips(
+                    "Offer the next episode", "When the card appears",
+                    listOf("25" to "25 s before the end", "45" to "45 s", "60" to "60 s", "credits" to "Only in the credits"), Prefs.upnextAt,
+                ) { Prefs.setUpnextAt(ctx, it) }
+                SettingsChips(
+                    "Autoplay countdown", "How long the card counts before it plays",
+                    listOf("5" to "5 s", "8" to "8 s", "15" to "15 s"), Prefs.countdown.toString(),
+                ) { Prefs.setCountdown(ctx, it.toInt()) }
+                SettingsChips(
+                    "Still watching?", "Pause the run after a few episodes in a row",
+                    listOf("0" to "Off", "3" to "After 3", "5" to "After 5"), Prefs.stillWatching.toString(),
+                ) { Prefs.setStillWatching(ctx, it.toInt()) }
+            }
             SettingsChips(
                 "Skip intros and recaps",
                 "A pill appears over an episode's recap and opening titles, or Auto jumps past them for you · Timestamps come from a community database, looked up by episode",
                 listOf("button" to "Show button", "auto" to "Auto", "off" to "Off"),
                 Prefs.skipIntro,
+                divider = all,
             ) { Prefs.setSkipIntro(ctx, it) }
-            SettingsToggle(
-                "Auto-play next episode",
-                "Count down and roll into the next episode when one ends",
-                Prefs.autoPlayNext,
+            if (all) SettingsChips(
+                "When you come back", "Starting point for something you have started · Ask offers both before the first play",
+                listOf("resume" to "Resume", "ask" to "Ask", "startover" to "Start over"), Prefs.resume,
                 divider = false,
-            ) { Prefs.setAutoPlayNext(ctx, it) }
+            ) { Prefs.setResume(ctx, it) }
+        }
+        if (all) {
+            SettingsHeader("LANGUAGES", "Preferred audio and subtitle tracks")
+            SettingsGroup {
+                SettingsChips(
+                    "Audio language", "Preferred track when a stream carries several",
+                    Prefs.LANGS, Prefs.audioLang,
+                ) { Prefs.setAudioLang(ctx, it) }
+                SettingsChips(
+                    "Subtitle language", "Preferred captions when a stream carries several",
+                    Prefs.LANGS, Prefs.subLang,
+                ) { Prefs.setSubLang(ctx, it) }
+                SettingsChips(
+                    "Second choice", "Used when the first language is missing",
+                    Prefs.LANGS_NONE, Prefs.subLang2,
+                ) { Prefs.setSubLang2(ctx, it) }
+                SettingsChips(
+                    "Subtitles when a video starts",
+                    "Off until you pick · your preferred language when the stream has it · Always shows the first track when nothing matches",
+                    listOf("off" to "Off", "preferred" to "Preferred language", "always" to "Always"), Prefs.subStart,
+                    divider = false,
+                ) { Prefs.setSubStart(ctx, it) }
+            }
+        }
+        SettingsHeader("SUBTITLES", "How captions look on screen")
+        SettingsGroup {
+            SettingsRow(Icons.Filled.ClosedCaption, "Subtitle style", "Size, colour, background, edge, font, position and bold", false, onSubtitles)
         }
     }
 }
@@ -3033,7 +3305,7 @@ private fun DetailScreen(
 
     LaunchedEffect(ck) {
         if (full != null) return@LaunchedEffect
-        val order = listOf(addon) + loadAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
+        val order = listOf(addon) + activeAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
         for (a in order) {
             val m = runCatching {
                 if (a.manifestUrl != addon.manifestUrl &&
@@ -3079,7 +3351,7 @@ private fun DetailScreen(
             var found: List<Episode> = full?.videos.orEmpty()
             if (found.isEmpty()) {
                 if (!metaTried) return@LaunchedEffect            // still loading — wait for it
-                val order = listOf(addon) + loadAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
+                val order = listOf(addon) + activeAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
                 for (a in order) {
                     val ok = runCatching {
                         if (a.manifestUrl != addon.manifestUrl && !manifestFor(a.manifestUrl).canMeta(item.type, item.id)) return@runCatching false
@@ -3155,7 +3427,8 @@ private fun DetailScreen(
             Text(it, color = Color(0xCCFFFFFF), fontSize = 14.sp, lineHeight = 21.sp, maxLines = 7,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 10.dp))
         }
-        full?.genres?.takeIf { it.isNotEmpty() }?.let { gs ->
+        // Genres and cast on title pages: Settings › Home
+        full?.genres?.takeIf { it.isNotEmpty() && Prefs.detailGenres }?.let { gs ->
             LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.padding(top = 14.dp),
@@ -3169,7 +3442,7 @@ private fun DetailScreen(
                 }
             }
         }
-        full?.cast?.takeIf { it.isNotEmpty() }?.let { cast ->
+        full?.cast?.takeIf { it.isNotEmpty() && Prefs.detailCast }?.let { cast ->
             Eyebrow("Cast", Modifier.padding(top = 16.dp, bottom = 8.dp))
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(cast.take(8).size) { i ->
@@ -3513,7 +3786,7 @@ private fun EpisodesScreen(
     var upNextId by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(item.id) {
-        val order = listOf(addon) + loadAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
+        val order = listOf(addon) + activeAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
         var found: List<Episode> = emptyList()
         for (a in order) {
             val ok = runCatching {
@@ -3581,7 +3854,7 @@ private fun EpisodesScreen(
 // add-on the item came from PLUS every other installed add-on whose manifest
 // serves streams for this type/id, and show the answers grouped per add-on.
 @Composable
-private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fresh: Boolean = false, onPlay: (StreamItem, Addon, Boolean, Boolean) -> Unit) {
+private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fresh: Boolean = false, decided: Boolean = false, onPlay: (StreamItem, Addon, Boolean, Boolean) -> Unit) {
     var sections by remember { mutableStateOf<List<Pair<Addon, List<StreamItem>>>>(emptyList()) }
     var status by remember { mutableStateOf("Loading streams…") }
     var loading by remember { mutableStateOf(true) }
@@ -3589,22 +3862,62 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
     var reload by remember { mutableStateOf(0) }
     var usualUrl by remember { mutableStateOf<String?>(null) }   // the row that matches the last pick
     val ctx = LocalContext.current
-    // Start over: a one-play choice for anything already begun (web parity)
+    // Start over: a one-play choice for anything already begun (web parity). "When you come back"
+    // (Settings › Playback) sets the starting point: Resume, Start over, or Ask — a two-option sheet
+    // before the first play, unless the viewer already chose on a Continue Watching sheet.
     val savedAt = remember(item.id) { Progress.resumeAt(ctx, item.type, item.id) }
-    var startOver by remember(item.id) { mutableStateOf(fresh && savedAt > 0) }
+    val asking = Prefs.resume == "ask" && savedAt > 0 && !decided
+    var startOver by remember(item.id) { mutableStateOf((fresh || (Prefs.resume == "startover" && !decided)) && savedAt > 0) }
+    var chosen by remember(item.id) { mutableStateOf(!asking) }                   // Resume or Start over settled
+    var pending by remember { mutableStateOf<Pair<StreamItem, Addon>?>(null) }    // a play waiting on the sheet
+    var pendingByHand by remember { mutableStateOf(true) }
+    fun play(s: StreamItem, from: Addon, byHand: Boolean) {
+        if (!chosen) { pending = s to from; pendingByHand = byHand; return }
+        onPlay(s, from, byHand, startOver)
+    }
+    pending?.let { (s, from) ->
+        ResumeAskSheet(
+            title = item.name.split(" · ").first(), poster = item.poster, shape = item.posterShape, savedAt = savedAt,
+            onResume = { chosen = true; startOver = false; pending = null; onPlay(s, from, pendingByHand, false) },
+            onStartOver = { chosen = true; startOver = true; pending = null; onPlay(s, from, pendingByHand, true) },
+            onDismiss = { pending = null },
+        )
+    }
     LaunchedEffect(item, reload) {
         loading = true
         usualUrl = null
-        val order = listOf(addon) + loadAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
+        // the origin add-on and every enabled add-on that serves streams for this id — a switched-off origin feeds nothing either
+        val order = (listOf(addon) + activeAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }).filter { it.enabled }
         val out = mutableListOf<Pair<Addon, List<StreamItem>>>()
         var failures = 0
+        var floored = false        // an add-on answered, and Minimum quality hid every row of it
         val pf = NextEp.picked(ctx)
+        // Play the best stream by itself (Settings › Streams): decide once — when every add-on has
+        // answered, or when the wait for slow ones runs out, whichever comes first. Guarded by id, not
+        // screen state — this screen's state dies while the player is up, and re-firing on the way
+        // back would trap the viewer in playback forever.
+        var picked = false
+        fun decide() {
+            if (picked || Prefs.autoPick == "off" || autoPlayedFor == item.id) return
+            val secs = sections
+            if (secs.isEmpty()) return
+            picked = true
+            autoPlayedFor = item.id
+            // Same as last time: the add-on picked last (if it answered) and the row closest to that pick;
+            // First stream: the top row of the highest-ranked add-on that answered
+            val (a, list) = if (Prefs.autoPick == "last") (secs.firstOrNull { it.first.manifestUrl == pf?.addonUrl } ?: secs.first()) else secs.first()
+            val pick = if (Prefs.autoPick == "last") (StreamTwin.match(list, pf, a) ?: list.first()) else list.first()
+            play(pick, a, false)
+        }
+        val timer = if (Prefs.autoPick != "off" && autoPlayedFor != item.id) launch { delay(Prefs.pickWait * 1000L); decide() } else null
         for (a in order) {
             runCatching {
                 // origin is always asked; others only if their manifest matches
                 if (a.manifestUrl != addon.manifestUrl &&
                     !manifestFor(a.manifestUrl).canStream(item.type, item.id)) return@runCatching
-                val streams = Stremio.loadStreams(a.base, item.type, item.id)
+                val raw = Stremio.loadStreams(a.base, item.type, item.id)
+                val streams = arrangeStreams(raw)
+                if (raw.isNotEmpty() && streams.isEmpty()) floored = true
                 if (streams.isNotEmpty()) {
                     // the row that matches what was picked last time heads its
                     // section — buried at row 30 of 40 it would help nobody
@@ -3617,21 +3930,18 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                     sections = out.toList()
                     val n = out.sumOf { it.second.size }
                     status = "$n stream${if (n > 1) "s" else ""}" + (if (out.size > 1) " from ${out.size} add-ons" else "")
-                    // Auto selection: the row closest to the last pick from the
-                    // highest-priority add-on that answered (its first row when
-                    // nothing was ever picked). Guarded by id, not screen state —
-                    // this screen's state dies while the player is up, and
-                    // re-firing on the way back would trap the user in playback forever.
-                    if (Prefs.autoStream && autoPlayedFor != item.id) {
-                        autoPlayedFor = item.id
-                        onPlay(StreamTwin.match(list, pf, a) ?: list.first(), a, false, startOver)
-                        return@LaunchedEffect
-                    }
                 }
             }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; failures++ }
         }
+        timer?.cancel()
+        decide()
         if (sections.isEmpty()) {
-            status = if (failures == order.size) "Failed to load streams." else "No playable streams right now."
+            status = when {
+                order.isEmpty() -> "Every add-on is switched off."
+                failures == order.size -> "Failed to load streams."
+                floored -> "Every stream is below your minimum quality."
+                else -> "No playable streams right now."
+            }
         }
         loading = false
     }
@@ -3675,10 +3985,20 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        if (startOver) "Starting from the beginning" else "Resuming from ${fmtTime(savedAt)}",
+                        when {
+                            !chosen -> "You will be asked where to start"
+                            startOver -> "Starting from the beginning"
+                            else -> "Resuming from ${fmtTime(savedAt)}"
+                        },
                         color = MutedC, fontSize = 13.sp, modifier = Modifier.weight(1f),
                     )
-                    StreamFilterChip(if (startOver) "Resume from ${fmtTime(savedAt)}" else "Start over", startOver) { startOver = !startOver }
+                    if (chosen) StreamFilterChip(if (startOver) "Resume from ${fmtTime(savedAt)}" else "Start over", startOver) { startOver = !startOver }
+                    else {
+                        // Ask: nothing preselected — either chip settles it for this page
+                        StreamFilterChip("Resume", false) { chosen = true; startOver = false }
+                        Spacer(Modifier.width(6.dp))
+                        StreamFilterChip("Start over", false) { chosen = true; startOver = true }
+                    }
                 }
             }
             if (sections.size > 1) item(key = "filters") {
@@ -3704,11 +4024,26 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                 }
             items(streams) { s ->
                 Box(Modifier.padding(horizontal = 16.dp)) {
-                    StreamRow(s, from.name, item.name, usual = s.url == usualUrl, onPlay = { onPlay(it, from, true, startOver) })
+                    StreamRow(s, from.name, item.name, usual = s.url == usualUrl, onPlay = { play(it, from, true) })
                 }
             }
             }
         }
+    }
+}
+
+/** Settings › Streams applied to one add-on's answer: the quality floor first (rows with no
+    resolution plate stay), then the order — as listed, best quality first, or smallest first. */
+private fun arrangeStreams(raw: List<StreamItem>): List<StreamItem> {
+    val floor = when (Prefs.minRes) { "720" -> 2; "1080" -> 3; "4k" -> 4; else -> 0 }
+    val kept = if (floor == 0) raw else raw.filter { s ->
+        val r = StreamBadges.resRank(s.name + "\n" + s.title)
+        r == 0 || r >= floor
+    }
+    return when (Prefs.streamSort) {
+        "quality" -> kept.sortedByDescending { StreamBadges.resRank(it.name + "\n" + it.title) }
+        "size" -> kept.sortedBy { StreamBadges.sizeBytes(it.videoSize, it.title).let { b -> if (b <= 0L) Long.MAX_VALUE else b } }
+        else -> kept
     }
 }
 
@@ -3790,7 +4125,7 @@ private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual
                     fontWeight = FontWeight.Medium, letterSpacing = 1.3.sp, modifier = Modifier.padding(bottom = 3.dp),
                 )
                 Text(name, color = TextC, fontSize = 15.sp, fontFamily = Sans, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (m.badges.isNotEmpty()) {
+                if (Prefs.streamBadges && m.badges.isNotEmpty()) {
                     Row(
                         Modifier.padding(top = 5.dp),
                         horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -3804,12 +4139,23 @@ private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual
                 }
                 if (sub.isNotEmpty()) Text(sub, color = MutedC, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 5.dp))
             }
-            if (f.size != null || f.bitrate != null || f.seeds != null) {
+            // Stream details (Settings › Streams): size, bitrate, seeds as the right-hand column
+            if (Prefs.streamFacts && (f.size != null || f.bitrate != null || f.seeds != null)) {
                 Column(horizontalAlignment = Alignment.End) {
                     f.size?.let { Text(it, color = TextC, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
                     val line2 = listOfNotNull(f.bitrate, f.seeds?.let { "$it seeds" }).joinToString(" · ")
                     if (line2.isNotEmpty()) Text(line2, color = MutedC, fontFamily = Mono, fontSize = 11.sp, modifier = Modifier.padding(top = 2.dp))
                 }
+            }
+            // Add-on on each row: its initial in an accent ring, its name in the mono register, or nothing
+            when (Prefs.addonMark) {
+                "initial" -> Box(Modifier.size(24.dp).border(1.5.dp, Red, CircleShape), contentAlignment = Alignment.Center) {
+                    Text(addonName.trim().take(1).uppercase().ifEmpty { "•" }, color = TextC, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+                "name" -> Text(
+                    addonName.uppercase(), color = FaintC, fontFamily = Mono, fontSize = 9.sp, letterSpacing = 1.2.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 72.dp),
+                )
             }
         }
     }
@@ -3923,7 +4269,9 @@ private fun PlayerScreen(
     var durMs by remember { mutableStateOf(0L) }
     var bufMs by remember { mutableStateOf(0L) }
     var qualityLabel by remember { mutableStateOf<String?>(null) }
-    var speedLabel by remember { mutableStateOf("1.0×") }
+    // Speed when a video starts (Settings › Playback): a fixed rate, or the one chosen last time
+    val startSpeed = remember { if (Prefs.speedDefault == "last") Prefs.lastSpeed else (Prefs.speedDefault.toFloatOrNull() ?: 1f) }
+    var speedLabel by remember { mutableStateOf(speedText(startSpeed)) }
     var isFullscreen by remember { mutableStateOf(false) }
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
     var skipFlash by remember { mutableStateOf<Triple<Int, Int, Long>?>(null) } // zone (-1/+1), total secs, stamp
@@ -3968,21 +4316,18 @@ private fun PlayerScreen(
                 /* handleAudioFocus = */ true,
             )
             .setHandleAudioBecomingNoisy(true)
+            // Skip by (Settings › Playback) for media keys and the session too, not only the on-screen transport
+            .setSeekBackIncrementMs(Prefs.seekStep * 1000L)
+            .setSeekForwardIncrementMs(Prefs.seekStep * 1000L)
             .build()
             .apply {
                 playWhenReady = true
-                // "" means follow the device, which is ExoPlayer's own default
-                if (Prefs.audioLang.isNotEmpty() || Prefs.subLang.isNotEmpty() || Prefs.quality == "saver") {
-                    trackSelectionParameters = trackSelectionParameters.buildUpon()
-                        .apply {
-                            if (Prefs.audioLang.isNotEmpty()) setPreferredAudioLanguage(Prefs.audioLang)
-                            if (Prefs.subLang.isNotEmpty()) setPreferredTextLanguage(Prefs.subLang)
-                            if (Prefs.quality == "saver") setMaxVideoSize(Int.MAX_VALUE, 720)   // Data saver
-                        }
-                        .build()
-                }
+                // languages, the resolution cap and subtitles-at-start, from Settings › Playback
+                trackSelectionParameters = trackParams(trackSelectionParameters)
+                if (startSpeed != 1f) setPlaybackSpeed(startSpeed)
             }
     }
+    var subForced by remember { mutableStateOf(false) }      // "Always" already switched a text track on for this item
     // "Show · S1E2 · Episode name" is how the chain labels an episode; take it apart again
     val nameParts = remember(contentName) { (contentName ?: "").split(" · ") }
     val showName = nameParts.firstOrNull()?.takeIf { it.isNotEmpty() } ?: title
@@ -4027,11 +4372,13 @@ private fun PlayerScreen(
         exo.seekTo(t)
     }
     fun doSkip(zone: Int) {
-        seekBy(zone * 10_000L)
+        // Skip by (Settings › Playback): the tap zones, the transport and the remote share one step
+        val step = Prefs.seekStep
+        seekBy(zone * step * 1000L)
         val now = System.currentTimeMillis()
         val prev = skipFlash
         // Rapid re-taps on the same side accumulate (10s, 20s, 30s…) like YouTube.
-        val total = if (prev != null && prev.first == zone && now - prev.third < 1200) prev.second + 10 else 10
+        val total = if (prev != null && prev.first == zone && now - prev.third < 1200) prev.second + step else step
         skipFlash = Triple(zone, total, now)
     }
     LaunchedEffect(skipFlash) { if (skipFlash != null) { delay(800); skipFlash = null } }
@@ -4039,8 +4386,12 @@ private fun PlayerScreen(
     // ---- resume point ----
     var upnextOpen by remember { mutableStateOf(false) }
     var upnextCounting by remember { mutableStateOf(false) }
-    var upnextLeft by remember { mutableStateOf(8) }
+    var upnextLeft by remember { mutableStateOf(Prefs.countdown) }
     var upnextDismissed by remember { mutableStateOf(false) }
+    // Still watching? (Settings › Playback): episodes autoplayed in a row this sitting (the player is not
+    // re-keyed per episode, so this survives the in-place hop), and whether the card is asking
+    var autoRun by remember { mutableStateOf(0) }
+    var stillAsk by remember { mutableStateOf(false) }
     // Skip intro / recap: where this episode's segments fall, the pill on screen, what Auto already
     // took. Keyed on the episode so the hop into the next one starts clean. Off never asks.
     var skipSegs by remember(contentId) { mutableStateOf<SkipSegments.Segs?>(null) }
@@ -4112,7 +4463,7 @@ private fun PlayerScreen(
 
     LaunchedEffect(url) {
         // a fresh episode starts with the up-next card closed and undismissed
-        upnextOpen = false; upnextCounting = false; upnextDismissed = false
+        upnextOpen = false; upnextCounting = false; upnextDismissed = false; stillAsk = false; subForced = false
         // and without the last one's add-on subtitle: its file and timing must not be re-fed into this item
         activeAddonSub = null; subBaseFile = null; subOffsetMs = 0L; subAppliedMs = 0L
         runCatching {
@@ -4166,7 +4517,7 @@ private fun PlayerScreen(
         subSearching = true
         val found = mutableListOf<AddonSub>()
         try {
-            for (a in loadAddons(context)) {
+            for (a in activeAddons(context)) {
                 runCatching {
                     if (!manifestFor(a.manifestUrl).canSubs(contentType, contentId)) return@runCatching
                     found += Stremio.loadSubtitles(a.base, contentType, contentId).map { AddonSub(it, a.name) }
@@ -4200,16 +4551,21 @@ private fun PlayerScreen(
             // the closing credits count as the end when the database knows where they start
             val credits = SkipSegments.inOutro(skipSegs, exo.currentPosition)
             if (remain <= 90_000 || credits) onPrefetchNext()
-            if (remain > 500 && (remain <= 25_000 || credits)) upnextOpen = true
+            // Offer the next episode (Settings › Playback): N s before the end, or only once the credits
+            // roll — 25 s before the end when the database has no credits mark for this episode
+            val at = Prefs.upnextAt
+            val soon = if (at == "credits") (if (skipSegs?.outro != null) credits else remain <= 25_000)
+                else remain <= (at.toLongOrNull() ?: 25L) * 1000L || credits
+            if (remain > 500 && soon) upnextOpen = true
         }
     }
     // the card opening (near the end, on ENDED, or after a seek) is the other cue
     LaunchedEffect(upnextOpen) { if (upnextOpen) onPrefetchNext() }
     LaunchedEffect(upnextCounting) {
         if (!upnextCounting) return@LaunchedEffect
-        upnextLeft = 8
+        upnextLeft = Prefs.countdown                       // Autoplay countdown (Settings › Playback)
         while (upnextLeft > 0) { delay(1000); upnextLeft-- }
-        nextEpisode?.let { onPlayNext(it) }
+        nextEpisode?.let { autoRun++; onPlayNext(it) }
     }
 
     DisposableEffect(Unit) {
@@ -4236,6 +4592,13 @@ private fun PlayerScreen(
                 audioTrackCount = au
                 textTrackCount = tx
                 embeddedSubs = tt
+                // Subtitles when a video starts · Always: no language matched, so the first text track goes on
+                if (Prefs.subStart == "always" && !subForced && tt.isNotEmpty() && tt.none { it.selected }) {
+                    subForced = true
+                    val first = tt.first()
+                    exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                        .setOverrideForType(TrackSelectionOverride(first.group.mediaTrackGroup, first.index)).build()
+                }
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 (activity as? MainActivity)?.refreshPipParams()
@@ -4256,7 +4619,12 @@ private fun PlayerScreen(
                     sleepMode = ""; sleepAt = 0L; sleepFired = true; sleepRender()
                     return
                 }
-                if (nextEpisode != null && !upnextDismissed) { upnextOpen = true; upnextCounting = Prefs.autoPlayNext }
+                if (nextEpisode != null && !upnextDismissed) {
+                    // Still watching?: after N autoplayed episodes the card waits for a hand instead of counting
+                    val ask = Prefs.stillWatching > 0 && autoRun >= Prefs.stillWatching
+                    stillAsk = ask
+                    upnextOpen = true; upnextCounting = Prefs.autoPlayNext && !ask
+                }
             }
         }
         exo.addListener(l)
@@ -4298,8 +4666,9 @@ private fun PlayerScreen(
             bufMs = exo.bufferedPosition.coerceAtLeast(0L)
             liveOffMs = if (exo.isCurrentMediaItemLive && exo.currentLiveOffset != C.TIME_UNSET) exo.currentLiveOffset.coerceAtLeast(0L) else 0L
             val now = System.currentTimeMillis()
+            // Controls hide after (Settings › Playback)
             if (chromeVisible && exo.isPlaying && !subPanelOpen && !sleepMenuOpen && !scrubbing &&
-                now - chromeTouchedAt > 3500) chromeVisible = false
+                now - chromeTouchedAt > (Prefs.controlsHide * 1000f).toLong()) chromeVisible = false
             // Skip intro / recap: offer the pill, or take it on Auto once per segment a sitting
             // (a scrub back into the titles is taken as meant); a party viewer follows the host.
             val hit = if (exo.isCurrentMediaItemLive || (partyUi.active() && !partyUi.isHost)) null
@@ -4328,7 +4697,7 @@ private fun PlayerScreen(
                 sleepRender()
             }
             if (sleepFired && exo.isPlaying) sleepFired = false     // played on: the board reads Paused again
-            pauseBoardOn = resting && !inPipMode.value && !subPanelOpen && !sleepMenuOpen &&
+            pauseBoardOn = Prefs.pauseBoard && resting && !inPipMode.value && !subPanelOpen && !sleepMenuOpen &&
                 !upnextOpen && exo.currentPosition > 1000 && now - pausedSince > 1600 && now - chromeTouchedAt > 1600
             if (pinfoOn) infoRows = playbackInfoRows(
                 exo, bandwidth, subOffsetMs,
@@ -4542,7 +4911,8 @@ private fun PlayerScreen(
             positionMs = posMs, durationMs = durMs, bufferedMs = bufMs,
             episodeTag = episodeTag,
             sourceLine = sourceLine,
-            clockLine = clockLine(context, durMs - posMs, exo.playbackParameters.speed, live = isLiveState || durMs <= 0),
+            clockLine = if (Prefs.clock) clockLine(context, durMs - posMs, exo.playbackParameters.speed, live = isLiveState || durMs <= 0) else null,
+            seekStepMs = Prefs.seekStep * 1000L,
             liveOffsetMs = liveOffMs,
             subtitlesFocus = subsFocus,
             dimTitle = pauseBoardOn,
@@ -4574,7 +4944,7 @@ private fun PlayerScreen(
                 if (t == null) scrubPreview?.idle()
                 else if (Prefs.scrubFrames && !isLiveState && exo.currentMediaItem?.localConfiguration?.drmConfiguration == null) scrubPreview?.request(t)
             },
-            onNext = { nextEpisode?.let { upnextCounting = false; onPlayNext(it) } },
+            onNext = { nextEpisode?.let { upnextCounting = false; autoRun = 0; onPlayNext(it) } },
             onParty = {
                 if (partyUi.active()) onPartyLeave()
                 else onPartyStart(PartyStreamDesc(url, title, subs, contentType, contentId, contentName, poster, addonUrl))
@@ -4616,7 +4986,8 @@ private fun PlayerScreen(
                 val next = rates[(rates.indexOfFirst { it == exo.playbackParameters.speed }
                     .takeIf { it >= 0 } ?: 2).let { (it + 1) % rates.size }]
                 exo.setPlaybackSpeed(next)
-                speedLabel = (if (next == 1f) "1.0" else next.toString().trimEnd('0').trimEnd('.')) + "×"
+                speedLabel = speedText(next)
+                Prefs.setLastSpeed(context, next)             // "Speed when a video starts · Last used" reads this
                 chromeTouchedAt = System.currentTimeMillis()
             },
             onPip = { (activity as? MainActivity)?.enterPip() },
@@ -4743,7 +5114,7 @@ private fun PlayerScreen(
                     .background(Color(0xE62C2C2E), RoundedCornerShape(16.dp))
                     .padding(18.dp),
             ) {
-                Text("Up next", color = Color(0xA8EBEBF5), fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Text(if (stillAsk) "Still watching?" else "Up next", color = Color(0xA8EBEBF5), fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 // what it will play from — chosen while this one still runs
                 val srcLine = NextEp.sourceLine(context, nextEpisode.id)
                 Text(
@@ -4759,7 +5130,8 @@ private fun PlayerScreen(
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
-                        onClick = { upnextCounting = false; onPlayNext(nextEpisode) },
+                        // a hand on Play now ends the autoplay run the Still watching? count is about
+                        onClick = { upnextCounting = false; autoRun = 0; onPlayNext(nextEpisode) },
                         colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
                         shape = RoundedCornerShape(50),
                     ) { Text(if (upnextCounting) "Play now ($upnextLeft)" else "Play now", fontWeight = FontWeight.SemiBold) }
@@ -4819,6 +5191,28 @@ private fun PlayerScreen(
             Text(it, color = Color(0xFFFF6B6B), modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp))
         }
     }
+}
+
+/** "1.0×" / "1.25×" — the speed as the toolbar shows it. */
+private fun speedText(v: Float): String = (if (v == 1f) "1.0" else v.toString().trimEnd('0').trimEnd('.')) + "×"
+
+/**
+ * Settings › Playback applied to Media3's track choice: the preferred audio language, the subtitle
+ * language and its second choice ("" follows the device), the resolution cap on top of the picture
+ * policy (Data saver is a 720p cap of its own), and whether text starts disabled (Off) or on.
+ */
+@OptIn(UnstableApi::class)
+private fun trackParams(base: TrackSelectionParameters): TrackSelectionParameters {
+    val b = base.buildUpon()
+    if (Prefs.audioLang.isNotEmpty()) b.setPreferredAudioLanguage(Prefs.audioLang)
+    val device = java.util.Locale.getDefault().language
+    val langs = listOf(Prefs.subLang.ifEmpty { device }, Prefs.subLang2).filter { it.isNotEmpty() }.distinct()
+    b.setPreferredTextLanguages(*langs.toTypedArray())
+    var cap = if (Prefs.quality == "saver") 720 else Int.MAX_VALUE
+    if (Prefs.maxRes > 0) cap = minOf(cap, Prefs.maxRes)
+    b.setMaxVideoSize(Int.MAX_VALUE, cap)
+    b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, Prefs.subStart == "off")
+    return b.build()
 }
 
 /** Which double-tap zone an x position falls in: -1 left, +1 right, 0 middle (dead zone). */

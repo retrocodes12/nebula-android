@@ -139,10 +139,12 @@ object Progress {
         persistRaw(ctx, mm)
     }
 
-    /** Newest first, only the things actually worth resuming. */
-    fun continueList(ctx: Context): List<ProgressRec> =
-        load(ctx).values
+    /** The twenty most recent things worth resuming — newest first, or A to Z when Settings › Home says so. */
+    fun continueList(ctx: Context): List<ProgressRec> {
+        val recent = load(ctx).values
             .filter { !it.done && !it.dismissed && it.pos >= MIN_POS_MS && it.dur > 0 && it.pos <= it.dur - END_GAP_MS }
             .sortedByDescending { it.at }
             .take(20)
+        return if (Prefs.cwSort == "az") recent.sortedBy { it.name.lowercase() } else recent
+    }
 }

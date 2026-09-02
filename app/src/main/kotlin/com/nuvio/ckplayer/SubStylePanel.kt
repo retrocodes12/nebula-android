@@ -47,6 +47,7 @@ internal fun SubStylePreview(style: Map<String, String>, modifier: Modifier = Mo
     val fg = Color(SubStyle.COLOR.first { it.first == style.getValue("color") }.second)
     val sampleStyle = TextStyle(
         color = fg,
+        fontWeight = if (style["bold"] == "on") FontWeight.Bold else FontWeight.Normal,
         fontSize = 13.sp * SubStyle.sizeFactor(style.getValue("size")),
         fontFamily = when (style.getValue("font")) {
             "serif" -> FontFamily.Serif
@@ -73,7 +74,7 @@ internal fun SubStylePreview(style: Map<String, String>, modifier: Modifier = Mo
     }
 }
 
-/** The six cycling rows: size, colour, background, edge, font, position. */
+/** The seven cycling rows: size, colour, background, edge, font, position, bold. */
 @Composable
 internal fun SubStyleRows(ctx: Context, style: Map<String, String>, modifier: Modifier = Modifier) {
     Column(modifier) {

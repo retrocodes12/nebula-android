@@ -132,6 +132,9 @@ object HomeRows {
     fun setOrder(ctx: Context, keys: List<String>) { load(ctx); order = keys.toMutableList(); save(ctx) }
 
     fun reset(ctx: Context) { load(ctx); vis = null; order = null; save(ctx) }
+
+    /** After Reset all settings wiped the keys underneath: forget what was loaded and repaint. */
+    fun reload() { loaded = false; vis = null; order = null; version++ }
 }
 
 /** "Popular · Movies" — the type joins whenever the add-on's catalogs span more
@@ -156,7 +159,7 @@ internal class HomeRowItem(
 @Composable
 internal fun SettingsHomeRowsScreen(onBack: () -> Unit) {
     val ctx = LocalContext.current
-    val addons = remember { loadAddons(ctx) }
+    val addons = remember { activeAddons(ctx) }                          // a switched-off add-on has no rows here
     var items by remember { mutableStateOf<List<HomeRowItem>?>(null) }   // null while the manifests load
     var failed by remember { mutableStateOf(false) }
     var attempt by remember { mutableStateOf(0) }

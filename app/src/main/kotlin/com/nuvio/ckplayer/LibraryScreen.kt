@@ -67,6 +67,7 @@ internal fun LibraryScreen(
     onOpen: (LibItem) -> Unit,
     onPlayEpisode: (LibItem, Episode) -> Unit,
     onResume: (ProgressRec) -> Unit = {},
+    onSheetResume: (ProgressRec) -> Unit = onResume,     // Resume chosen on the sheet: already a decision
     onStartOver: (ProgressRec) -> Unit = {},
     onDetails: (ProgressRec) -> Unit = {},
     onGoHome: () -> Unit = {},
@@ -106,7 +107,7 @@ internal fun LibraryScreen(
             poster = r.poster,
             shape = "landscape",
             actions = listOf(
-                SheetAction(Icons.Filled.PlayArrow, "Resume") { onResume(r) },
+                SheetAction(Icons.Filled.PlayArrow, "Resume") { onSheetResume(r) },
                 SheetAction(Icons.Filled.Replay, "Start over") { onStartOver(r) },
                 SheetAction(Icons.Filled.Info, "View details") { onDetails(r) },
                 SheetAction(Icons.Filled.Delete, "Remove from Continue watching", destructive = true) {
@@ -207,8 +208,9 @@ private fun ContinueTab(rows: List<ProgressRec>, onResume: (ProgressRec) -> Unit
         return
     }
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = 300.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        // 16:9 art cards, or poster columns like My List when Settings › Home says Poster
+        columns = GridCells.Adaptive(minSize = if (Prefs.cwStyle == "poster") 118.dp else 300.dp),
+        horizontalArrangement = Arrangement.spacedBy(if (Prefs.cwStyle == "poster") 10.dp else 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(bottom = 104.dp),
     ) {

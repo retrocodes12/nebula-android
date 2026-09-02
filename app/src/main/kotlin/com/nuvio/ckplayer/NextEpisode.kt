@@ -155,7 +155,7 @@ object NextEp {
     /** The add-on to ask first: the one last picked from, else the series' own. */
     fun source(ctx: Context, origin: Addon?): Addon? {
         val pf = picked(ctx)
-        if (pf != null) loadAddons(ctx).firstOrNull { it.manifestUrl == pf.addonUrl }?.let { return it }
+        if (pf != null) activeAddons(ctx).firstOrNull { it.manifestUrl == pf.addonUrl }?.let { return it }
         return origin
     }
 

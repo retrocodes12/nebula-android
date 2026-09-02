@@ -288,6 +288,7 @@ internal fun Scrubber(
     frame: State<Bitmap?>?,
     onSeekBy: (Long) -> Unit, onSeekTo: (Long) -> Unit, onScrub: (Long?) -> Unit,
     modifier: Modifier = Modifier,
+    stepMs: Long = 10_000L,          // Skip by (Settings › Playback): one press; ×3 after five quick ones, ×6 after ten
 ) {
     val context = LocalContext.current
     val tv = remember { Account.isTv(context) }
@@ -335,11 +336,11 @@ internal fun Scrubber(
                         Key.DirectionLeft, Key.DirectionRight -> {
                             val dir = if (e.key == Key.DirectionLeft) -1 else 1
                             // live, or a length not known yet: nothing to preview, so seek at once as before
-                            if (isLive || durationMs <= 0) { onSeekBy(dir * 10_000L); return@onKeyEvent true }
+                            if (isLive || durationMs <= 0) { onSeekBy(dir * stepMs); return@onKeyEvent true }
                             val now = System.currentTimeMillis()
                             scrubRun = if (now - scrubLastAt <= 400) scrubRun + 1 else 1
                             scrubLastAt = now
-                            val step = when { scrubRun > 10 -> 60_000L; scrubRun > 5 -> 30_000L; else -> 10_000L }
+                            val step = when { scrubRun > 10 -> stepMs * 6; scrubRun > 5 -> stepMs * 3; else -> stepMs }
                             val t = ((scrubMs ?: positionMs) + dir * step).coerceIn(0L, durationMs)
                             scrubMs = t
                             scrubTick++

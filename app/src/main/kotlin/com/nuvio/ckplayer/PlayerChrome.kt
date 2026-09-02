@@ -27,12 +27,18 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Forward10
+import androidx.compose.material.icons.filled.Forward30
+import androidx.compose.material.icons.filled.Forward5
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
+import androidx.compose.material.icons.filled.Replay30
+import androidx.compose.material.icons.filled.Replay5
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.outlined.Audiotrack
 import androidx.compose.material.icons.outlined.Bedtime
@@ -59,6 +65,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -350,9 +357,12 @@ internal fun TitleCardChrome(
     subtitlesFocus: FocusRequester? = null,   // so the panel can hand focus back to its opener
     scrubFrame: State<Bitmap?>? = null,       // the scrub preview's frame for the position being previewed
     onScrub: (Long?) -> Unit = {},            // a preview position is up (finger or remote); null when it ends
+    seekStepMs: Long = 10_000L,               // Skip by (Settings › Playback): the transport's step
 ) {
-    // remaining ↔ total on the right pill, for the sitting (outside the fade, so a hidden chrome forgets nothing)
-    var showTotal by remember { mutableStateOf(false) }
+    val ctx = LocalContext.current
+    // remaining ↔ total on the right pill: Settings › Playback › Right time pill sets it, and a tap on the
+    // pill flips the setting itself (outside the fade, so a hidden chrome forgets nothing)
+    var showTotal by remember { mutableStateOf(Prefs.timeDisplay == "total") }
     AnimatedVisibility(visible, enter = fadeIn(), exit = fadeOut()) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             // a phone on its side has no room for a title above the bar: it sits beside Back instead
@@ -398,16 +408,19 @@ internal fun TitleCardChrome(
                 GlassCircle(Icons.Filled.Fullscreen, "Fullscreen", onClick = onFullscreen)
             }
 
-            // centre transport
+            // centre transport — the glyph follows the step (5/10/30 have their own; 15 uses the plain arrows)
+            val stepS = (seekStepMs / 1000L).toInt()
+            val backIcon = when (stepS) { 5 -> Icons.Filled.Replay5; 30 -> Icons.Filled.Replay30; 10 -> Icons.Filled.Replay10; else -> Icons.Filled.FastRewind }
+            val fwdIcon = when (stepS) { 5 -> Icons.Filled.Forward5; 30 -> Icons.Filled.Forward30; 10 -> Icons.Filled.Forward10; else -> Icons.Filled.FastForward }
             Row(Modifier.align(Alignment.Center), verticalAlignment = Alignment.CenterVertically) {
-                GlassCircle(Icons.Filled.Replay10, "Back 10 seconds", size = 56.dp, iconSize = 26.dp) { onSeekBy(-10_000) }
+                GlassCircle(backIcon, "Back $stepS seconds", size = 56.dp, iconSize = 26.dp) { onSeekBy(-seekStepMs) }
                 Spacer(Modifier.width(34.dp))
                 GlassCircle(
                     if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                     "Play/Pause", size = 80.dp, iconSize = 40.dp, onClick = onPlayPause,
                 )
                 Spacer(Modifier.width(34.dp))
-                GlassCircle(Icons.Filled.Forward10, "Forward 10 seconds", size = 56.dp, iconSize = 26.dp) { onSeekBy(10_000) }
+                GlassCircle(fwdIcon, "Forward $stepS seconds", size = 56.dp, iconSize = 26.dp) { onSeekBy(seekStepMs) }
             }
 
             // bottom: the title block (tall screens), the scrubber, the time pills, the toolbar
@@ -421,7 +434,7 @@ internal fun TitleCardChrome(
                 Scrubber(
                     positionMs = positionMs, durationMs = durationMs, bufferedMs = bufferedMs,
                     isLive = isLive, liveOffsetMs = liveOffsetMs, frame = scrubFrame,
-                    onSeekBy = onSeekBy, onSeekTo = onSeekTo, onScrub = onScrub,
+                    onSeekBy = onSeekBy, onSeekTo = onSeekTo, onScrub = onScrub, stepMs = seekStepMs,
                 )
                 // elapsed at the left end, remaining (or, on a tap, the total) at the right — glass pills
                 Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -436,7 +449,7 @@ internal fun TitleCardChrome(
                     if (isLive) TimePill("LIVE")
                     else TimePill(
                         if (showTotal) fmtTime(durationMs) else "−" + fmtTime((durationMs - positionMs).coerceAtLeast(0L))
-                    ) { showTotal = !showTotal }
+                    ) { showTotal = !showTotal; Prefs.setTimeDisplay(ctx, if (showTotal) "total" else "left") }
                 }
                 PlayerToolbar(
                     hasNext = hasNext, showSubtitles = showSubtitles, showAudio = showAudio,

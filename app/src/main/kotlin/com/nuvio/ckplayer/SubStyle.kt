@@ -17,12 +17,13 @@ import org.json.JSONObject
  */
 object SubStyle {
     private const val PREFS = "ckplayer"
-    val ORDER = listOf("size", "color", "bg", "edge", "font", "pos")
+    val ORDER = listOf("size", "color", "bg", "edge", "font", "pos", "bold")
     val LABELS = mapOf(
         "size" to "Size", "color" to "Colour", "bg" to "Background",
-        "edge" to "Edge", "font" to "Font", "pos" to "Position",
+        "edge" to "Edge", "font" to "Font", "pos" to "Position", "bold" to "Bold",
     )
     val VALUE_LABELS = mapOf(
+        "off" to "Off", "on" to "On",
         "small" to "Small", "normal" to "Normal", "large" to "Large", "xl" to "Extra large", "huge" to "Huge",
         "white" to "White", "yellow" to "Yellow", "cyan" to "Cyan", "green" to "Green",
         "dark" to "Dark", "light" to "Translucent", "none" to "None",
@@ -46,9 +47,10 @@ object SubStyle {
         "sans" to Typeface.SANS_SERIF, "serif" to Typeface.SERIF, "mono" to Typeface.MONOSPACE,
     )
     private val POS = listOf("bottom" to 0.08f, "raised" to 0.16f, "high" to 0.26f, "centre" to 0.45f)
+    private val BOLD = listOf("off", "on")
     private val DEFAULT = mapOf(
         "size" to "normal", "color" to "white", "bg" to "dark",
-        "edge" to "shadow", "font" to "sans", "pos" to "bottom",
+        "edge" to "shadow", "font" to "sans", "pos" to "bottom", "bold" to "off",
     )
 
     /** Bumped on every change (local or synced-in) so an open player restyles live. */
@@ -60,6 +62,7 @@ object SubStyle {
         "bg" -> BG.map { it.first }
         "edge" -> EDGE.map { it.first }
         "font" -> FONT.map { it.first }
+        "bold" -> BOLD
         else -> POS.map { it.first }
     }
 
@@ -124,6 +127,7 @@ object SubStyle {
             return
         }
         val s = get(ctx)
+        val face = FONT.first { it.first == s.getValue("font") }.second
         view.setStyle(
             CaptionStyleCompat(
                 COLOR.first { it.first == s.getValue("color") }.second,
@@ -131,7 +135,7 @@ object SubStyle {
                 0x00000000,                                  // no window box behind the cue block
                 EDGE.first { it.first == s.getValue("edge") }.second,
                 0xFF000000.toInt(),
-                FONT.first { it.first == s.getValue("font") }.second,
+                if (s["bold"] == "on") Typeface.create(face, Typeface.BOLD) else face,   // Bold: the same face, heavier
             )
         )
         view.setFractionalTextSize(

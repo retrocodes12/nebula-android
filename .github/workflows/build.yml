@@ -49,9 +49,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.55.0.apk
+          cp "$APK" Nebula-1.56.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.55.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.55.0 Nebula-1.55.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.55.0" \
+          gh release delete v1.56.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.56.0 Nebula-1.56.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.56.0" \
             --notes "A finish pass. The featured board has one button and a centred title, Continue Watching cards show the episode, the time left and a progress bar, Library has tabs for My List, Continue Watching and Upcoming with clear empty states, the bottom bar gains your profile, screens fade into one another and loading rows shimmer. Fixed: Check for updates no longer depends on GitHub's per-address limit, and preview frames while scrubbing now fetch through the same connection identity as the player, with the Info panel saying why when a host refuses them."

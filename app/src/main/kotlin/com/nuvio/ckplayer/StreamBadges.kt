@@ -66,6 +66,17 @@ object StreamBadges {
     /** Every badge that fires on the row, no per-group dedupe — a stream's fingerprint. */
     fun allBadges(raw: String): List<String> = PACK.filter { it.second.containsMatchIn(raw) }.map { it.third }
 
+    /** 4K 4 · 1080 3 · 720 2 · SD 1 · no plate 0 — the plate as a number, for the order and the quality floor. */
+    fun resRank(raw: String): Int = when (plate(raw)?.res) { "4K" -> 4; "1080" -> 3; "720" -> 2; "SD" -> 1; else -> 0 }
+
+    /** The file size in bytes: the add-on's videoSize hint, else the first "1.4 GB" in the text; 0 when unknown. */
+    fun sizeBytes(videoSize: Long, text: String): Long {
+        if (videoSize > 0) return videoSize
+        val m = RE_SIZE.find(text) ?: return 0L
+        val n = m.groupValues[1].replace(',', '.').toDoubleOrNull() ?: return 0L
+        return (n * (if (m.groupValues[2].uppercase().startsWith("G")) 1073741824.0 else 1048576.0)).toLong()
+    }
+
     /** The resolution leads the row as a plate — it is what you choose by. */
     data class Plate(val res: String, val tag: String)
     fun plate(raw: String): Plate? = when {

@@ -8,7 +8,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
-data class Addon(val manifestUrl: String, val name: String, val base: String, val logo: String? = null)
+/** An installed add-on. `enabled` false = switched off in the list: kept and ranked, asked for nothing. */
+data class Addon(val manifestUrl: String, val name: String, val base: String, val logo: String? = null, val enabled: Boolean = true)
 data class CatalogRef(
     val type: String,
     val id: String,

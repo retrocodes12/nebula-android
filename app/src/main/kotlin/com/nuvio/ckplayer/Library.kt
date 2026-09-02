@@ -120,7 +120,7 @@ object Library {
     suspend fun upcoming(ctx: Context): List<UpRow> {
         val series = list(ctx).filter { it.type == "series" }.take(25)
         if (series.isEmpty()) return emptyList()
-        val addons = loadAddons(ctx)
+        val addons = activeAddons(ctx)
         val floor = System.currentTimeMillis() - 8L * 24 * 3600_000
         val horizon = System.currentTimeMillis() + 45L * 24 * 3600_000
         val rows = mutableListOf<UpRow>()
