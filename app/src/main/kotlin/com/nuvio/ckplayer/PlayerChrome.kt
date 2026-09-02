@@ -284,17 +284,19 @@ internal fun PauseBoard(
 internal fun PlaybackInfoHud(rows: List<InfoRow>, modifier: Modifier = Modifier) {
     Column(
         modifier
-            .width(250.dp)
+            .width(270.dp)
             .background(Color(0xD91C1C1E), RoundedCornerShape(14.dp))
             .padding(horizontal = 14.dp, vertical = 12.dp),
     ) {
         Text("PLAYBACK INFO", color = Color(0x8CEBEBF5), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp)
         rows.forEachIndexed { i, r ->
-            Row(Modifier.fillMaxWidth().padding(top = if (i == 0) 8.dp else 5.dp)) {
+            Row(Modifier.fillMaxWidth().padding(top = if (i == 0) 8.dp else 5.dp), verticalAlignment = Alignment.Top) {
                 Text(r.k, color = DimInk, fontSize = 12.5.sp, modifier = Modifier.weight(1f))
+                // a sentence ("Unavailable — host refused …") wraps instead of running off the card
                 Text(
-                    r.v, color = if (r.warn) Color(0xFFFFB340) else Ink, fontSize = 12.5.sp,
-                    fontWeight = FontWeight.Medium, maxLines = 1,
+                    r.v, color = if (r.warn) Color(0xFFFFB340) else Ink, fontSize = 12.5.sp, lineHeight = 16.sp,
+                    fontWeight = FontWeight.Medium, maxLines = 3, overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.End, modifier = Modifier.weight(1.5f).padding(start = 8.dp),
                 )
             }
         }

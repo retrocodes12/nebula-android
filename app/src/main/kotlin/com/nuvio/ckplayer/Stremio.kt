@@ -54,6 +54,7 @@ data class MetaItem(
     val imdbRating: String? = null, val releaseInfo: String? = null,
     val background: String? = null, val logo: String? = null,
     val description: String? = null,
+    val genres: List<String> = emptyList(),      // the hero's meta line names the first one
 )
 data class SubTrack(val url: String, val lang: String)
 data class StreamItem(
@@ -325,6 +326,9 @@ object Stremio {
                 background = m.optString("background").ifEmpty { null },
                 logo = m.optString("logo").ifEmpty { null },
                 description = m.optString("description").ifEmpty { null },
+                genres = (m.optJSONArray("genres") ?: m.optJSONArray("genre"))?.let { g ->
+                    (0 until g.length()).map { g.optString(it).trim() }.filter { it.isNotEmpty() }.take(6)
+                } ?: emptyList(),
             ))
         }
         return out

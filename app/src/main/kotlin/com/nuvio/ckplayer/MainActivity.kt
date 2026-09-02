@@ -24,8 +24,13 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -135,6 +140,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
@@ -598,6 +604,7 @@ private fun saveAddons(ctx: Context, list: List<Addon>) {
     Cloud.noteChanged(ctx, "addons")
 }
 
+@OptIn(ExperimentalAnimationApi::class)
 @Composable
 fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
     MaterialTheme(colorScheme = DarkColors, typography = NebulaTypography) {
@@ -675,7 +682,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
             fun partyLeave() { partyUi.reset(); partyUi.status = "Left the party" }
             LaunchedEffect(partyUi.status) {
                 partyUi.status?.let {
-                    android.widget.Toast.makeText(ctx, it, android.widget.Toast.LENGTH_SHORT).show()
+                    Toasts.show(it)
                     partyUi.status = null
                 }
             }
@@ -739,7 +746,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                     if ("library" in keys) libraryVersion++
                 }
                 Cloud.onSignedOut = {
-                    android.widget.Toast.makeText(ctx, "This device was signed out of your profile. Nothing on it was deleted.", android.widget.Toast.LENGTH_LONG).show()
+                    Toasts.show("This device was signed out of your profile. Nothing on it was deleted.")
                 }
                 Account.boot(ctx)            // pre-profile installs trade the master secret for a device token
                 Cloud.pullAll(ctx)
@@ -846,8 +853,17 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
             Box(Modifier.fillMaxSize()) {
                 val current = stack.last()
                 Box(Modifier.fillMaxSize()) {
-                    Box(Modifier.fillMaxSize()) {
-                        when (val s = current) {
+                    AnimatedContent(
+                        targetState = current,
+                        modifier = Modifier.fillMaxSize(),
+                        // one 180 ms cross-fade per screen change; the in-place episode hop (Play → Play)
+                        // keeps the same player composition, so it is not a change here
+                        contentKey = { s -> if (s is Screen.Play) "play" else s },
+                        transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(180)) },
+                        label = "screen",
+                    ) { s ->
+                        Box(Modifier.fillMaxSize()) {
+                        when (s) {
                             is Screen.Home -> HomeScreen(
                                 homeState,
                                 onOpen = { a, item -> openMeta(a, item) },
@@ -892,10 +908,16 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 onSubtitles = { push(Screen.SettingsSubtitles) },
                             )
                             is Screen.SettingsSubtitles -> SettingsSubtitlesScreen(onBack = { pop() })
-                            is Screen.Profile -> ProfileScreen(onBack = { pop() })
+                            // reached from the nav's last item as a root, or pushed from Settings
+                            is Screen.Profile -> ProfileScreen(onBack = { if (stack.size > 1) pop() else setTab(Screen.Home) })
                             is Screen.SettingsParty -> SettingsPartyScreen(onBack = { pop() }, onJoin = { partyJoin(it) })
                             is Screen.Library -> LibraryScreen(
                                 version = libraryVersion,
+                                onResume = { r -> openProgress(r) },
+                                onStartOver = { r -> openProgress(r, fresh = true) },
+                                onDetails = { r -> openProgressDetails(r) },
+                                onGoHome = { setTab(Screen.Home) },
+                                onGoSearch = { setTab(Screen.Search) },
                                 onOpen = { li ->
                                     val addons = loadAddons(ctx)
                                     val a = addons.firstOrNull { it.manifestUrl == li.addonUrl } ?: addons.firstOrNull()
@@ -992,9 +1014,10 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 onPartyLeave = { partyLeave() },
                             )
                         }
+                        }
                     }
                     if (current == Screen.Home || current == Screen.Search ||
-                        current == Screen.Library || current == Screen.Settings) {
+                        current == Screen.Library || current == Screen.Settings || current == Screen.Profile) {
                         BottomBar(current, onTab = { setTab(it) }, modifier = Modifier.align(Alignment.BottomCenter))
                     }
                 }
@@ -1002,6 +1025,8 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 AnimatedVisibility(visible = booting, enter = fadeIn(tween(0)), exit = fadeOut(tween(320))) {
                     BootScreen()
                 }
+                // toasts: a small pill under the status bar, over whatever screen is up
+                ToastHost(Modifier.align(Alignment.TopCenter).padding(horizontal = 24.dp))
             }
         }
     }
@@ -1059,7 +1084,7 @@ private fun BootScreen() {
 /** Card wrapper: scales up + white border when focused (TV D-pad) or pressed. */
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
-private fun FocusCard(
+internal fun FocusCard(
     shape: RoundedCornerShape,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
@@ -1091,7 +1116,7 @@ private fun FocusCard(
 }
 
 /** One row inside a [CardSheet]. */
-private data class SheetAction(
+internal data class SheetAction(
     val icon: ImageVector,
     val label: String,
     val destructive: Boolean = false,
@@ -1105,7 +1130,7 @@ private data class SheetAction(
  * here instead, reached by holding the card.
  */
 @Composable
-private fun CardSheet(
+internal fun CardSheet(
     title: String,
     sub: String?,
     poster: String?,
@@ -1275,7 +1300,7 @@ internal fun Eyebrow(text: String, modifier: Modifier = Modifier, color: Color =
 
 /** One poster/landscape card — used by the catalog grid, Home rows, and Search. */
 @Composable
-private fun MetaCard(
+internal fun MetaCard(
     m: MetaItem,
     modifier: Modifier = Modifier,
     onLongClick: (() -> Unit)? = null,
@@ -1323,9 +1348,18 @@ private fun MetaCard(
     }
 }
 
-/** A Continue watching card: poster, how much is left, and a resume bar. */
+/** "1h 2m left" for the Continue watching chip; never under a minute. */
+internal fun fmtLeft(ms: Long): String {
+    val mins = (ms / 60_000L).coerceAtLeast(1L)
+    val h = mins / 60
+    val m = mins % 60
+    return (if (h > 0) "${h}h ${m}m" else "${m}m") + " left"
+}
+
+/** A Continue watching card: 16:9 art, the episode's eyebrow, title and name on the art, what is
+    left as a glass chip in the corner, and a resume bar along the bottom edge. */
 @Composable
-private fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick: () -> Unit, onLongClick: () -> Unit) {
+internal fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick: () -> Unit, onLongClick: () -> Unit) {
     // episode identity reads off the artwork itself — a wrapped two-line title
     // under a poster was the single biggest source of visual noise on Home
     val parts = r.name.split(" · ")
@@ -1334,12 +1368,13 @@ private fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick:
     val title = if (tag != null) parts[0] else r.name
     val sub = if (tag != null) parts.drop(2).joinToString(" · ").ifEmpty { null } else null
     val left = r.dur - r.pos
-    FocusCard(shape = RoundedCornerShape(14.dp), modifier = modifier, onClick = onClick, onLongClick = onLongClick) {
+    val shape = RoundedCornerShape(14.dp)
+    FocusCard(shape = shape, modifier = modifier, onClick = onClick, onLongClick = onLongClick) {
         Box(
             Modifier.fillMaxWidth().aspectRatio(16f / 9f)
-                .clip(RoundedCornerShape(14.dp))
+                .clip(shape)
                 .background(SurfaceC)
-                .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(14.dp)),
+                .border(1.dp, Color(0x14FFFFFF), shape),
         ) {
             if (r.poster != null) {
                 AsyncImage(
@@ -1355,22 +1390,24 @@ private fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick:
                 }
             }
             Box(Modifier.matchParentSize().background(Brush.verticalGradient(
-                0f to Color(0x00000000), 0.45f to Color(0x40000000), 1f to Color(0xE6000000))))
-            Column(Modifier.align(Alignment.BottomStart).padding(start = 11.dp, end = 11.dp, bottom = 10.dp)) {
-                val kicker = listOfNotNull(tag, left.takeIf { it > 0 }?.let { fmtTime(it) + " left" })
-                    .joinToString("  ·  ")
-                if (kicker.isNotEmpty()) Text(
-                    kicker, color = Color(0xE0EBEBF5), fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 0.4.sp, maxLines = 1,
-                )
+                0f to Color(0x00000000), 0.4f to Color(0x33000000), 1f to Color(0xE6000000))))
+            // how much is left, as a glass chip in the corner
+            if (left > 0) Text(
+                fmtLeft(left), color = Ink, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, fontFamily = Sans, maxLines = 1,
+                modifier = Modifier.align(Alignment.TopEnd).padding(10.dp)
+                    .background(BarGlass, Pill).border(1.dp, Hairline, Pill)
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+            )
+            Column(Modifier.align(Alignment.BottomStart).padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
+                if (tag != null) Eyebrow(tag, color = Color(0xD1EBEBF5))
                 Text(
-                    title, color = Color.White, fontSize = 15.sp, fontFamily = Sans,
+                    title, color = Color.White, fontSize = 16.sp, fontFamily = Sans,
                     fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 1.dp),
+                    modifier = Modifier.padding(top = if (tag != null) 3.dp else 0.dp),
                 )
                 if (sub != null) Text(
-                    sub, color = Color(0xB3EBEBF5), fontSize = 12.sp, maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    sub, color = Color(0xB3EBEBF5), fontSize = 12.5.sp, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 1.dp),
                 )
             }
             val pct = if (r.dur > 0) (r.pos.toFloat() / r.dur).coerceIn(0f, 1f) else 0f
@@ -1434,11 +1471,7 @@ private fun RecommendSheet(type: String, item: MetaItem, onDismiss: () -> Unit) 
             SheetAction(Icons.Filled.Favorite, fName) {
                 scope.launch {
                     val ok = Social.recommend(ctx, f, type, item)
-                    android.widget.Toast.makeText(
-                        ctx,
-                        if (ok) "Recommended to $fName" else "Could not send that",
-                        android.widget.Toast.LENGTH_SHORT,
-                    ).show()
+                    Toasts.show(if (ok) "Recommended to $fName" else "Could not send that")
                 }
             }
         },
@@ -1705,12 +1738,12 @@ private fun FriendRow(title: String, items: List<JSONObject>, onOpen: (MetaItem)
 /** A single shimmering block. */
 @Composable
 private fun SkelBox(modifier: Modifier, shape: RoundedCornerShape = RoundedCornerShape(12.dp)) {
-    Box(modifier.clip(shape).background(Surface2.copy(alpha = shimmerAlpha())))
+    Box(modifier.clip(shape).background(shimmerBrush()))
 }
 
 /** Placeholder shaped like a stream or episode row: leading block, two text lines. */
 @Composable
-private fun SkeletonRow(leadingWidth: Dp, leadingHeight: Dp, circle: Boolean) {
+internal fun SkeletonRow(leadingWidth: Dp, leadingHeight: Dp, circle: Boolean) {
     Row(
         Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(12.dp))
             .border(1.dp, LineC, RoundedCornerShape(12.dp)).padding(14.dp),
@@ -1740,7 +1773,7 @@ private fun SkeletonCell(modifier: Modifier = Modifier) {
 /** Row header on Home/Search/Library: the title, a mono eyebrow beside it for
     where the row comes from (or how big it is), and a See-all chip. */
 @Composable
-private fun RowHeader(title: String, sub: String?, seeAll: (() -> Unit)?) {
+internal fun RowHeader(title: String, sub: String?, seeAll: (() -> Unit)?) {
     Row(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(title, color = TextC, fontSize = 20.sp, fontFamily = Sans, fontWeight = FontWeight.SemiBold,
             letterSpacing = (-0.4).sp, maxLines = 1,
@@ -1751,7 +1784,7 @@ private fun RowHeader(title: String, sub: String?, seeAll: (() -> Unit)?) {
     }
 }
 
-/** Floating pill tab bar: Home / Search / Library / Settings. */
+/** Floating pill tab bar: Home / Search / Library / Settings, and who is signed in as the last item. */
 @Composable
 private fun BottomBar(current: Screen, onTab: (Screen) -> Unit, modifier: Modifier = Modifier) {
     Row(
@@ -1760,13 +1793,45 @@ private fun BottomBar(current: Screen, onTab: (Screen) -> Unit, modifier: Modifi
             .clip(RoundedCornerShape(34.dp))
             .background(Color(0xF0141419))
             .border(1.dp, Color(0x1FFFFFFF), RoundedCornerShape(34.dp))
-            .padding(horizontal = 10.dp, vertical = 7.dp),
+            .padding(horizontal = 8.dp, vertical = 7.dp),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         TabItem("Home", Icons.Filled.Home, current == Screen.Home) { onTab(Screen.Home) }
         TabItem("Search", Icons.Filled.Search, current == Screen.Search) { onTab(Screen.Search) }
         TabItem("Library", Icons.Filled.Bookmark, current == Screen.Library) { onTab(Screen.Library) }
         TabItem("Settings", Icons.Filled.Settings, current == Screen.Settings) { onTab(Screen.Settings) }
+        ProfileTab(current == Screen.Profile) { onTab(Screen.Profile) }
+    }
+}
+
+/** The nav's last item: the signed-in profile's initial on the accent, a "?" when nobody is. */
+@Composable
+private fun ProfileTab(on: Boolean, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val p = Cloud.profile
+    val tint = if (on || focused) Color.White else MutedC
+    Column(
+        Modifier
+            .clip(RoundedCornerShape(26.dp))
+            .border(1.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(26.dp))
+            .clickable(interactionSource = interaction, indication = null) { onClick() }
+            .padding(horizontal = 12.dp, vertical = 5.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            Modifier.size(32.dp)
+                .border(1.5.dp, if (on) Color.White else Color.Transparent, CircleShape)
+                .padding(3.dp)
+                .background(if (p != null) Red else Surface2, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                p?.let { it.name.ifEmpty { it.handle } }?.trim()?.removePrefix("@")?.take(1)?.uppercase()?.ifEmpty { "?" } ?: "?",
+                color = if (p != null) OnAccent else MutedC, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = Sans,
+            )
+        }
+        Text("Profile", color = tint, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 2.dp))
     }
 }
 
@@ -1780,7 +1845,7 @@ private fun TabItem(label: String, icon: androidx.compose.ui.graphics.vector.Ima
             .clip(RoundedCornerShape(26.dp))
             .border(1.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(26.dp))
             .clickable(interactionSource = interaction, indication = null) { onClick() }
-            .padding(horizontal = 13.dp, vertical = 5.dp),
+            .padding(horizontal = 12.dp, vertical = 5.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
@@ -1791,14 +1856,18 @@ private fun TabItem(label: String, icon: androidx.compose.ui.graphics.vector.Ima
     }
 }
 
+/** The skeleton material: a soft band sweeping left to right every 1.2 s over the tertiary surface. */
 @Composable
-private fun shimmerAlpha(): Float {
+internal fun shimmerBrush(): Brush {
     val t = rememberInfiniteTransition(label = "sk")
-    val a by t.animateFloat(
-        initialValue = 0.35f, targetValue = 0.75f,
-        animationSpec = infiniteRepeatable(tween(650), RepeatMode.Reverse), label = "a",
+    val x by t.animateFloat(
+        initialValue = -600f, targetValue = 1800f,
+        animationSpec = infiniteRepeatable(tween(1200, easing = LinearEasing), RepeatMode.Restart), label = "x",
     )
-    return a
+    return Brush.linearGradient(
+        colors = listOf(Surface2, Color(0xFF3A3A40), Surface2),
+        start = Offset(x, 0f), end = Offset(x + 600f, 0f),
+    )
 }
 
 private fun thumbRatio(shape: String): Float = when (shape) {
@@ -1821,7 +1890,7 @@ internal fun typeLabel(type: String): String = when (type) {
  * background as soon as it appears (cached per version), then Install is one tap.
  */
 @Composable
-private fun UpdateCard(version: String, notes: String, onDismiss: () -> Unit) {
+private fun UpdateCard(version: String, notes: String, apkUrl: String = Updates.APK_URL, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var progress by remember { mutableStateOf(0) }
@@ -1831,7 +1900,7 @@ private fun UpdateCard(version: String, notes: String, onDismiss: () -> Unit) {
 
     suspend fun download() {
         phase = "downloading"; progress = 0; message = null
-        val f = Updates.downloadApk(ctx, version) { progress = it }
+        val f = Updates.downloadApk(ctx, version, apkUrl) { progress = it }
         if (f != null) { apk = f; phase = "ready" } else { phase = "failed"; message = "Download failed — tap Retry" }
     }
     // Kick the download off automatically; reuse a completed one if already cached.
@@ -1890,7 +1959,6 @@ private fun UpdateCard(version: String, notes: String, onDismiss: () -> Unit) {
     type stays legible over the artwork. */
 @Composable
 private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit) {
-    val ctx = LocalContext.current
     val first = rows.firstOrNull() ?: return
     val picks = remember(first) { first.items.filter { it.background != null || it.poster != null }.take(6) }
     if (picks.isEmpty()) return
@@ -1899,14 +1967,16 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit) {
         while (true) { delay(12_000); idx = (idx + 1) % picks.size }
     }
     val m = picks[idx]
-    var inList by remember(m.id) { mutableStateOf(Library.inList(ctx, m.type, m.id)) }
     // the board owns the top of the screen edge to edge and dissolves into it
     val heroH = (LocalConfiguration.current.screenHeightDp * 0.58f).dp
     Box(Modifier.fillMaxWidth().height(heroH).clickable { onOpen(first.addon, m) }) {
-        AsyncImage(
-            model = m.background ?: m.poster, contentDescription = m.name,
-            contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize(),
-        )
+        // a slide change dissolves one picture into the next rather than cutting
+        Crossfade(targetState = m, animationSpec = tween(400), label = "heroArt", modifier = Modifier.matchParentSize()) { pick ->
+            AsyncImage(
+                model = pick.background ?: pick.poster, contentDescription = pick.name,
+                contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
+            )
+        }
         Box(
             Modifier.matchParentSize().background(
                 Brush.verticalGradient(
@@ -1915,14 +1985,6 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit) {
                 )
             )
         )
-        Row(
-            Modifier.align(Alignment.TopStart).padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("◆ ", color = Red, fontSize = 18.sp)
-            Text("Nebula", color = TextC, fontSize = 22.sp, fontFamily = Sans,
-                fontWeight = FontWeight.Bold, letterSpacing = (-0.6).sp)
-        }
         Column(
             Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 22.dp).padding(bottom = 18.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -1941,35 +2003,24 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit) {
                     modifier = Modifier.padding(bottom = 10.dp),
                 )
             }
+            // one meta line — type · first genre · year(s); the rating stays on the poster badge
             val facts = listOfNotNull(
                 if (m.type == "series") "Series" else "Movie",
-                m.releaseInfo,
-                m.imdbRating?.let { "\u2605 $it" },
-            ).joinToString("  \u2022  ")
+                m.genres.firstOrNull(),
+                m.releaseInfo?.replace('-', '\u2013'),
+            ).joinToString("  \u00B7  ")
             Text(
-                facts, color = Color(0xD1EBEBF5), fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                facts, color = Color(0xD1EBEBF5), fontSize = 14.sp, fontWeight = FontWeight.Medium,
                 textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
-            Row(
-                Modifier.padding(top = 14.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Button(
-                    onClick = { onOpen(first.addon, m) },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
-                    shape = RoundedCornerShape(50),
-                    contentPadding = PaddingValues(horizontal = 26.dp, vertical = 12.dp),
-                ) { Text("View Details", fontSize = 15.sp, fontWeight = FontWeight.SemiBold) }
-                Button(
-                    onClick = {
-                        inList = Library.toggle(ctx, m.type, m, first.addon.manifestUrl)
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x3DFFFFFF)),
-                    shape = RoundedCornerShape(50),
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
-                ) { Text(if (inList) "\u2713 Saved" else "+ My List", color = TextC, fontSize = 15.sp, fontWeight = FontWeight.SemiBold) }
-            }
+            // one white pill; My List lives on the title page
+            Button(
+                onClick = { onOpen(first.addon, m) },
+                colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
+                shape = RoundedCornerShape(50),
+                contentPadding = PaddingValues(horizontal = 30.dp, vertical = 13.dp),
+                modifier = Modifier.padding(top = 14.dp),
+            ) { Text("View Details", fontSize = 15.sp, fontWeight = FontWeight.SemiBold) }
             Row(
                 Modifier.padding(top = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -2099,6 +2150,7 @@ private fun HomeScreen(
             UpdateCard(
                 version = rel.version,
                 notes = rel.notes,
+                apkUrl = rel.apkUrl,
                 onDismiss = {
                     ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                         .putString("updateDismissed", rel.version).apply()
@@ -2126,15 +2178,19 @@ private fun HomeScreen(
                 ) { Text("Add an add-on", fontWeight = FontWeight.SemiBold) }
             }
             st.rows.isEmpty() && st.loading && st.continueRows.isEmpty() -> {
-                val a = shimmerAlpha()
-                Column {
-                    repeat(2) {
-                        Box(Modifier.padding(top = 18.dp, bottom = 10.dp).width(180.dp).height(16.dp)
-                            .clip(RoundedCornerShape(12.dp)).background(Surface2.copy(alpha = a)))
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            repeat(4) {
-                                Box(Modifier.width(210.dp).aspectRatio(16f / 9f)
-                                    .clip(RoundedCornerShape(12.dp)).background(Surface2.copy(alpha = a)))
+                // the page's shape before its pictures: the hero's footprint, then two rows of cards
+                val br = shimmerBrush()
+                Column(Modifier.fillMaxWidth()) {
+                    Box(Modifier.fillMaxWidth().height((LocalConfiguration.current.screenHeightDp * 0.34f).dp).background(br))
+                    Column(Modifier.padding(horizontal = 16.dp)) {
+                        repeat(2) { i ->
+                            Box(Modifier.padding(top = 22.dp, bottom = 10.dp).width(160.dp).height(18.dp)
+                                .clip(RoundedCornerShape(9.dp)).background(br))
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                repeat(if (i == 0) 3 else 5) {
+                                    Box(Modifier.width(if (i == 0) 210.dp else 124.dp).aspectRatio(if (i == 0) 16f / 9f else 2f / 3f)
+                                        .clip(RoundedCornerShape(12.dp)).background(br))
+                                }
                             }
                         }
                     }
@@ -2564,12 +2620,13 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
 
 
 // ---------- settings ----------
+/** A section's eyebrow plus the one-line subtitle under it, as the TV console reads. */
 @Composable
-private fun SettingsHeader(text: String) {
-    Text(
-        text, color = MutedC, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.6.sp,
-        modifier = Modifier.padding(top = 20.dp, bottom = 8.dp, start = 4.dp),
-    )
+private fun SettingsHeader(text: String, sub: String? = null) {
+    Column(Modifier.padding(top = 20.dp, bottom = 8.dp, start = 4.dp)) {
+        Text(text, color = MutedC, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.6.sp)
+        if (sub != null) Text(sub, color = FaintC, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 3.dp))
+    }
 }
 
 @Composable
@@ -2641,7 +2698,7 @@ private fun SettingsScreen(
         )
         Spacer(Modifier.height(16.dp))
         ProfileCard(onProfile)
-        SettingsHeader("GENERAL")
+        SettingsHeader("GENERAL", "How Nebula looks, plays and connects")
         SettingsGroup {
             SettingsRow(Icons.Filled.Palette, "Layout", "Theme, Home rows and poster size", true, onLayout)
             SettingsRow(Icons.Filled.PlayArrow, "Playback", "Player, subtitles, languages and auto-play", true, onPlayback)
@@ -2678,7 +2735,7 @@ private fun SettingsScreen(
                 )
             }
         }
-        SettingsHeader("ABOUT")
+        SettingsHeader("ABOUT", "Version, updates and privacy")
         SettingsGroup {
             SettingsRow(Icons.Filled.Download, "Check for updates", updSub, true) {
                 if (!checking) {
@@ -2761,7 +2818,7 @@ private fun SettingsLayoutScreen(onBack: () -> Unit, onRows: () -> Unit) {
             .padding(horizontal = 20.dp).padding(top = 20.dp, bottom = 110.dp),
     ) {
         BackBar("Layout", null, onBack)
-        SettingsHeader("THEME")
+        SettingsHeader("THEME", "The accent colour across the app")
         SettingsGroup {
             // swatch grid: three per row, tick on the current one
             Column(Modifier.fillMaxWidth().padding(14.dp)) {
@@ -2798,7 +2855,7 @@ private fun SettingsLayoutScreen(onBack: () -> Unit, onRows: () -> Unit) {
                 }
             }
         }
-        SettingsHeader("HOME")
+        SettingsHeader("HOME", "What the Home screen shows, and in what order")
         SettingsGroup {
             SettingsToggle("Featured carousel", "The full-bleed showcase at the top of Home", Prefs.showHero) { Prefs.setShowHero(ctx, it) }
             SettingsToggle("Continue watching", "Pick up where you left off, right on Home", Prefs.showContinue) { Prefs.setShowContinue(ctx, it) }
@@ -2821,7 +2878,7 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
             .padding(horizontal = 20.dp).padding(top = 20.dp, bottom = 110.dp),
     ) {
         BackBar("Playback", null, onBack)
-        SettingsHeader("PLAYER")
+        SettingsHeader("PLAYER", "Gestures, speed, previews and picture quality")
         SettingsGroup {
             SettingsToggle(
                 "Touch gestures",
@@ -2851,7 +2908,7 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
                 divider = false,
             ) { Prefs.setQuality(ctx, it) }
         }
-        SettingsHeader("LANGUAGES")
+        SettingsHeader("LANGUAGES", "Preferred audio and subtitle tracks")
         SettingsGroup {
             SettingsChips(
                 "Audio language", "Preferred track when a stream carries several",
@@ -2863,11 +2920,11 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
                 divider = false,
             ) { Prefs.setSubLang(ctx, it) }
         }
-        SettingsHeader("SUBTITLES")
+        SettingsHeader("SUBTITLES", "How captions look on screen")
         SettingsGroup {
             SettingsRow(Icons.Filled.ClosedCaption, "Subtitle style", "Size, colour, background and font of captions", false, onSubtitles)
         }
-        SettingsHeader("STREAMS")
+        SettingsHeader("STREAMS", "Choosing sources and moving between episodes")
         SettingsGroup {
             SettingsToggle(
                 "Auto stream selection",
@@ -3271,132 +3328,6 @@ private fun EpisodeRow(itemType: String, ep: Episode, upNext: Boolean, first: Bo
     }
 }
 
-// ---------- library (My List + upcoming episodes) ----------
-@Composable
-private fun LibraryScreen(
-    version: Int,
-    onOpen: (LibItem) -> Unit,
-    onPlayEpisode: (LibItem, Episode) -> Unit,
-) {
-    val ctx = LocalContext.current
-    var items by remember(version) { mutableStateOf(Library.list(ctx)) }
-    var upcoming by remember(version) { mutableStateOf<List<Library.UpRow>?>(null) }
-    var sheetFor by remember { mutableStateOf<LibItem?>(null) }
-
-    sheetFor?.let { li ->
-        CardSheet(
-            title = li.name,
-            sub = if (li.type == "series") "Series" else "Movie",
-            poster = li.poster,
-            shape = li.shape,
-            actions = listOf(
-                SheetAction(Icons.Filled.Info, "View details") { onOpen(li) },
-                SheetAction(Icons.Filled.BookmarkRemove, "Remove from My List", destructive = true) {
-                    Library.toggle(ctx, li.type, MetaItem(li.id, li.type, li.name, li.poster, li.shape), li.addonUrl)
-                    items = Library.list(ctx)
-                },
-            ),
-            onDismiss = { sheetFor = null },
-        )
-    }
-
-    LaunchedEffect(version, items.size) {
-        upcoming = if (items.none { it.type == "series" }) emptyList()
-        else runCatching { Library.upcoming(ctx) }.getOrDefault(emptyList())
-    }
-
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
-        Text("Library", color = TextC, fontSize = 34.sp, fontFamily = Sans, fontWeight = FontWeight.Bold,
-            letterSpacing = (-1).sp, modifier = Modifier.padding(bottom = 12.dp))
-        if (items.isEmpty()) {
-            Text(
-                "Nothing saved yet — open any title and press + My List. New episodes of saved series appear here too.",
-                color = MutedC, fontSize = 14.sp, lineHeight = 21.sp,
-            )
-            return@Column
-        }
-        LazyColumn(contentPadding = PaddingValues(bottom = 104.dp)) {
-            item(key = "grid") {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(items, key = { it.type + ":" + it.id }) { li ->
-                        MetaCard(
-                            MetaItem(li.id, li.type, li.name, li.poster, li.shape),
-                            Modifier.width(if (li.shape == "landscape") 210.dp else 124.dp),
-                            onLongClick = { sheetFor = li },
-                        ) { onOpen(li) }
-                    }
-                }
-            }
-            when (val up = upcoming) {
-                null -> item(key = "upsk") {
-                    Column {
-                        RowHeader("Upcoming", null, null)
-                        SkeletonRow(44.dp, 66.dp, circle = false)
-                    }
-                }
-                else -> if (up.isNotEmpty()) {
-                    val shows = up.map { it.series.id }.distinct().size
-                    item(key = "uphead") { RowHeader("Upcoming", "$shows series", null) }
-                    var lastDay = ""
-                    var firstOfDay = false
-                    up.forEach { row ->
-                        val day = Library.dayLabel(row.time)
-                        if (day != lastDay) {
-                            lastDay = day
-                            firstOfDay = true
-                            item(key = "day/" + row.time) {
-                                Eyebrow(day, Modifier.padding(top = 18.dp, bottom = 4.dp))
-                            }
-                        }
-                        val first = firstOfDay
-                        firstOfDay = false
-                        item(key = "up/" + row.series.id + "/" + row.ep.id) {
-                            // a list, like the episodes: hairlines between rows, no tiles
-                            Column {
-                                if (!first) Box(Modifier.fillMaxWidth().height(1.dp).background(LineC))
-                            FocusCard(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth(),
-                                onClick = { onPlayEpisode(row.series, row.ep) }) {
-                                Row(
-                                    Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                ) {
-                                    val thumbMod = Modifier.width(44.dp).height(66.dp).clip(RoundedCornerShape(8.dp)).background(Surface2)
-                                    if (row.series.poster != null) {
-                                        AsyncImage(model = row.series.poster, contentDescription = null, contentScale = ContentScale.Crop, modifier = thumbMod)
-                                    } else {
-                                        Box(thumbMod, contentAlignment = Alignment.Center) {
-                                            Text(row.series.name.take(1).uppercase(), color = FaintC, fontWeight = FontWeight.Bold)
-                                        }
-                                    }
-                                    Column(Modifier.weight(1f)) {
-                                        Text(row.series.name, color = TextC, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
-                                            maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        val tag = "S${row.ep.season}" + (row.ep.episode?.let { "E$it" } ?: "")
-                                        val notOut = row.time > System.currentTimeMillis()
-                                        Text(
-                                            tag + (if (row.ep.name.isNotEmpty()) "  ${row.ep.name}" else "") +
-                                                (if (notOut) " — not out yet" else ""),
-                                            color = MutedC, fontSize = 12.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                            fontFamily = Mono, modifier = Modifier.padding(top = 3.dp),
-                                        )
-                                    }
-                                }
-                            }
-                            }
-                        }
-                    }
-                } else item(key = "upempty") {
-                    Column {
-                        RowHeader("Upcoming", null, null)
-                        Text("No dated episodes coming up for your saved series.", color = MutedC, fontSize = 13.sp)
-                    }
-                }
-            }
-        }
-    }
-}
-
 // ---------- catalog ----------
 @Composable
 private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState, onBack: () -> Unit, onOpen: (MetaItem) -> Unit) {
@@ -3534,7 +3465,7 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
             }
         }
         if (loading && items.isEmpty()) {
-            val a = shimmerAlpha()
+            val br = shimmerBrush()
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 140.dp * Prefs.posterScale),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -3543,8 +3474,8 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
             ) {
                 items(12) {
                     Column {
-                        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)).background(Surface2.copy(alpha = a)))
-                        Box(Modifier.padding(top = 8.dp).fillMaxWidth(0.7f).height(12.dp).clip(RoundedCornerShape(12.dp)).background(Surface2.copy(alpha = a)))
+                        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)).background(br))
+                        Box(Modifier.padding(top = 8.dp).fillMaxWidth(0.7f).height(12.dp).clip(RoundedCornerShape(12.dp)).background(br))
                     }
                 }
             }
@@ -4008,7 +3939,7 @@ private fun PlayerScreen(
     var subAppliedMs by remember { mutableStateOf(0L) }                          // offset the player currently has
     // Scrub preview (ScrubPreview.kt): a second, silent reader of a progressive file hands the tip its frames;
     // rebuilt per URL, released with the player. While a preview is up the chrome stays awake.
-    val scrubPreview = remember(url) { if (ScrubPreview.eligible(url)) ScrubPreview(url) else null }
+    val scrubPreview = remember(url) { if (ScrubPreview.eligible(url)) ScrubPreview(url, context) else null }
     DisposableEffect(scrubPreview) { onDispose { scrubPreview?.release() } }
     var scrubbing by remember { mutableStateOf(false) }
     // Our own meter so the HUD can read the estimate; Start high seeds it so the
@@ -4024,6 +3955,8 @@ private fun PlayerScreen(
     val exo = remember {
         ExoPlayer.Builder(context)
             .setBandwidthMeter(bandwidth)
+            // one HTTP identity (UA, X-Nebula-Client, cookies) shared with the scrub-frame reader — MediaHttp.kt
+            .setMediaSourceFactory(MediaHttp.mediaSourceFactory(context))
             // Without these the app behaves as if it were the only thing on the
             // phone: a call or another app's audio would play *over* the film,
             // and pulling the headphones out would blast it from the speaker.
@@ -4156,11 +4089,7 @@ private fun PlayerScreen(
         sleepRender()
         sleepMenuOpen = false
         chromeTouchedAt = System.currentTimeMillis()
-        android.widget.Toast.makeText(
-            context,
-            when (mode) { "" -> "Sleep timer off"; "ep" -> "Stopping when this episode ends"; else -> "Pausing in ${sleepText(minutes * 60_000L)}" },
-            android.widget.Toast.LENGTH_SHORT,
-        ).show()
+        Toasts.show(when (mode) { "" -> "Sleep timer off"; "ep" -> "Stopping when this episode ends"; else -> "Pausing in ${sleepText(minutes * 60_000L)}" })
     }
 
     /** Write the current position into the store. Live streams have nothing to resume. */
@@ -4223,12 +4152,9 @@ private fun PlayerScreen(
             val resume = if (startOver) 0L else saved
             if (resume > 0) exo.setMediaItem(b.build(), resume) else exo.setMediaItem(b.build())
             exo.prepare()
-            if (resume > 0 || (startOver && saved > 0)) {
-                android.widget.Toast.makeText(
-                    context,
-                    if (resume > 0) "Resumed from ${fmtTime(resume)}" else "Starting from the beginning",
-                    android.widget.Toast.LENGTH_SHORT,
-                ).show()
+            // the pill is drawn inside the app now, so it stays quiet inside a picture-in-picture window
+            if (!inPipMode.value && (resume > 0 || (startOver && saved > 0))) {
+                Toasts.show(if (resume > 0) "Resumed from ${fmtTime(resume)}" else "Starting from the beginning")
             }
         }.onFailure { error = it.message }
     }
@@ -4404,7 +4330,14 @@ private fun PlayerScreen(
             if (sleepFired && exo.isPlaying) sleepFired = false     // played on: the board reads Paused again
             pauseBoardOn = resting && !inPipMode.value && !subPanelOpen && !sleepMenuOpen &&
                 !upnextOpen && exo.currentPosition > 1000 && now - pausedSince > 1600 && now - chromeTouchedAt > 1600
-            if (pinfoOn) infoRows = playbackInfoRows(exo, bandwidth, subOffsetMs)
+            if (pinfoOn) infoRows = playbackInfoRows(
+                exo, bandwidth, subOffsetMs,
+                scrubStatusLine(
+                    Prefs.scrubFrames, isLiveState,
+                    exo.currentMediaItem?.localConfiguration?.drmConfiguration != null,
+                    scrubPreview?.status?.value,
+                ),
+            )
         }
     }
 
@@ -4437,7 +4370,7 @@ private fun PlayerScreen(
             val r = cachedSubFile(context, st)
             subBusy = false
             if (r == null) {
-                android.widget.Toast.makeText(context, "Could not load that subtitle", android.widget.Toast.LENGTH_SHORT).show()
+                Toasts.show("Could not load that subtitle")
                 return@launch
             }
             val (uri, mime) = r

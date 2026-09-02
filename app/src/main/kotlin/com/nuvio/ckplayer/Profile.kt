@@ -130,7 +130,8 @@ internal fun ProfileScreen(onBack: () -> Unit) {
 
     LaunchedEffect(profile?.handle) { if (profile != null) Account.refreshProfile(ctx) }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
+    // the floating pill nav sits over this screen (a tab root since the nav gained the avatar), so the last rows clear it
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(top = 20.dp, bottom = 110.dp)) {
         BackBar(
             "Profile",
             when {
@@ -332,7 +333,7 @@ private fun RecoveryPanel(me: Profile?, key: String, onDone: () -> Unit) {
             TextAction("Copy") {
                 val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                 cm?.setPrimaryClip(ClipData.newPlainText("Nebula recovery key", key))
-                if (Build.VERSION.SDK_INT < 33) android.widget.Toast.makeText(ctx, "Copied", android.widget.Toast.LENGTH_SHORT).show()
+                if (Build.VERSION.SDK_INT < 33) Toasts.show("Copied")
             }
         }
     }

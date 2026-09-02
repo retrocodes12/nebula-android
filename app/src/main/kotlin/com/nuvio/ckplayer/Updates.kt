@@ -12,27 +12,92 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** Checks GitHub Releases for a newer Nebula build, and downloads/installs it in-app. */
+/**
+ * Checks for a newer Nebula build, and downloads/installs it in-app.
+ *
+ * The check asks our own cloud first (`/cloud/v1/releases`, one shared copy of the GitHub data,
+ * refreshed server-side every few minutes) and only falls back to GitHub's API directly. GitHub
+ * allows 60 anonymous calls an hour per public IP, so a household that also opens the landing page
+ * used to hit 403 here and read "Could not reach the release feed".
+ */
 object Updates {
+    private const val RELEASES_API = "https://play.rifflehq.in/cloud/v1/releases"
     private const val LATEST_API = "https://api.github.com/repos/retrocodes12/nebula-android/releases/latest"
     const val APK_URL = "https://github.com/retrocodes12/nebula-android/releases/latest/download/Nebula.apk"
+    /** Only an asset hosted under our own release page may be installed. */
+    private const val ASSET_PREFIX = "https://github.com/retrocodes12/nebula-android/releases/download/"
+    private const val TIMEOUT_MS = 10_000
 
     data class Release(val version: String, val notes: String, val apkUrl: String)
 
     suspend fun latest(): Release? = withContext(Dispatchers.IO) {
         try {
-            val j = JSONObject(Stremio.httpGetText(LATEST_API))
-            val version = j.optString("tag_name").removePrefix("v").removePrefix("V").trim()
-            if (version.isEmpty()) return@withContext null
+            fromCloud() ?: fromGitHub()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** The cloud's `{ android: { version, tag, assets: [{name, url, size}] } }`; null on any miss. */
+    private fun fromCloud(): Release? {
+        return try {
+            val a = JSONObject(getText(RELEASES_API)).optJSONObject("android") ?: return null
+            val version = cleanVersion(a.optString("version").ifEmpty { a.optString("tag") })
+            if (version.isEmpty()) return null
+            var apk = APK_URL
+            val assets = a.optJSONArray("assets")
+            if (assets != null) for (i in 0 until assets.length()) {
+                val o = assets.optJSONObject(i) ?: continue
+                val u = o.optString("url")
+                if (o.optString("name") == "Nebula.apk" && u.startsWith(ASSET_PREFIX)) { apk = u; break }
+            }
+            Release(version, "", apk)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** GitHub's own `releases/latest` — the fallback when the cloud is unreachable. */
+    private fun fromGitHub(): Release? {
+        return try {
+            val j = JSONObject(getText(LATEST_API))
+            val version = cleanVersion(j.optString("tag_name"))
+            if (version.isEmpty()) return null
             // First non-empty line of the release notes, trimmed to a card-friendly length.
             val notes = j.optString("body")
                 .lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }
                 ?.take(140).orEmpty()
             Release(version, notes, APK_URL)
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
         } catch (e: Exception) {
             null
+        }
+    }
+
+    /** "v1.55.0" → "1.55.0"; anything that is not dotted digits is rejected as empty. */
+    private fun cleanVersion(raw: String): String {
+        val v = raw.trim().removePrefix("v").removePrefix("V").trim()
+        return if (Regex("^\\d+(\\.\\d+){1,3}$").matches(v)) v else ""
+    }
+
+    /** One short GET with the app's identity and a 10 s ceiling on both connect and read. */
+    private fun getText(u: String): String {
+        val conn = URL(u).openConnection() as HttpURLConnection
+        conn.connectTimeout = TIMEOUT_MS
+        conn.readTimeout = TIMEOUT_MS
+        conn.instanceFollowRedirects = true
+        conn.setRequestProperty("Accept", "application/json, */*")
+        conn.setRequestProperty("User-Agent", "NebulaPlayer")
+        conn.setRequestProperty("X-Nebula-Client", "android")
+        try {
+            val code = conn.responseCode
+            val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader()?.use { it.readText() } ?: ""
+            if (code !in 200..299) throw RuntimeException("HTTP $code")
+            return body
+        } finally {
+            conn.disconnect()
         }
     }
 
@@ -58,12 +123,14 @@ object Updates {
      * Download this version's APK into cacheDir, reporting 0..100 progress.
      * Writes to a .part file and promotes it only on success (so a cached file is
      * always complete), and clears downloads for other versions. Returns the file or null.
+     * [url] is the release's own asset when the check learned it, else the evergreen link.
      */
-    suspend fun downloadApk(context: Context, version: String, onProgress: (Int) -> Unit): File? = withContext(Dispatchers.IO) {
+    suspend fun downloadApk(context: Context, version: String, url: String = APK_URL, onProgress: (Int) -> Unit): File? = withContext(Dispatchers.IO) {
         try {
             val out = apkFile(context, version)
             val tmp = File(context.cacheDir, "nebula-update-$version.part")
-            val conn = (URL(APK_URL).openConnection() as HttpURLConnection).apply {
+            val src = if (url.startsWith(ASSET_PREFIX)) url else APK_URL
+            val conn = (URL(src).openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = true
                 connectTimeout = 20000
                 readTimeout = 30000

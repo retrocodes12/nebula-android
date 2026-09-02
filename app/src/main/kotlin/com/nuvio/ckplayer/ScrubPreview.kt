@@ -1,5 +1,6 @@
 package com.nuvio.ckplayer
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.os.Build
@@ -63,21 +64,23 @@ import kotlin.math.roundToInt
 /**
  * Frames for the scrub preview: a second, silent reader of the same progressive file.
  *
- * `MediaMetadataRetriever` opens the URL once (presenting the headers the add-on requests carry)
- * and pulls one small frame per 10-second bucket, on the IO dispatcher, one at a time — the latest
- * request wins and everything asked for in between is dropped. Frames live in a 60-entry LRU;
- * `release()` on player dispose closes the retriever. Only plain http(s) files qualify
- * (`eligible`): manifests, encrypted and live streams get the bubble with no picture. Nothing
- * here ever touches the player.
+ * `MediaMetadataRetriever` reads the file through a [RangeSource] — range requests over the
+ * player's own HTTP identity (MediaHttp.kt: same User-Agent, headers and cookies ExoPlayer sends),
+ * so the host sees one client — and pulls one small frame per 10-second bucket, on the IO
+ * dispatcher, one at a time: the latest request wins and everything asked for in between is
+ * dropped. Frames live in a 60-entry LRU; `release()` on player dispose closes the reader. Only
+ * plain http(s) files qualify (`eligible`): manifests, encrypted and live streams get the bubble
+ * with no picture. [status] says in words what happened ("Ready", "Waiting", "Unavailable — …")
+ * for the playback Info panel. Nothing here ever touches the player.
  */
-internal class ScrubPreview(private val url: String) {
+internal class ScrubPreview(private val url: String, ctx: Context) {
     companion object {
         const val BUCKET_MS = 10_000L
         private const val CAP = 60
         private const val NEAR = 6          // a cached frame within a minute stands in until the right one lands
-
-        /** What Stremio.kt sends on add-on requests; the retriever shows the same face. */
-        val HEADERS = mapOf("User-Agent" to "NebulaPlayer", "X-Nebula-Client" to "android")
+        const val WAITING = "Waiting"
+        const val READY = "Ready"
+        const val UNAVAILABLE = "Unavailable — "
 
         /** A plain http(s) file — not a manifest (which also rules out ClearKey: keys ride on .mpd here). */
         fun eligible(url: String): Boolean {
@@ -98,13 +101,20 @@ internal class ScrubPreview(private val url: String) {
     private val misses = HashSet<Long>()                    // buckets the file had no frame for (under lock)
     private var hits = 0                                    // frames decoded so far (under lock)
     private var retriever: MediaMetadataRetriever? = null   // opened and used by the worker only
+    private var source: RangeSource? = null                 // the retriever's file, closed with it
+    private val ua = MediaHttp.userAgent(ctx)
     private var running = false                             // a worker is alive (under lock)
     @Volatile private var wantedMs = -1L                    // where the finger / ghost is now; -1 = nothing wanted
     @Volatile private var dead = false                      // unreadable file, or released: stay quiet for good
+    @Volatile private var reason: String? = null            // why it is dead, in words (null = released or alive)
     private val frameState = mutableStateOf<Bitmap?>(null)
+    private val statusState = mutableStateOf(WAITING)
 
     /** The frame for the last requested position — its own bucket, or a neighbour while that one loads. */
     val frame: State<Bitmap?> get() = frameState
+
+    /** "Waiting" until a frame lands, "Ready" after, "Unavailable — <why>" once the file is given up on. */
+    val status: State<String> get() = statusState
 
     /** Main thread. Point the preview at [posMs]: the tip gets the best frame at once, the exact one later. */
     fun request(posMs: Long) {
@@ -160,18 +170,24 @@ internal class ScrubPreview(private val url: String) {
             val want = nextWant() ?: break
             val b = want / BUCKET_MS
             val bmp = fetch(want)
+            val decoded: Boolean
             synchronized(lock) {
                 if (bmp != null) { cache[b] = bmp; hits++ }
                 else {
                     misses.add(b)
                     // it opens but nothing decodes (a codec the retriever lacks): stop asking, each try costs a download
-                    if (hits == 0 && misses.size >= 3) dead = true
+                    if (hits == 0 && misses.size >= 3 && !dead) { dead = true; reason = source?.failure ?: "cannot decode this file" }
                 }
+                decoded = hits > 0
             }
             val show = wantedMs
-            if (show >= 0 && !dead) {
-                val pick = synchronized(lock) { best(show / BUCKET_MS) }
-                withContext(Dispatchers.Main) { if (!dead) frameState.value = pick }
+            val why = reason
+            withContext(Dispatchers.Main) {
+                if (dead) { if (why != null) statusState.value = UNAVAILABLE + why }
+                else {
+                    if (decoded) statusState.value = READY
+                    if (show >= 0) frameState.value = synchronized(lock) { best(show / BUCKET_MS) }
+                }
             }
         }
         if (dead) closeRetriever()
@@ -181,13 +197,18 @@ internal class ScrubPreview(private val url: String) {
     private fun fetch(posMs: Long): Bitmap? {
         val r = retriever ?: run {
             val m = MediaMetadataRetriever()
+            val s = RangeSource(url, ua)
             try {
-                m.setDataSource(url, HEADERS)
+                m.setDataSource(s)
             } catch (e: Exception) {
                 runCatching { m.release() }
-                dead = true                     // a second reader cannot open it: bubble only, no retry storm
+                runCatching { s.close() }
+                // the host refused the reader, or the container is one the retriever cannot parse:
+                // bubble only, no retry storm — and the Info panel gets the sentence
+                if (!dead) { dead = true; reason = s.failure ?: "cannot read this file" }
                 return null
             }
+            source = s
             retriever = m
             m
         }
@@ -209,8 +230,9 @@ internal class ScrubPreview(private val url: String) {
     }
 
     private fun closeRetriever() {
-        val r = synchronized(lock) { val x = retriever; retriever = null; x }
+        val (r, s) = synchronized(lock) { val x = retriever; val y = source; retriever = null; source = null; x to y }
         runCatching { r?.release() }
+        runCatching { s?.close() }
     }
 }
 

@@ -56,6 +56,7 @@ internal fun playbackInfoRows(
     exo: ExoPlayer,
     bandwidth: DefaultBandwidthMeter,
     subOffsetMs: Long,
+    scrubStatus: String? = null,
 ): List<InfoRow> {
     val rows = mutableListOf<InfoRow>()
     val vf = exo.videoFormat
@@ -92,7 +93,18 @@ internal fun playbackInfoRows(
     if (speed != 1f) rows += InfoRow("Speed", speed.toString().trimEnd('0').trimEnd('.') + "×")
     if (exo.currentMediaItem?.localConfiguration?.drmConfiguration != null) rows += InfoRow("Encryption", "Decrypted on device")
     if (subOffsetMs != 0L) rows += InfoRow("Subtitle timing", fmtSubOffset(subOffsetMs))
+    // so a screenshot of the panel says why the scrub tip had no picture
+    if (scrubStatus != null) rows += InfoRow("Preview frames", scrubStatus, warn = scrubStatus.startsWith(ScrubPreview.UNAVAILABLE))
     return rows
+}
+
+/** The Info panel's "Preview frames" value: the setting first, then the stream's shape, then the reader's own word. */
+internal fun scrubStatusLine(prefOn: Boolean, live: Boolean, encrypted: Boolean, reader: String?): String = when {
+    !prefOn -> "Off"
+    live -> ScrubPreview.UNAVAILABLE + "live stream"
+    encrypted -> ScrubPreview.UNAVAILABLE + "encrypted stream"
+    reader == null -> ScrubPreview.UNAVAILABLE + "not a plain video file"
+    else -> reader
 }
 
 /** "+0.5 s" / "−0.1 s" / "0.0 s" — the readout the timing panel and HUD share. */
