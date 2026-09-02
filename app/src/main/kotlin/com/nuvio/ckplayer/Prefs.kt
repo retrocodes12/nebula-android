@@ -44,6 +44,7 @@ object Prefs {
     var subLang by mutableStateOf(""); private set
     var quality by mutableStateOf("auto"); private set            // auto / high (start high) / saver (≤720p)
     var skipIntro by mutableStateOf("button"); private set       // button (a pill to press) / auto / off
+    var scrubFrames by mutableStateOf(true); private set           // a picture of where a scrub will land
 
     fun load(ctx: Context) {
         val p = ctx.getSharedPreferences(P, Context.MODE_PRIVATE)
@@ -60,6 +61,7 @@ object Prefs {
         subLang = p.getString("pref_sublang", "") ?: ""
         quality = p.getString("pref_quality", "auto") ?: "auto"
         skipIntro = p.getString("pref_skip", "button") ?: "button"
+        scrubFrames = p.getBoolean("pref_scrubframes", true)
     }
 
     private fun edit(ctx: Context) = ctx.getSharedPreferences(P, Context.MODE_PRIVATE).edit()
@@ -77,6 +79,7 @@ object Prefs {
     fun setSubLang(ctx: Context, v: String) { subLang = v; edit(ctx).putString("pref_sublang", v).apply() }
     fun setQuality(ctx: Context, v: String) { quality = v; edit(ctx).putString("pref_quality", v).apply() }
     fun setSkipIntro(ctx: Context, v: String) { skipIntro = v; edit(ctx).putString("pref_skip", v).apply() }
+    fun setScrubFrames(ctx: Context, v: Boolean) { scrubFrames = v; edit(ctx).putBoolean("pref_scrubframes", v).apply() }
 
     /** The short list a picker offers; "" means follow the device. */
     val LANGS = listOf(

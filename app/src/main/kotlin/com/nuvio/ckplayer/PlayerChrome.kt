@@ -1,16 +1,14 @@
 package com.nuvio.ckplayer
 
+import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -47,6 +45,7 @@ import androidx.compose.material.icons.outlined.Subtitles
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -60,13 +59,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onKeyEvent
-import androidx.compose.ui.input.key.type
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -84,11 +76,11 @@ import androidx.compose.ui.unit.sp
 
 private val Glass = Color(0x6B505058)
 private val GlassHot = Color(0x8C6E6E78)
-private val Ink = Color.White
-private val DimInk = Color(0xA8EBEBF5)
-private val BarGlass = Color(0xC72C2C2E)      // the web player's .qmenu material, rgba(44,44,46,.78)
-private val Hairline = Color(0x1AFFFFFF)
-private val Pill = RoundedCornerShape(50)
+internal val Ink = Color.White
+internal val DimInk = Color(0xA8EBEBF5)
+internal val BarGlass = Color(0xC72C2C2E)      // the web player's .qmenu material, rgba(44,44,46,.78)
+internal val Hairline = Color(0x1AFFFFFF)
+internal val Pill = RoundedCornerShape(50)
 
 @Composable
 private fun GlassCircle(
@@ -354,6 +346,8 @@ internal fun TitleCardChrome(
     clockLine: String? = null,          // "9:41 pm · Ends 11:12 pm" (just the clock on live)
     liveOffsetMs: Long = 0L,            // how far behind the live edge, for the left pill
     subtitlesFocus: FocusRequester? = null,   // so the panel can hand focus back to its opener
+    scrubFrame: State<Bitmap?>? = null,       // the scrub preview's frame for the position being previewed
+    onScrub: (Long?) -> Unit = {},            // a preview position is up (finger or remote); null when it ends
 ) {
     // remaining ↔ total on the right pill, for the sitting (outside the fade, so a hidden chrome forgets nothing)
     var showTotal by remember { mutableStateOf(false) }
@@ -421,54 +415,12 @@ internal fun TitleCardChrome(
                     modifier = Modifier.fillMaxWidth(0.72f).padding(bottom = 2.dp).alpha(if (dimTitle) 0f else 1f),
                 )
 
-                var trackWidth by remember { mutableStateOf(1) }
-                var dragFrac by remember { mutableStateOf<Float?>(null) }
-                val seekInteraction = remember { MutableInteractionSource() }
-                val seekFocused by seekInteraction.collectIsFocusedAsState()
-                val frac = (dragFrac
-                    ?: if (durationMs > 0) positionMs.toFloat() / durationMs else 0f).coerceIn(0f, 1f)
-                val bufFrac = (if (durationMs > 0) bufferedMs.toFloat() / durationMs else 0f).coerceIn(0f, 1f)
-                Box(
-                    Modifier.fillMaxWidth().height(26.dp).padding(top = 12.dp)
-                        .onSizeChanged { trackWidth = it.width.coerceAtLeast(1) }
-                        .focusable(interactionSource = seekInteraction)
-                        .onKeyEvent { e ->
-                            if (e.type != KeyEventType.KeyDown) return@onKeyEvent false
-                            when (e.key) {
-                                Key.DirectionLeft -> { onSeekBy(-10_000); true }
-                                Key.DirectionRight -> { onSeekBy(10_000); true }
-                                else -> false
-                            }
-                        }
-                        .pointerInput(durationMs) {
-                            detectTapGestures { off ->
-                                if (durationMs > 0) onSeekTo((off.x / trackWidth * durationMs).toLong())
-                            }
-                        }
-                        .pointerInput(durationMs) {
-                            detectHorizontalDragGestures(
-                                onDragStart = { off -> dragFrac = off.x / trackWidth },
-                                onHorizontalDrag = { change, _ ->
-                                    change.consume()
-                                    dragFrac = (change.position.x / trackWidth).coerceIn(0f, 1f)
-                                },
-                                onDragEnd = {
-                                    dragFrac?.let { if (durationMs > 0) onSeekTo((it * durationMs).toLong()) }
-                                    dragFrac = null
-                                },
-                                onDragCancel = { dragFrac = null },
-                            )
-                        },
-                ) {
-                    // the Apple TV scrubber: thick, fully rounded, brightens under focus
-                    val h = if (seekFocused || dragFrac != null) 12.dp else 9.dp
-                    Box(Modifier.align(Alignment.CenterStart).fillMaxWidth().height(h)
-                        .background(Color(0x3DFFFFFF), Pill))
-                    Box(Modifier.align(Alignment.CenterStart).fillMaxWidth(bufFrac).height(h)
-                        .background(Color(0x61FFFFFF), Pill))
-                    Box(Modifier.align(Alignment.CenterStart).fillMaxWidth(frac).height(h)
-                        .background(Ink, Pill))
-                }
+                // the scrubber with its scrub preview (ScrubPreview.kt): drag or ←/→ show a ghost knob and a tip
+                Scrubber(
+                    positionMs = positionMs, durationMs = durationMs, bufferedMs = bufferedMs,
+                    isLive = isLive, liveOffsetMs = liveOffsetMs, frame = scrubFrame,
+                    onSeekBy = onSeekBy, onSeekTo = onSeekTo, onScrub = onScrub,
+                )
                 // elapsed at the left end, remaining (or, on a tap, the total) at the right — glass pills
                 Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     TimePill(

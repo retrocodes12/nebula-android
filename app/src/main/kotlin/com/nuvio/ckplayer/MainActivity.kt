@@ -2838,6 +2838,11 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
                 listOf("1.5" to "1.5×", "2.0" to "2×", "3.0" to "3×"),
                 when (Prefs.holdRate) { 1.5f -> "1.5"; 3.0f -> "3.0"; else -> "2.0" },
             ) { Prefs.setHoldRate(ctx, it.toFloat()) }
+            SettingsToggle(
+                "Preview frames while scrubbing",
+                "A picture of where you are about to jump · Turn it off if playback stutters on your TV",
+                Prefs.scrubFrames,
+            ) { Prefs.setScrubFrames(ctx, it) }
             SettingsChips(
                 "Picture quality",
                 "Auto adapts to your connection · Start high opens at the best rendition · Data saver caps at 720p",
@@ -4001,6 +4006,11 @@ private fun PlayerScreen(
     var liveOffMs by remember { mutableStateOf(0L) }                            // behind the live edge, for the left pill
     var subBaseFile by remember { mutableStateOf<Pair<Uri, String>?>(null) }   // unshifted add-on subtitle, mime
     var subAppliedMs by remember { mutableStateOf(0L) }                          // offset the player currently has
+    // Scrub preview (ScrubPreview.kt): a second, silent reader of a progressive file hands the tip its frames;
+    // rebuilt per URL, released with the player. While a preview is up the chrome stays awake.
+    val scrubPreview = remember(url) { if (ScrubPreview.eligible(url)) ScrubPreview(url) else null }
+    DisposableEffect(scrubPreview) { onDispose { scrubPreview?.release() } }
+    var scrubbing by remember { mutableStateOf(false) }
     // Our own meter so the HUD can read the estimate; Start high seeds it so the
     // first segments are fetched at the best rendition, Data saver seeds it low.
     val bandwidth = remember {
@@ -4362,7 +4372,7 @@ private fun PlayerScreen(
             bufMs = exo.bufferedPosition.coerceAtLeast(0L)
             liveOffMs = if (exo.isCurrentMediaItemLive && exo.currentLiveOffset != C.TIME_UNSET) exo.currentLiveOffset.coerceAtLeast(0L) else 0L
             val now = System.currentTimeMillis()
-            if (chromeVisible && exo.isPlaying && !subPanelOpen && !sleepMenuOpen &&
+            if (chromeVisible && exo.isPlaying && !subPanelOpen && !sleepMenuOpen && !scrubbing &&
                 now - chromeTouchedAt > 3500) chromeVisible = false
             // Skip intro / recap: offer the pill, or take it on Auto once per segment a sitting
             // (a scrub back into the titles is taken as meant); a party viewer follows the host.
@@ -4623,6 +4633,14 @@ private fun PlayerScreen(
             },
             onSeekBy = { d -> seekBy(d); chromeTouchedAt = System.currentTimeMillis() },
             onSeekTo = { t -> exo.seekTo(t.coerceAtLeast(0L)); chromeTouchedAt = System.currentTimeMillis() },
+            scrubFrame = if (Prefs.scrubFrames) scrubPreview?.frame else null,
+            onScrub = { t ->
+                if (t != null || scrubbing) chromeTouchedAt = System.currentTimeMillis()
+                scrubbing = t != null
+                // frames only for a plain file: never live, never an encrypted item, never with the setting off
+                if (t == null) scrubPreview?.idle()
+                else if (Prefs.scrubFrames && !isLiveState && exo.currentMediaItem?.localConfiguration?.drmConfiguration == null) scrubPreview?.request(t)
+            },
             onNext = { nextEpisode?.let { upnextCounting = false; onPlayNext(it) } },
             onParty = {
                 if (partyUi.active()) onPartyLeave()
