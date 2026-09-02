@@ -90,14 +90,14 @@ private fun GlassCircle(
 }
 
 @Composable
-internal fun GlassPill(label: String, value: String? = null, on: Boolean = false, onClick: () -> Unit) {
+internal fun GlassPill(label: String, value: String? = null, on: Boolean = false, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     // an "on" pill inverts, the way the web player's round buttons do
     val bg = if (on) (if (focused) Color.White else Color(0xEBFFFFFF)) else if (focused) GlassHot else Glass
     val ink = if (on) Color.Black else Ink
     Row(
-        Modifier.background(bg, RoundedCornerShape(50))
+        modifier.background(bg, RoundedCornerShape(50))
             .clickable(interactionSource = interaction, indication = null) { onClick() }
             .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,

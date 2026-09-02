@@ -43,6 +43,7 @@ object Prefs {
     var audioLang by mutableStateOf(""); private set              // "" = device language
     var subLang by mutableStateOf(""); private set
     var quality by mutableStateOf("auto"); private set            // auto / high (start high) / saver (≤720p)
+    var skipIntro by mutableStateOf("button"); private set       // button (a pill to press) / auto / off
 
     fun load(ctx: Context) {
         val p = ctx.getSharedPreferences(P, Context.MODE_PRIVATE)
@@ -58,6 +59,7 @@ object Prefs {
         audioLang = p.getString("pref_audiolang", "") ?: ""
         subLang = p.getString("pref_sublang", "") ?: ""
         quality = p.getString("pref_quality", "auto") ?: "auto"
+        skipIntro = p.getString("pref_skip", "button") ?: "button"
     }
 
     private fun edit(ctx: Context) = ctx.getSharedPreferences(P, Context.MODE_PRIVATE).edit()
@@ -74,6 +76,7 @@ object Prefs {
     fun setAudioLang(ctx: Context, v: String) { audioLang = v; edit(ctx).putString("pref_audiolang", v).apply() }
     fun setSubLang(ctx: Context, v: String) { subLang = v; edit(ctx).putString("pref_sublang", v).apply() }
     fun setQuality(ctx: Context, v: String) { quality = v; edit(ctx).putString("pref_quality", v).apply() }
+    fun setSkipIntro(ctx: Context, v: String) { skipIntro = v; edit(ctx).putString("pref_skip", v).apply() }
 
     /** The short list a picker offers; "" means follow the device. */
     val LANGS = listOf(

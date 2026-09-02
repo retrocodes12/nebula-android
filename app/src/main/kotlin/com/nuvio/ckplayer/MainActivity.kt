@@ -126,6 +126,8 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -2859,6 +2861,12 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
                 "Skip the stream list: play the source closest to your last pick from your highest-ranked add-on",
                 Prefs.autoStream,
             ) { Prefs.setAutoStream(ctx, it) }
+            SettingsChips(
+                "Skip intros and recaps",
+                "A pill appears over an episode's recap and opening titles, or Auto jumps past them for you · Timestamps come from a community database, looked up by episode",
+                listOf("button" to "Show button", "auto" to "Auto", "off" to "Off"),
+                Prefs.skipIntro,
+            ) { Prefs.setSkipIntro(ctx, it) }
             SettingsToggle(
                 "Auto-play next episode",
                 "Count down and roll into the next episode when one ends",
@@ -4071,6 +4079,24 @@ private fun PlayerScreen(
     var upnextCounting by remember { mutableStateOf(false) }
     var upnextLeft by remember { mutableStateOf(8) }
     var upnextDismissed by remember { mutableStateOf(false) }
+    // Skip intro / recap: where this episode's segments fall, the pill on screen, what Auto already
+    // took. Keyed on the episode so the hop into the next one starts clean. Off never asks.
+    var skipSegs by remember(contentId) { mutableStateOf<SkipSegments.Segs?>(null) }
+    var skipKind by remember(contentId) { mutableStateOf<String?>(null) }
+    val skipAuto = remember(contentId) { HashSet<String>() }
+    var skipNote by remember { mutableStateOf<Pair<String, Long>?>(null) }
+    if (contentId != null) LaunchedEffect(contentId, Prefs.skipIntro) {
+        skipSegs = null; skipKind = null
+        if (Prefs.skipIntro != "off" && SkipSegments.eligible(contentType, contentId)) skipSegs = SkipSegments.load(contentId)
+    }
+    LaunchedEffect(skipNote) { if (skipNote != null) { delay(1600); skipNote = null } }
+    fun skipNow() {
+        val hit = SkipSegments.at(skipSegs, exo.currentPosition)
+        skipKind = null
+        if (hit == null) return
+        exo.seekTo(hit.second.endMs)
+        skipNote = SkipSegments.note(hit.first) to System.currentTimeMillis()
+    }
 
     // ---- sleep timer (web parity) ----
     // For the last episode of the night: playback pauses when the minutes run
@@ -4209,8 +4235,10 @@ private fun PlayerScreen(
             val dur = exo.duration
             if (dur == C.TIME_UNSET || dur <= 0) continue
             val remain = dur - exo.currentPosition
-            if (remain <= 90_000) onPrefetchNext()
-            if (remain in 500..25_000) upnextOpen = true
+            // the closing credits count as the end when the database knows where they start
+            val credits = SkipSegments.inOutro(skipSegs, exo.currentPosition)
+            if (remain <= 90_000 || credits) onPrefetchNext()
+            if (remain > 500 && (remain <= 25_000 || credits)) upnextOpen = true
         }
     }
     // the card opening (near the end, on ENDED, or after a seek) is the other cue
@@ -4304,6 +4332,18 @@ private fun PlayerScreen(
             val now = System.currentTimeMillis()
             if (chromeVisible && exo.isPlaying && !subStyleOpen && !subTimingOpen &&
                 now - chromeTouchedAt > 3500) chromeVisible = false
+            // Skip intro / recap: offer the pill, or take it on Auto once per segment a sitting
+            // (a scrub back into the titles is taken as meant); a party viewer follows the host.
+            val hit = if (exo.isCurrentMediaItemLive || (partyUi.active() && !partyUi.isHost)) null
+                else SkipSegments.at(skipSegs, exo.currentPosition)
+            if (hit == null) skipKind = null
+            else if (Prefs.skipIntro == "auto" && hit.first !in skipAuto) {
+                if (exo.isPlaying) {
+                    skipAuto.add(hit.first); skipKind = null
+                    exo.seekTo(hit.second.endMs)
+                    skipNote = SkipSegments.note(hit.first) to now
+                }
+            } else skipKind = hit.first
             // The pause board: a moment after pausing (or at the end), when nothing
             // else is open, and only once something has actually played.
             val resting = !exo.isPlaying && (exo.playbackState == Player.STATE_ENDED ||
@@ -4719,6 +4759,19 @@ private fun PlayerScreen(
                 }
             }
         }
+        // Skip intro / recap: a glass pill above the pills row, at the bottom edge when the chrome
+        // is away. With the chrome hidden it takes focus, so OK on a remote is the skip.
+        skipKind?.let { kind ->
+            if (pip) return@let
+            val skipFocus = remember { FocusRequester() }
+            GlassPill(
+                SkipSegments.label(kind),
+                modifier = Modifier.align(Alignment.BottomEnd)
+                    .padding(end = 20.dp, bottom = if (chromeVisible) 150.dp else 40.dp)
+                    .focusRequester(skipFocus),
+            ) { skipNow(); chromeTouchedAt = System.currentTimeMillis() }
+            LaunchedEffect(kind, chromeVisible) { if (!chromeVisible) runCatching { skipFocus.requestFocus() } }
+        }
         // Up next: offered near the end, counts down and autoplays once the episode ends.
         if (upnextOpen && nextEpisode != null && !pip) {
             Column(
@@ -4766,6 +4819,17 @@ private fun PlayerScreen(
                 .background(Color(0x8C000000), RoundedCornerShape(50))
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         )
+        // A word after a skip, where the hold-to-speed chip sits.
+        skipNote?.let { n ->
+            Text(
+                n.first, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 54.dp)
+                    .background(Color(0x8C000000), RoundedCornerShape(50))
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+        }
         // Transient ±10s indicator on the tapped side.
         skipFlash?.let { f ->
             Text(
