@@ -260,6 +260,8 @@ internal fun TitleCardChrome(
     onInfo: () -> Unit = {},
     showTiming: Boolean = false,
     onTiming: () -> Unit = {},
+    sleepLabel: String? = null,         // "38 min" / "End of episode" while a sleep timer is set
+    onSleep: () -> Unit = {},
 ) {
     AnimatedVisibility(visible, enter = fadeIn(), exit = fadeOut()) {
         Box(Modifier.fillMaxSize()) {
@@ -340,6 +342,7 @@ internal fun TitleCardChrome(
                     if (showAudio) GlassPill("Audio", onClick = onAudio)
                     if (qualityLabel != null) GlassPill("Quality", qualityLabel, onClick = onQuality)
                     GlassPill("Speed", speedLabel, onClick = onSpeedCycle)
+                    GlassPill("Sleep", sleepLabel, on = sleepLabel != null, onClick = onSleep)
                     GlassPill("Info", on = infoOn, onClick = onInfo)
                     GlassPill(if (partyActive) "Leave party" else "Party", onClick = onParty)
                     if (partyActive) {

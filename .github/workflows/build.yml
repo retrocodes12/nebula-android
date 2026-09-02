@@ -48,9 +48,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.50.0.apk
+          cp "$APK" Nebula-1.51.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.50.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.50.0 Nebula-1.50.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.50.0" \
-            --notes "Home is yours to arrange. Settings › Layout › Rows lists every catalog your add-ons offer: tap a row to show or hide it, drag by the handle to set the order (on a TV, OK picks a row up and the D-pad walks it), and Reset brings the original rows back. Home follows that arrangement, with a Customise Home link at the foot of the rows. Search remembers your last eight searches — tap one to run it again, or Clear them — and the idle page lists your add-ons, each a tap into its catalogs."
+          gh release delete v1.51.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.51.0 Nebula-1.51.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.51.0" \
+            --notes "Evenings, sorted. A sleep timer in the player (the Sleep pill) pauses after 15 to 90 minutes or when the episode you are on ends, and it rides along through the next episode; the pause board says when it was the timer that stopped things. Anything you have started now offers Start over: on the streams page, where it shows where you left off, and by holding a Continue watching card. Series pages have Surprise me, a random episode that has aired. Also fixed: the Up next card no longer carries over into the episode it just started."

@@ -96,6 +96,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
@@ -367,7 +368,7 @@ private sealed interface Screen {
     data class Detail(val addon: Addon, val item: MetaItem) : Screen
     data class Catalog(val addon: Addon, val initial: CatalogRef? = null) : Screen
     data class Episodes(val addon: Addon, val item: MetaItem) : Screen
-    data class Streams(val addon: Addon, val item: MetaItem) : Screen
+    data class Streams(val addon: Addon, val item: MetaItem, val startOver: Boolean = false) : Screen
     data class Play(
         val url: String,
         val title: String,
@@ -380,6 +381,7 @@ private sealed interface Screen {
         val poster: String? = null,
         val addonUrl: String? = null,
         val description: String? = null,   // the synopsis the pause board shows
+        val startOver: Boolean = false,     // skip the resume point this once
     ) : Screen
 }
 
@@ -764,12 +766,12 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 push(Screen.Detail(a, item))
             }
 
-            /** Resume something from the Continue watching row. */
-            fun openProgress(r: ProgressRec) {
+            /** Resume something from the Continue watching row (or start it over). */
+            fun openProgress(r: ProgressRec, fresh: Boolean = false) {
                 val addons = loadAddons(ctx)
                 val a = addons.firstOrNull { it.manifestUrl == r.addonUrl } ?: addons.firstOrNull() ?: return
                 seriesChain.clear()
-                push(Screen.Streams(a, MetaItem(r.id, r.type, r.name, r.poster, r.shape)))
+                push(Screen.Streams(a, MetaItem(r.id, r.type, r.name, r.poster, r.shape), startOver = fresh))
                 if (r.type == "series") scope.launch { hydrateSeriesChain(ctx, a, r.type, r.id) }
             }
 
@@ -844,6 +846,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 onSeeAll = { a, c -> push(Screen.Catalog(a, c)) },
                                 onGoAddons = { push(Screen.Addons) },
                                 onResume = { r -> openProgress(r) },
+                                onStartOver = { r -> openProgress(r, fresh = true) },
                                 onDetails = { r -> openProgressDetails(r) },
                                 onCustomise = { push(Screen.SettingsHome) },
                             )
@@ -949,7 +952,8 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                             is Screen.Streams -> StreamsScreen(
                                 s.addon, s.item,
                                 onBack = { pop() },
-                                onPlay = { st, from, byHand ->
+                                fresh = s.startOver,
+                                onPlay = { st, from, byHand, fresh ->
                                     // remembered so the next episode keeps this source and quality
                                     NextEp.notePick(ctx, st, from, byHand)
                                     push(
@@ -958,6 +962,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                             s.item.type, s.item.id, s.item.name,
                                             s.item.poster, s.addon.manifestUrl,
                                             description = s.item.description,
+                                            startOver = fresh,
                                         )
                                     )
                                 },
@@ -967,6 +972,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 contentType = s.type, contentId = s.id, contentName = s.contentName,
                                 poster = s.poster, addonUrl = s.addonUrl,
                                 description = s.description,
+                                startOver = s.startOver,
                                 currentEpisode = seriesChain.episodes.getOrNull(seriesChain.index),
                                 nextEpisode = seriesChain.next(),
                                 onPlayNext = { ep -> playEpisode(ep) },
@@ -1980,6 +1986,7 @@ private fun HomeScreen(
     onSeeAll: (Addon, CatalogRef) -> Unit,
     onGoAddons: () -> Unit,
     onResume: (ProgressRec) -> Unit = {},
+    onStartOver: (ProgressRec) -> Unit = {},
     onDetails: (ProgressRec) -> Unit = {},
     onCustomise: () -> Unit = {},
 ) {
@@ -2000,6 +2007,7 @@ private fun HomeScreen(
             shape = "landscape",
             actions = listOf(
                 SheetAction(Icons.Filled.PlayArrow, "Resume") { onResume(r) },
+                SheetAction(Icons.Filled.Replay, "Start over") { onStartOver(r) },
                 SheetAction(Icons.Filled.Info, "View details") { onDetails(r) },
                 SheetAction(Icons.Filled.Delete, "Remove from Continue watching", destructive = true) {
                     Progress.clear(ctx, r.type, r.id)
@@ -2907,6 +2915,25 @@ private fun PartyPanel(onJoin: (String) -> Unit) {
     }
 }
 
+/** Episodes Surprise me can land on: aired ones, from the regular seasons
+    unless specials are all the show has (web parity). */
+private fun surprisePool(eps: List<Episode>): List<Episode> {
+    val today = java.time.LocalDate.now()
+    val aired = eps.filter { e ->
+        val d = e.released?.let { runCatching { java.time.LocalDate.parse(it.take(10)) }.getOrNull() }
+        d == null || !d.isAfter(today)
+    }
+    return aired.filter { it.season != 0 }.ifEmpty { aired }
+}
+private var lastSurprise: String? = null
+/** A random episode for a comfort show — never the same one twice running. */
+private fun surprisePick(pool: List<Episode>): Episode? {
+    val p = if (pool.size > 1) pool.filter { it.id != lastSurprise } else pool
+    val v = p.randomOrNull()
+    lastSurprise = v?.id
+    return v
+}
+
 // ---------- detail (one title's page: art, facts, actions) ----------
 @Composable
 private fun DetailScreen(
@@ -3076,7 +3103,10 @@ private fun DetailScreen(
                 }
             }
         }
-        Row(Modifier.padding(top = 16.dp, bottom = 24.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            Modifier.padding(top = 16.dp, bottom = 24.dp).horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
             Button(
                 onClick = {
                     // recompute at click time — the remembered copy can lag a
@@ -3113,6 +3143,14 @@ private fun DetailScreen(
                 border = BorderStroke(1.dp, Color(0x47FFFFFF)),
                 shape = RoundedCornerShape(12.dp),
             ) { Text(if (inList) "✓ In My List" else "+ My List", color = TextC, fontWeight = FontWeight.SemiBold) }
+            // Surprise me: a random aired episode for a comfort show (web parity)
+            val pool = if (item.type == "series") surprisePool(episodes) else emptyList()
+            if (pool.size >= 2) Button(
+                onClick = { surprisePick(pool)?.let { onPlayEpisode(it) } },
+                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+                border = BorderStroke(1.dp, Color(0x47FFFFFF)),
+                shape = RoundedCornerShape(12.dp),
+            ) { Text("Surprise me", color = TextC, fontWeight = FontWeight.SemiBold) }
             if (Social.on) Button(
                 onClick = { recOpen = true },
                 colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
@@ -3591,7 +3629,7 @@ private fun EpisodesScreen(
 // add-on the item came from PLUS every other installed add-on whose manifest
 // serves streams for this type/id, and show the answers grouped per add-on.
 @Composable
-private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPlay: (StreamItem, Addon, Boolean) -> Unit) {
+private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fresh: Boolean = false, onPlay: (StreamItem, Addon, Boolean, Boolean) -> Unit) {
     var sections by remember { mutableStateOf<List<Pair<Addon, List<StreamItem>>>>(emptyList()) }
     var status by remember { mutableStateOf("Loading streams…") }
     var loading by remember { mutableStateOf(true) }
@@ -3599,6 +3637,9 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
     var reload by remember { mutableStateOf(0) }
     var usualUrl by remember { mutableStateOf<String?>(null) }   // the row that matches the last pick
     val ctx = LocalContext.current
+    // Start over: a one-play choice for anything already begun (web parity)
+    val savedAt = remember(item.id) { Progress.resumeAt(ctx, item.type, item.id) }
+    var startOver by remember(item.id) { mutableStateOf(fresh && savedAt > 0) }
     LaunchedEffect(item, reload) {
         loading = true
         usualUrl = null
@@ -3631,7 +3672,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
                     // re-firing on the way back would trap the user in playback forever.
                     if (Prefs.autoStream && autoPlayedFor != item.id) {
                         autoPlayedFor = item.id
-                        onPlay(StreamTwin.match(list, pf, a) ?: list.first(), a, false)
+                        onPlay(StreamTwin.match(list, pf, a) ?: list.first(), a, false, startOver)
                         return@LaunchedEffect
                     }
                 }
@@ -3676,6 +3717,18 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
                     }
                 }
             }
+            if (savedAt > 0) item(key = "resume") {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        if (startOver) "Starting from the beginning" else "Resuming from ${fmtTime(savedAt)}",
+                        color = MutedC, fontSize = 13.sp, modifier = Modifier.weight(1f),
+                    )
+                    StreamFilterChip(if (startOver) "Resume from ${fmtTime(savedAt)}" else "Start over", startOver) { startOver = !startOver }
+                }
+            }
             if (sections.size > 1) item(key = "filters") {
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -3699,7 +3752,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, onPl
                 }
             items(streams) { s ->
                 Box(Modifier.padding(horizontal = 16.dp)) {
-                    StreamRow(s, from.name, item.name, usual = s.url == usualUrl, onPlay = { onPlay(it, from, true) })
+                    StreamRow(s, from.name, item.name, usual = s.url == usualUrl, onPlay = { onPlay(it, from, true, startOver) })
                 }
             }
             }
@@ -3884,6 +3937,7 @@ private fun PlayerScreen(
     poster: String? = null,
     addonUrl: String? = null,
     description: String? = null,
+    startOver: Boolean = false,          // ignore the resume point this once
     currentEpisode: Episode? = null,
     nextEpisode: Episode? = null,
     onPlayNext: (Episode) -> Unit = {},
@@ -4018,6 +4072,42 @@ private fun PlayerScreen(
     var upnextLeft by remember { mutableStateOf(8) }
     var upnextDismissed by remember { mutableStateOf(false) }
 
+    // ---- sleep timer (web parity) ----
+    // For the last episode of the night: playback pauses when the minutes run
+    // out, or stops at the end of this episode instead of rolling into the next.
+    // Kept for the sitting only — it rides along into the next episode, and goes
+    // with the player when you leave.
+    var sleepMode by remember { mutableStateOf("") }         // "" | "min" | "ep"
+    var sleepAt by remember { mutableStateOf(0L) }            // epoch ms the minutes run out
+    var sleepFired by remember { mutableStateOf(false) }      // the pause board says why it stopped
+    var sleepMenuOpen by remember { mutableStateOf(false) }
+    var sleepLabel by remember { mutableStateOf<String?>(null) }
+    fun sleepText(ms: Long): String {
+        val m = ((ms + 59_999) / 60_000).coerceAtLeast(1L)   // the last seconds still read "1 min"
+        return if (m >= 60) "${m / 60} h" + (if (m % 60 > 0L) " ${m % 60} min" else "") else "$m min"
+    }
+    fun sleepRender() {
+        sleepLabel = when (sleepMode) {
+            "ep" -> "End of episode"
+            "min" -> sleepText(sleepAt - System.currentTimeMillis())
+            else -> null
+        }
+    }
+    fun sleepSet(mode: String, minutes: Int = 0) {
+        sleepMode = mode
+        sleepAt = if (mode == "min") System.currentTimeMillis() + minutes * 60_000L else 0L
+        sleepFired = false
+        if (mode == "ep") { upnextOpen = false; upnextCounting = false }
+        sleepRender()
+        sleepMenuOpen = false
+        chromeTouchedAt = System.currentTimeMillis()
+        android.widget.Toast.makeText(
+            context,
+            when (mode) { "" -> "Sleep timer off"; "ep" -> "Stopping when this episode ends"; else -> "Pausing in ${sleepText(minutes * 60_000L)}" },
+            android.widget.Toast.LENGTH_SHORT,
+        ).show()
+    }
+
     /** Write the current position into the store. Live streams have nothing to resume. */
     fun snapshotProgress(done: Boolean = false) {
         val id = contentId ?: return
@@ -4037,6 +4127,8 @@ private fun PlayerScreen(
     }
 
     LaunchedEffect(url) {
+        // a fresh episode starts with the up-next card closed and undismissed
+        upnextOpen = false; upnextCounting = false; upnextDismissed = false
         runCatching {
             val b = MediaItem.Builder().setUri(url)
             when {
@@ -4066,14 +4158,18 @@ private fun PlayerScreen(
             }
             // Resume where this exact item was left off; handing the offset to
             // ExoPlayer starts buffering there rather than loading at 0 and seeking.
-            val resume = if (contentType != null && contentId != null) {
+            val saved = if (contentType != null && contentId != null) {
                 Progress.resumeAt(context, contentType, contentId)
             } else 0L
+            // Start over is a one-play choice: the saved point is skipped, not erased
+            val resume = if (startOver) 0L else saved
             if (resume > 0) exo.setMediaItem(b.build(), resume) else exo.setMediaItem(b.build())
             exo.prepare()
-            if (resume > 0) {
+            if (resume > 0 || (startOver && saved > 0)) {
                 android.widget.Toast.makeText(
-                    context, "Resumed from ${fmtTime(resume)}", android.widget.Toast.LENGTH_SHORT
+                    context,
+                    if (resume > 0) "Resumed from ${fmtTime(resume)}" else "Starting from the beginning",
+                    android.widget.Toast.LENGTH_SHORT,
                 ).show()
             }
         }.onFailure { error = it.message }
@@ -4108,6 +4204,7 @@ private fun PlayerScreen(
         while (true) {
             delay(500)
             if (upnextDismissed || upnextOpen) continue
+            if (sleepMode == "ep") continue                   // stopping here: nothing to offer or prefetch
             if (exo.isCurrentMediaItemLive || !exo.isPlaying) continue
             val dur = exo.duration
             if (dur == C.TIME_UNSET || dur <= 0) continue
@@ -4159,6 +4256,11 @@ private fun PlayerScreen(
             override fun onPlaybackStateChanged(state: Int) {
                 if (state != Player.STATE_ENDED) return
                 snapshotProgress(done = true)          // ticks it off the episode list
+                if (sleepMode == "ep") {
+                    // the night ends here: no up-next, the board says why
+                    sleepMode = ""; sleepAt = 0L; sleepFired = true; sleepRender()
+                    return
+                }
                 if (nextEpisode != null && !upnextDismissed) { upnextOpen = true; upnextCounting = Prefs.autoPlayNext }
             }
         }
@@ -4207,7 +4309,18 @@ private fun PlayerScreen(
             val resting = !exo.isPlaying && (exo.playbackState == Player.STATE_ENDED ||
                 (exo.playbackState == Player.STATE_READY && !exo.playWhenReady))
             if (!resting) pausedSince = 0L else if (pausedSince == 0L) pausedSince = now
-            pauseBoardOn = resting && !inPipMode.value && !subStyleOpen && !subsMenuOpen && !subTimingOpen &&
+            // Sleep timer: keep the pill's minutes current; pause when the time is up.
+            if (sleepMode == "min") {
+                if (now >= sleepAt) {
+                    sleepMode = ""; sleepAt = 0L; sleepFired = true
+                    upnextOpen = false; upnextCounting = false
+                    exo.pause()
+                    chromeVisible = true; chromeTouchedAt = now
+                }
+                sleepRender()
+            }
+            if (sleepFired && exo.isPlaying) sleepFired = false     // played on: the board reads Paused again
+            pauseBoardOn = resting && !inPipMode.value && !subStyleOpen && !subsMenuOpen && !subTimingOpen && !sleepMenuOpen &&
                 !upnextOpen && exo.currentPosition > 1000 && now - pausedSince > 1600 && now - chromeTouchedAt > 1600
             if (pinfoOn) infoRows = playbackInfoRows(exo, bandwidth, subOffsetMs)
         }
@@ -4374,7 +4487,9 @@ private fun PlayerScreen(
             infoOn = pinfoOn,
             onInfo = { pinfoOn = !pinfoOn; chromeTouchedAt = System.currentTimeMillis() },
             showTiming = subBaseFile != null,
-            onTiming = { subTimingOpen = !subTimingOpen; subsMenuOpen = false; subStyleOpen = false; chromeTouchedAt = System.currentTimeMillis() },
+            onTiming = { subTimingOpen = !subTimingOpen; subsMenuOpen = false; subStyleOpen = false; sleepMenuOpen = false; chromeTouchedAt = System.currentTimeMillis() },
+            sleepLabel = sleepLabel,
+            onSleep = { sleepMenuOpen = !sleepMenuOpen; subsMenuOpen = false; subStyleOpen = false; subTimingOpen = false; chromeTouchedAt = System.currentTimeMillis() },
             qualityLabel = qualityLabel?.takeIf { videoQualityCount >= 1 },
             speedLabel = speedLabel,
             partyActive = partyUi.active(),
@@ -4419,10 +4534,11 @@ private fun PlayerScreen(
                 } else {
                     subsMenuOpen = !subsMenuOpen
                     subTimingOpen = false
+                    sleepMenuOpen = false
                 }
                 chromeTouchedAt = System.currentTimeMillis()
             },
-            onSubStyle = { subStyleOpen = !subStyleOpen; subTimingOpen = false; chromeTouchedAt = System.currentTimeMillis() },
+            onSubStyle = { subStyleOpen = !subStyleOpen; subTimingOpen = false; sleepMenuOpen = false; chromeTouchedAt = System.currentTimeMillis() },
             onAudio = {
                 runCatching {
                     TrackSelectionDialogBuilder(context, "Audio", exo, C.TRACK_TYPE_AUDIO)
@@ -4476,7 +4592,8 @@ private fun PlayerScreen(
             }
             PauseBoard(
                 visible = pauseBoardOn,
-                kicker = when { ended -> "Finished"; isLiveState -> "Live · Paused"; else -> "Paused" },
+                kicker = (if (sleepFired) "Sleep timer · " else "") +
+                    when { ended -> "Finished"; isLiveState -> "Live · Paused"; else -> "Paused" },
                 title = showName,
                 sub = episodeTag?.let { t -> if (episodeName != null) "$t · $episodeName" else t },
                 desc = currentEpisode?.overview?.takeIf { it.isNotBlank() } ?: description,
@@ -4495,6 +4612,33 @@ private fun PlayerScreen(
         // Party reactions float up from the bottom
         partyUi.reactions.forEach { r ->
             key(r.first) { ReactionFloat(r.second, r.third) }
+        }
+        // Sleep timer menu (the Sleep pill toggles it): by minutes, or at the end of this episode
+        if (sleepMenuOpen && !pip) {
+            Column(
+                Modifier.align(Alignment.CenterEnd).padding(end = 20.dp)
+                    .width(280.dp)
+                    .background(SurfaceC, RoundedCornerShape(14.dp))
+                    .border(1.dp, Line2, RoundedCornerShape(14.dp))
+                    .padding(vertical = 8.dp),
+            ) {
+                Text(
+                    "SLEEP TIMER",
+                    color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                )
+                SubMenuRow("Off", sleepMode.isEmpty()) { sleepSet("") }
+                listOf(15, 30, 45, 60, 90).forEach { m ->
+                    SubMenuRow("In ${sleepText(m * 60_000L)}", false) { sleepSet("min", m) }
+                }
+                if (nextEpisode != null) SubMenuRow("When this episode ends", sleepMode == "ep") { sleepSet("ep") }
+                Text(
+                    if (sleepMode == "min") "Pausing in ${sleepText(sleepAt - System.currentTimeMillis())}."
+                    else "Playback pauses when the time is up.",
+                    color = MutedC, fontSize = 12.sp, lineHeight = 17.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
         }
         // Subtitle style panel (the Style pill toggles it)
         if (subStyleOpen && !pip) {
