@@ -3,6 +3,7 @@ name: Build APK
 on:
   push:
     branches: [ main ]
+    paths-ignore: [ '**.md' ]   # docs-only pushes must not re-cut the release
   workflow_dispatch:
 
 permissions:
