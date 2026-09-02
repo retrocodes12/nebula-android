@@ -17,6 +17,9 @@ data class CatalogRef(
     val search: Boolean = false,
     /** Advertises the `skip` extra — without it, paging would just refetch page 1. */
     val skip: Boolean = false,
+    /** Home can ask for it as it is. A catalog that only answers to a list of ids
+        (Cinemeta's "Last videos") or to a search term has no page to show. */
+    val browsable: Boolean = true,
 )
 
 /** Parsed manifest: the addon, its catalogs, and whether/what it serves as streams. */
@@ -157,18 +160,24 @@ object Stremio {
             val genres = mutableListOf<String>()
             var supportsSearch = false
             var supportsSkip = false
+            // an extra the add-on insists on is only fine when it lists the values to pick from
+            val required = HashSet<String>()
+            val withOptions = HashSet<String>()
             val extra = c.optJSONArray("extra")
             if (extra != null) for (k in 0 until extra.length()) {
                 val e = extra.getJSONObject(k)
-                when (e.optString("name")) {
-                    "genre" -> {
-                        val opts = e.optJSONArray("options")
-                        if (opts != null) for (o in 0 until opts.length()) genres.add(opts.getString(o))
-                    }
+                val name = e.optString("name")
+                val opts = e.optJSONArray("options")
+                if (opts != null && opts.length() > 0) withOptions.add(name)
+                if (e.optBoolean("isRequired", false)) required.add(name)
+                when (name) {
+                    "genre" -> if (opts != null) for (o in 0 until opts.length()) genres.add(opts.getString(o))
                     "search" -> supportsSearch = true
                     "skip" -> supportsSkip = true
                 }
             }
+            val extraRequired = c.optJSONArray("extraRequired")
+            if (extraRequired != null) for (k in 0 until extraRequired.length()) required.add(extraRequired.getString(k))
             val extraSupported = c.optJSONArray("extraSupported")
             if (extraSupported != null) for (k in 0 until extraSupported.length()) {
                 when (extraSupported.getString(k)) {
@@ -176,7 +185,10 @@ object Stremio {
                     "skip" -> supportsSkip = true
                 }
             }
-            cats.add(CatalogRef(c.optString("type"), c.optString("id"), c.optString("name", c.optString("id")), genres, supportsSearch, supportsSkip))
+            val type = c.optString("type")
+            val id = c.optString("id")
+            val browsable = type.isNotEmpty() && id.isNotEmpty() && required.all { it in withOptions }
+            cats.add(CatalogRef(type, id, c.optString("name", id), genres, supportsSearch, supportsSkip, browsable))
         }
         // stream resource: either the plain string "stream" (scoped by top-level
         // types/idPrefixes) or an object with its own types/idPrefixes

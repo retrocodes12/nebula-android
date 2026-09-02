@@ -48,9 +48,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.49.0.apk
+          cp "$APK" Nebula-1.50.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.49.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.49.0 Nebula-1.49.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.49.0" \
-            --notes "The next episode is chosen while this one is still playing — same source, same quality as the stream you picked — so Play now starts it without a trip through the list. The up-next card says what it will play from. On the stream list, the row that matches your last pick heads its section, marked Same as last time, and Auto stream selection now follows that pick instead of taking the first row."
+          gh release delete v1.50.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.50.0 Nebula-1.50.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.50.0" \
+            --notes "Home is yours to arrange. Settings › Layout › Rows lists every catalog your add-ons offer: tap a row to show or hide it, drag by the handle to set the order (on a TV, OK picks a row up and the D-pad walks it), and Reset brings the original rows back. Home follows that arrangement, with a Customise Home link at the foot of the rows. Search remembers your last eight searches — tap one to run it again, or Clear them — and the idle page lists your add-ons, each a tap into its catalogs."

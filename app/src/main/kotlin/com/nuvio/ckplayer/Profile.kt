@@ -611,7 +611,7 @@ private fun GhostButton(text: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun TextAction(text: String, danger: Boolean = false, onClick: () -> Unit) {
+internal fun TextAction(text: String, danger: Boolean = false, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     Text(

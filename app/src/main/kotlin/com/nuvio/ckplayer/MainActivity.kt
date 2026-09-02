@@ -101,6 +101,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -358,6 +359,7 @@ private sealed interface Screen {
     data object Settings : Screen
     data object SettingsSubtitles : Screen
     data object SettingsLayout : Screen
+    data object SettingsHome : Screen
     data object Friends : Screen
     data object SettingsPlayback : Screen
     data object Profile : Screen
@@ -411,8 +413,9 @@ private val seriesChain = SeriesChain()
 // which item auto stream selection already fired for (survives the screen)
 private var autoPlayedFor: String? = null
 
-/** One catalog's worth of content, tagged with where it came from. */
-private class CatRow(val addon: Addon, val catalog: CatalogRef, val items: List<MetaItem>)
+/** One catalog's worth of content, tagged with where it came from and, on
+    Home, where it sits (see [HomeRows.orderIndex]). */
+private class CatRow(val addon: Addon, val catalog: CatalogRef, val items: List<MetaItem>, val oi: Int = 0)
 
 /** Session cache of addon manifests (Home and Search both need them). */
 internal val manifestCache = mutableMapOf<String, ManifestInfo>()
@@ -448,6 +451,8 @@ private class HomeUiState {
     var rows by mutableStateOf<List<CatRow>>(emptyList())
     var loading by mutableStateOf(false)
     var hasAddons by mutableStateOf(true)
+    var hidden by mutableStateOf(0)          // rows switched off by hand — an empty Home is not an outage
+    var wanted by mutableStateOf(0)          // rows Home asked for
     var refreshKey by mutableStateOf(0)
     var sig: String? = null
     var builtAt = 0L
@@ -840,10 +845,12 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 onGoAddons = { push(Screen.Addons) },
                                 onResume = { r -> openProgress(r) },
                                 onDetails = { r -> openProgressDetails(r) },
+                                onCustomise = { push(Screen.SettingsHome) },
                             )
                             is Screen.Search -> SearchScreen(
                                 searchState,
                                 onOpen = { a, item -> openMeta(a, item) },
+                                onAddon = { a -> push(Screen.Catalog(a)) },
                             )
                             is Screen.Addons -> AddonsScreen(
                                 version = addonsVersion,
@@ -859,7 +866,8 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 onParty = { push(Screen.SettingsParty) },
                                 onFriends = { push(Screen.Friends) },
                             )
-                            is Screen.SettingsLayout -> SettingsLayoutScreen(onBack = { pop() })
+                            is Screen.SettingsLayout -> SettingsLayoutScreen(onBack = { pop() }, onRows = { push(Screen.SettingsHome) })
+                            is Screen.SettingsHome -> SettingsHomeRowsScreen(onBack = { pop() })
                             is Screen.Friends -> FriendsScreen(
                                 onBack = { pop() },
                                 onProfile = { push(Screen.Profile) },
@@ -1784,7 +1792,7 @@ private fun thumbRatio(shape: String): Float = when (shape) {
 }
 
 /** A Stremio content type as a plural word for a row title. */
-private fun typeLabel(type: String): String = when (type) {
+internal fun typeLabel(type: String): String = when (type) {
     "movie" -> "Movies"
     "series" -> "Series"
     "channel" -> "Channels"
@@ -1973,6 +1981,7 @@ private fun HomeScreen(
     onGoAddons: () -> Unit,
     onResume: (ProgressRec) -> Unit = {},
     onDetails: (ProgressRec) -> Unit = {},
+    onCustomise: () -> Unit = {},
 ) {
     val ctx = LocalContext.current
     var update by remember { mutableStateOf<Updates.Release?>(null) }
@@ -2017,26 +2026,38 @@ private fun HomeScreen(
         if (Updates.isNewer(rel.version, current) && rel.version != dismissed) update = rel
     }
 
-    // Build content rows: each addon's first catalogs, shown as they load.
-    // Kept unless the addon list changed or the rows are older than 5 minutes.
+    // Build content rows: the catalogs Home is set to show (each add-on's first
+    // three until arranged in Settings), shown as they load and slotted into
+    // Home's order. Kept unless the add-on list or the arrangement changed, or
+    // the rows are older than 5 minutes.
     LaunchedEffect(st.refreshKey) {
         val addons = loadAddons(ctx)
         st.hasAddons = addons.isNotEmpty()
-        val sig = addons.joinToString("|") { it.manifestUrl }
+        val sig = addons.joinToString("|") { it.manifestUrl } + "#" + HomeRows.version
         if (st.sig == sig && st.rows.isNotEmpty() && System.currentTimeMillis() - st.builtAt < 300_000) return@LaunchedEffect
         st.sig = sig
         st.loading = true
+        st.hidden = 0; st.wanted = 0
         val rows = mutableListOf<CatRow>()
         st.rows = emptyList()
-        for (a in addons) {
+        for ((ai, a) in addons.withIndex()) {
             runCatching {
-                val cats = manifestFor(a.manifestUrl).catalogs
+                val all = manifestFor(a.manifestUrl).catalogs.filter { it.browsable }
                 val seenCat = HashSet<String>()
-                for (c in cats.take(3)) {
-                    if (!seenCat.add(c.type + "/" + c.id)) continue
+                val wanted = mutableListOf<Pair<CatalogRef, Int>>()
+                all.forEachIndexed { ci, c ->
+                    if (!seenCat.add(c.type + "/" + c.id)) return@forEachIndexed
+                    val k = HomeRows.key(a, c)
+                    if (HomeRows.visible(ctx, k, ci)) wanted.add(c to HomeRows.orderIndex(ctx, k, ai, ci)) else st.hidden++
+                }
+                st.wanted += wanted.size
+                for ((c, oi) in wanted) {
                     runCatching {
                         val items = Stremio.loadCatalog(a.base, c, null).take(15)
-                        if (items.isNotEmpty()) { rows.add(CatRow(a, c, items)); st.rows = rows.toList() }
+                        if (items.isNotEmpty()) {
+                            rows.add(CatRow(a, c, items, oi)); rows.sortBy { it.oi }
+                            st.rows = rows.toList()
+                        }
                     }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
                 }
             }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
@@ -2101,11 +2122,7 @@ private fun HomeScreen(
                     }
                 }
             }
-            st.rows.isEmpty() && st.continueRows.isEmpty() -> Column(Modifier.padding(top = 30.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("Couldn’t reach your add-ons right now.", color = MutedC, fontSize = 14.sp,
-                    modifier = Modifier.padding(bottom = 10.dp))
-                Chip("Retry", false) { st.invalidate() }
-            }
+            st.rows.isEmpty() && st.continueRows.isEmpty() -> Box(Modifier.padding(top = 30.dp)) { HomeNoRows(st, onCustomise) }
             else -> LazyColumn(state = st.listState, contentPadding = PaddingValues(bottom = 104.dp)) {
                 if (st.rows.isNotEmpty() && Prefs.showHero) item(key = "hero") { HeroHeader(st.rows, onOpen) }
                 if (st.continueRows.isNotEmpty() && Prefs.showContinue) item(key = "continue") {
@@ -2153,10 +2170,12 @@ private fun HomeScreen(
                 }
                 // add-ons unreachable but Continue watching kept the screen useful
                 if (st.rows.isEmpty() && !st.loading) item(key = "retry") {
-                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("Couldn’t reach your add-ons right now.", color = MutedC, fontSize = 14.sp,
-                            modifier = Modifier.padding(bottom = 10.dp))
-                        Chip("Retry", false) { st.invalidate() }
+                    Box(Modifier.padding(top = 24.dp)) { HomeNoRows(st, onCustomise) }
+                }
+                // the way into the arrangement, at the foot of the rows it arranges
+                if (st.rows.isNotEmpty()) item(key = "foot") {
+                    Box(Modifier.fillMaxWidth().padding(top = 18.dp), contentAlignment = Alignment.Center) {
+                        TextAction("Customise Home", onClick = onCustomise)
                     }
                 }
             }
@@ -2164,9 +2183,23 @@ private fun HomeScreen(
     }
 }
 
+/** Home with nothing to show: every row switched off by hand is not an outage. */
+@Composable
+private fun HomeNoRows(st: HomeUiState, onCustomise: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        if (st.hidden > 0 && st.wanted == 0) {
+            Text("Every row is switched off.", color = MutedC, fontSize = 14.sp, modifier = Modifier.padding(bottom = 10.dp))
+            Chip("Customise Home", false, onClick = onCustomise)
+        } else {
+            Text("Couldn’t reach your add-ons right now.", color = MutedC, fontSize = 14.sp, modifier = Modifier.padding(bottom = 10.dp))
+            Chip("Retry", false) { st.invalidate() }
+        }
+    }
+}
+
 // ---------- search (one query, every add-on) ----------
 @Composable
-private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit) {
+private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, onAddon: (Addon) -> Unit = {}) {
     // results as you type: the effect restarts on every keystroke, so the
     // delay only survives once typing pauses
     LaunchedEffect(st.query) {
@@ -2227,7 +2260,10 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit) {
                 }
             },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { st.submitted = st.query.trim() }),
+            keyboardActions = KeyboardActions(onSearch = {
+                st.submitted = st.query.trim()
+                RecentSearches.note(ctx, st.submitted)
+            }),
             shape = RoundedCornerShape(12.dp),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = Color.White, unfocusedBorderColor = Line2, cursorColor = Red,
@@ -2244,13 +2280,22 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit) {
             }
             st.submitted.isNotBlank() && st.sections.isEmpty() ->
                 Text("No matches for “${st.submitted.trim()}”.", color = MutedC, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
+            st.submitted.isBlank() -> SearchIdle(
+                ctx, remember { loadAddons(ctx) },
+                onRecent = { q -> st.query = q; st.submitted = q; RecentSearches.note(ctx, q) },
+                onAddon = onAddon,
+            )
             else -> LazyColumn(state = st.listState, contentPadding = PaddingValues(bottom = 104.dp)) {
                 items(st.sections, key = { it.addon.manifestUrl + "/" + it.catalog.id }) { r ->
                     Column {
                         RowHeader(r.addon.name, "${r.items.size} result" + (if (r.items.size > 1) "s" else ""), null)
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             items(r.items) { m ->
-                                MetaCard(m, Modifier.width((if (m.posterShape == "landscape") 210.dp else 124.dp) * Prefs.posterScale)) { onOpen(r.addon, m) }
+                                MetaCard(m, Modifier.width((if (m.posterShape == "landscape") 210.dp else 124.dp) * Prefs.posterScale)) {
+                                    // a result opened straight from the as-you-type list counts as a search worth keeping
+                                    RecentSearches.note(ctx, st.submitted)
+                                    onOpen(r.addon, m)
+                                }
                             }
                         }
                     }
@@ -2691,7 +2736,7 @@ private fun SettingsChips(title: String, sub: String?, options: List<Pair<String
 }
 
 @Composable
-private fun SettingsLayoutScreen(onBack: () -> Unit) {
+private fun SettingsLayoutScreen(onBack: () -> Unit, onRows: () -> Unit) {
     val ctx = LocalContext.current
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState())
@@ -2739,6 +2784,7 @@ private fun SettingsLayoutScreen(onBack: () -> Unit) {
         SettingsGroup {
             SettingsToggle("Featured carousel", "The full-bleed showcase at the top of Home", Prefs.showHero) { Prefs.setShowHero(ctx, it) }
             SettingsToggle("Continue watching", "Pick up where you left off, right on Home", Prefs.showContinue) { Prefs.setShowContinue(ctx, it) }
+            SettingsRow(Icons.Filled.ViewAgenda, "Rows", "Choose which catalogs make Home, and arrange them", true, onRows)
             SettingsChips(
                 "Poster size", "How large cards render everywhere",
                 listOf("0.85" to "Compact", "1.0" to "Standard", "1.18" to "Large"),
