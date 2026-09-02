@@ -128,6 +128,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -384,6 +386,7 @@ private sealed interface Screen {
         val addonUrl: String? = null,
         val description: String? = null,   // the synopsis the pause board shows
         val startOver: Boolean = false,     // skip the resume point this once
+        val sourceLine: String? = null,     // "1080p · Torrentio": the chrome's source line, from the picked stream
     ) : Screen
 }
 
@@ -803,7 +806,10 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                     stack = rest + if (res != null && pick != null) {
                         // an untouched series adopts the first auto-pick as its taste; a hand-pick is never overwritten
                         NextEp.notePick(ctx, pick, res.addon, byHand = false)
-                        Screen.Play(pick.url, pick.name, pick.subtitles, seriesChain.type, ep.id, label, poster, res.addon.manifestUrl)
+                        Screen.Play(
+                            pick.url, pick.name, pick.subtitles, seriesChain.type, ep.id, label, poster, res.addon.manifestUrl,
+                            sourceLine = StreamTwin.label(StreamTwin.sig(pick, res.addon)).ifEmpty { null },
+                        )
                     } else {
                         // nothing auto-playable — fall back to the picker
                         Screen.Streams(origin, MetaItem(ep.id, seriesChain.type, label, poster))
@@ -965,6 +971,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                             s.item.poster, s.addon.manifestUrl,
                                             description = s.item.description,
                                             startOver = fresh,
+                                            sourceLine = StreamTwin.label(StreamTwin.sig(st, from)).ifEmpty { null },
                                         )
                                     )
                                 },
@@ -975,6 +982,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 poster = s.poster, addonUrl = s.addonUrl,
                                 description = s.description,
                                 startOver = s.startOver,
+                                sourceLine = s.sourceLine,
                                 currentEpisode = seriesChain.episodes.getOrNull(seriesChain.index),
                                 nextEpisode = seriesChain.next(),
                                 onPlayNext = { ep -> playEpisode(ep) },
@@ -3911,7 +3919,7 @@ private fun SubMenuRow(label: String, active: Boolean, onClick: () -> Unit) {
     }
 }
 
-private fun langLabel(code: String): String = runCatching {
+internal fun langLabel(code: String): String = runCatching {
     val c = code.trim().lowercase()
     if (c.isEmpty() || c == "und") "Unknown"
     else java.util.Locale(c.take(3)).getDisplayLanguage(java.util.Locale.ENGLISH)
@@ -3946,6 +3954,7 @@ private fun PlayerScreen(
     addonUrl: String? = null,
     description: String? = null,
     startOver: Boolean = false,          // ignore the resume point this once
+    sourceLine: String? = null,          // "1080p · Torrentio" under the title
     currentEpisode: Episode? = null,
     nextEpisode: Episode? = null,
     onPlayNext: (Episode) -> Unit = {},
@@ -3961,10 +3970,12 @@ private fun PlayerScreen(
     var videoQualityCount by remember { mutableStateOf(0) }
     var audioTrackCount by remember { mutableStateOf(0) }
     var textTrackCount by remember { mutableStateOf(0) }
-    var subStyleOpen by remember { mutableStateOf(false) }
+    var embeddedSubs by remember { mutableStateOf<List<EmbeddedSub>>(emptyList()) }   // the stream's own text tracks
     val scope = rememberCoroutineScope()
-    var addonSubs by remember { mutableStateOf<List<SubTrack>>(emptyList()) }
-    var subsMenuOpen by remember { mutableStateOf(false) }
+    var addonSubs by remember { mutableStateOf<List<AddonSub>>(emptyList()) }
+    var subSearching by remember { mutableStateOf(false) }
+    var subPanelOpen by remember { mutableStateOf(false) }       // the one Subtitles panel: languages · tracks · style
+    val subsFocus = remember { FocusRequester() }                 // the toolbar's Subtitles item, to hand focus back to
     var subBusy by remember { mutableStateOf(false) }
     var activeAddonSub by remember { mutableStateOf<String?>(null) }
     // the Title Card chrome replaces Media3's controller entirely
@@ -3987,7 +3998,7 @@ private fun PlayerScreen(
     var pinfoOn by remember { mutableStateOf(false) }
     var infoRows by remember { mutableStateOf<List<InfoRow>>(emptyList()) }
     var subOffsetMs by remember { mutableStateOf(0L) }
-    var subTimingOpen by remember { mutableStateOf(false) }
+    var liveOffMs by remember { mutableStateOf(0L) }                            // behind the live edge, for the left pill
     var subBaseFile by remember { mutableStateOf<Pair<Uri, String>?>(null) }   // unshifted add-on subtitle, mime
     var subAppliedMs by remember { mutableStateOf(0L) }                          // offset the player currently has
     // Our own meter so the HUD can read the estimate; Start high seeds it so the
@@ -4033,8 +4044,16 @@ private fun PlayerScreen(
     val nameParts = remember(contentName) { (contentName ?: "").split(" · ") }
     val showName = nameParts.firstOrNull()?.takeIf { it.isNotEmpty() } ?: title
     val episodeName = if (contentType == "series" && nameParts.size >= 3) nameParts.drop(2).joinToString(" · ") else null
+    // "S1 E1 · Pilot" when the name is known, else "Season 1 · Episode 1" — the web player's wording
     val episodeTag = contentId?.takeIf { contentType == "series" }?.split(":")
-        ?.takeIf { it.size >= 3 }?.let { "S" + it[it.size - 2] + " · E" + it[it.size - 1] }
+        ?.takeIf { it.size >= 3 }?.let {
+            val s = it[it.size - 2]; val e = it[it.size - 1]
+            if (episodeName != null) "S$s E$e · $episodeName" else "Season $s · Episode $e"
+        }
+    // the stream's add-on, named on the subtitle cards it side-loaded
+    val streamSource = remember(addonUrl, subs) {
+        if (subs.isEmpty()) null else addonUrl?.let { u -> loadAddons(context).firstOrNull { it.manifestUrl == u }?.name }
+    }
     // Publishes to the platform so the lock screen, the output switcher and the
     // play/pause button on a headset all reach this player. Released alongside
     // the player below, and deliberately before it — a session outliving its
@@ -4155,6 +4174,8 @@ private fun PlayerScreen(
     LaunchedEffect(url) {
         // a fresh episode starts with the up-next card closed and undismissed
         upnextOpen = false; upnextCounting = false; upnextDismissed = false
+        // and without the last one's add-on subtitle: its file and timing must not be re-fed into this item
+        activeAddonSub = null; subBaseFile = null; subOffsetMs = 0L; subAppliedMs = 0L
         runCatching {
             val b = MediaItem.Builder().setUri(url)
             when {
@@ -4171,8 +4192,9 @@ private fun PlayerScreen(
             }
             if (subs.isNotEmpty()) {
                 b.setSubtitleConfigurations(
-                    subs.map { st ->
+                    subs.mapIndexed { i, st ->
                         MediaItem.SubtitleConfiguration.Builder(Uri.parse(st.url))
+                            .setId("sub:$i")                         // the panel badges these with the stream's add-on
                             .setLanguage(st.lang)
                             .setMimeType(
                                 if (Regex("\\.srt(\\?|#|$)", RegexOption.IGNORE_CASE).containsMatchIn(st.url))
@@ -4203,17 +4225,21 @@ private fun PlayerScreen(
 
     // Ask every subtitle-capable add-on what it has for this title (web parity).
     LaunchedEffect(contentId) {
+        addonSubs = emptyList()                      // the last title's offers are not this one's
         if (contentType == null || contentId == null) return@LaunchedEffect
-        val found = mutableListOf<SubTrack>()
-        for (a in loadAddons(context)) {
-            runCatching {
-                if (!manifestFor(a.manifestUrl).canSubs(contentType, contentId)) return@runCatching
-                found += Stremio.loadSubtitles(a.base, contentType, contentId)
-            }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
-        }
-        // a couple per language is plenty for a picker
-        addonSubs = found.groupBy { it.lang.lowercase() }.toSortedMap()
-            .values.flatMap { it.take(2) }.take(24)
+        subSearching = true
+        val found = mutableListOf<AddonSub>()
+        try {
+            for (a in loadAddons(context)) {
+                runCatching {
+                    if (!manifestFor(a.manifestUrl).canSubs(contentType, contentId)) return@runCatching
+                    found += Stremio.loadSubtitles(a.base, contentType, contentId).map { AddonSub(it, a.name) }
+                }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+                // the panel fills in as each add-on answers; a handful per language is plenty
+                addonSubs = found.groupBy { it.track.lang.lowercase() }.toSortedMap()
+                    .values.flatMap { it.take(6) }.take(72)
+            }
+        } finally { subSearching = false }
     }
 
     // Keep the resume point roughly current while playing.
@@ -4257,18 +4283,23 @@ private fun PlayerScreen(
                 var v = 0
                 var au = 0
                 var tx = 0
+                val tt = mutableListOf<EmbeddedSub>()
                 for (g in tracks.groups) {
                     when (g.type) {
                         C.TRACK_TYPE_VIDEO -> for (i in 0 until g.length) {
                             if (g.isTrackSupported(i) && g.getTrackFormat(i).height > 0) v++
                         }
                         C.TRACK_TYPE_AUDIO -> if (g.length > 0) au++
-                        C.TRACK_TYPE_TEXT -> if (g.length > 0) tx++
+                        C.TRACK_TYPE_TEXT -> if (g.length > 0) {
+                            tx++
+                            for (i in 0 until g.length) if (g.isTrackSupported(i)) tt += EmbeddedSub(g, i, g.getTrackFormat(i), g.isTrackSelected(i))
+                        }
                     }
                 }
                 videoQualityCount = v
                 audioTrackCount = au
                 textTrackCount = tx
+                embeddedSubs = tt
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 (activity as? MainActivity)?.refreshPipParams()
@@ -4329,8 +4360,9 @@ private fun PlayerScreen(
             posMs = exo.currentPosition.coerceAtLeast(0L)
             durMs = if (exo.duration == C.TIME_UNSET) 0L else exo.duration
             bufMs = exo.bufferedPosition.coerceAtLeast(0L)
+            liveOffMs = if (exo.isCurrentMediaItemLive && exo.currentLiveOffset != C.TIME_UNSET) exo.currentLiveOffset.coerceAtLeast(0L) else 0L
             val now = System.currentTimeMillis()
-            if (chromeVisible && exo.isPlaying && !subStyleOpen && !subTimingOpen &&
+            if (chromeVisible && exo.isPlaying && !subPanelOpen && !sleepMenuOpen &&
                 now - chromeTouchedAt > 3500) chromeVisible = false
             // Skip intro / recap: offer the pill, or take it on Auto once per segment a sitting
             // (a scrub back into the titles is taken as meant); a party viewer follows the host.
@@ -4360,7 +4392,7 @@ private fun PlayerScreen(
                 sleepRender()
             }
             if (sleepFired && exo.isPlaying) sleepFired = false     // played on: the board reads Paused again
-            pauseBoardOn = resting && !inPipMode.value && !subStyleOpen && !subsMenuOpen && !subTimingOpen && !sleepMenuOpen &&
+            pauseBoardOn = resting && !inPipMode.value && !subPanelOpen && !sleepMenuOpen &&
                 !upnextOpen && exo.currentPosition > 1000 && now - pausedSince > 1600 && now - chromeTouchedAt > 1600
             if (pinfoOn) infoRows = playbackInfoRows(exo, bandwidth, subOffsetMs)
         }
@@ -4386,6 +4418,45 @@ private fun PlayerScreen(
     // several quick nudges become one re-prepare
     LaunchedEffect(subOffsetMs) {
         if (subBaseFile != null && subOffsetMs != subAppliedMs) { delay(600); applySubOffset() }
+    }
+
+    /** Download an add-on subtitle, side-load it as the showing track and remember it for timing. */
+    fun applyPick(st: SubTrack) {
+        subBusy = true
+        scope.launch {
+            val r = cachedSubFile(context, st)
+            subBusy = false
+            if (r == null) {
+                android.widget.Toast.makeText(context, "Could not load that subtitle", android.widget.Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val (uri, mime) = r
+            val cur = exo.currentMediaItem ?: return@launch
+            val keep = cur.localConfiguration?.subtitleConfigurations?.filter { it.id != "addon-pick" } ?: emptyList()
+            val cfg = MediaItem.SubtitleConfiguration.Builder(uri)
+                .setId("addon-pick")
+                .setMimeType(mime)
+                .setLanguage(st.lang)
+                .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                .build()
+            val pos = exo.currentPosition
+            exo.setMediaItem(cur.buildUpon().setSubtitleConfigurations(keep + cfg).build(), pos)
+            exo.prepare(); exo.play()
+            exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_TEXT)        // a stream track chosen earlier must not win over it
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                .setPreferredTextLanguage(st.lang)
+                .build()
+            activeAddonSub = st.url
+            subBaseFile = Pair(uri, mime)
+            subOffsetMs = 0L; subAppliedMs = 0L
+        }
+    }
+    /** Subtitles off, or a stream track took over: the add-on pick and its timing are forgotten. */
+    fun subsOff() {
+        activeAddonSub = null
+        subBaseFile = null
+        subOffsetMs = 0L; subAppliedMs = 0L
     }
 
     // In picture-in-picture only the video shows — no chrome, no gestures.
@@ -4444,6 +4515,10 @@ private fun PlayerScreen(
         }
     }
 
+    // On a phone on its side the chrome keeps the title beside Back; on a TV-height screen it sits above the
+    // scrubber, so the cards that float above the chrome (Skip, Up next) start higher there.
+    val shortScreen = LocalConfiguration.current.screenHeightDp < 480
+    val aboveChrome = if (!chromeVisible) 40.dp else if (shortScreen) 150.dp else 214.dp
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
             factory = { ctx ->
@@ -4522,22 +4597,25 @@ private fun PlayerScreen(
             isPlaying = isPlayingState,
             isLive = isLiveState,
             positionMs = posMs, durationMs = durMs, bufferedMs = bufMs,
-            episodeTag = episodeTag?.let { t -> if (episodeName != null) "$t · $episodeName" else t },
+            episodeTag = episodeTag,
+            sourceLine = sourceLine,
+            clockLine = clockLine(context, durMs - posMs, exo.playbackParameters.speed, live = isLiveState || durMs <= 0),
+            liveOffsetMs = liveOffMs,
+            subtitlesFocus = subsFocus,
             dimTitle = pauseBoardOn,
             infoOn = pinfoOn,
             onInfo = { pinfoOn = !pinfoOn; chromeTouchedAt = System.currentTimeMillis() },
-            showTiming = subBaseFile != null,
-            onTiming = { subTimingOpen = !subTimingOpen; subsMenuOpen = false; subStyleOpen = false; sleepMenuOpen = false; chromeTouchedAt = System.currentTimeMillis() },
             sleepLabel = sleepLabel,
-            onSleep = { sleepMenuOpen = !sleepMenuOpen; subsMenuOpen = false; subStyleOpen = false; subTimingOpen = false; chromeTouchedAt = System.currentTimeMillis() },
+            onSleep = { sleepMenuOpen = !sleepMenuOpen; subPanelOpen = false; chromeTouchedAt = System.currentTimeMillis() },
             qualityLabel = qualityLabel?.takeIf { videoQualityCount >= 1 },
             speedLabel = speedLabel,
             partyActive = partyUi.active(),
             partyBadge = partyUi.code?.let { c -> c + " · " + partyUi.count },
             hasNext = nextEpisode != null,
             canPip = (activity as? MainActivity)?.pipSupported() == true,
-            showSubtitles = textTrackCount >= 1 || subs.isNotEmpty() || addonSubs.isNotEmpty(),
-            showAudio = audioTrackCount >= 2,
+            // the panel explains itself when there is nothing to show; one audio track is still worth naming
+            showSubtitles = true,
+            showAudio = audioTrackCount >= 1,
             onBack = { (activity as? androidx.activity.ComponentActivity)?.onBackPressedDispatcher?.onBackPressed() },
             onPlayPause = {
                 if (exo.isPlaying) exo.pause() else exo.play()
@@ -4566,19 +4644,10 @@ private fun PlayerScreen(
                 chromeTouchedAt = System.currentTimeMillis()
             },
             onSubtitles = {
-                if (addonSubs.isEmpty()) {
-                    runCatching {
-                        TrackSelectionDialogBuilder(context, "Subtitles", exo, C.TRACK_TYPE_TEXT)
-                            .setShowDisableOption(true).build().show()
-                    }
-                } else {
-                    subsMenuOpen = !subsMenuOpen
-                    subTimingOpen = false
-                    sleepMenuOpen = false
-                }
+                subPanelOpen = !subPanelOpen
+                sleepMenuOpen = false
                 chromeTouchedAt = System.currentTimeMillis()
             },
-            onSubStyle = { subStyleOpen = !subStyleOpen; subTimingOpen = false; sleepMenuOpen = false; chromeTouchedAt = System.currentTimeMillis() },
             onAudio = {
                 runCatching {
                     TrackSelectionDialogBuilder(context, "Audio", exo, C.TRACK_TYPE_AUDIO)
@@ -4635,19 +4704,12 @@ private fun PlayerScreen(
                 kicker = (if (sleepFired) "Sleep timer · " else "") +
                     when { ended -> "Finished"; isLiveState -> "Live · Paused"; else -> "Paused" },
                 title = showName,
-                sub = episodeTag?.let { t -> if (episodeName != null) "$t · $episodeName" else t },
+                sub = episodeTag,
                 desc = currentEpisode?.overview?.takeIf { it.isNotBlank() } ?: description,
                 meta = meta,
                 modifier = Modifier.align(Alignment.TopStart).padding(start = 20.dp, top = 84.dp),
             )
             if (pinfoOn) PlaybackInfoHud(infoRows, Modifier.align(Alignment.TopEnd).padding(end = 20.dp, top = 76.dp))
-            if (subTimingOpen) SubTimingPanel(
-                offsetMs = subOffsetMs,
-                onNudge = { d -> subOffsetMs += d; chromeTouchedAt = System.currentTimeMillis() },
-                onReset = { subOffsetMs = 0L; chromeTouchedAt = System.currentTimeMillis() },
-                onDone = { subTimingOpen = false; chromeTouchedAt = System.currentTimeMillis() },
-                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 20.dp),
-            )
         }
         // Party reactions float up from the bottom
         partyUi.reactions.forEach { r ->
@@ -4680,84 +4742,33 @@ private fun PlayerScreen(
                 )
             }
         }
-        // Subtitle style panel (the Style pill toggles it)
-        if (subStyleOpen && !pip) {
-            Box(Modifier.align(Alignment.CenterEnd).padding(end = 20.dp)) {
-                SubStylePanel(onDone = { subStyleOpen = false })
+        // The Subtitles panel (SubtitlesPanel.kt): languages · that language's tracks · style, over the
+        // still-playing video. One layer: Back closes it, not the player; focus goes back to its opener.
+        if (subPanelOpen && !pip) {
+            val keysMode = LocalInputModeManager.current.inputMode == InputMode.Keyboard
+            fun closePanel() {
+                subPanelOpen = false
+                chromeTouchedAt = System.currentTimeMillis()
+                if (keysMode) runCatching { subsFocus.requestFocus() }
             }
-        }
-        // Add-on subtitle picker
-        if (subsMenuOpen && !pip) {
-            fun applyPick(st: SubTrack) {
-                subBusy = true
-                scope.launch {
-                    val r = cachedSubFile(context, st)
-                    subBusy = false
-                    if (r == null) {
-                        android.widget.Toast.makeText(context, "Could not load that subtitle", android.widget.Toast.LENGTH_SHORT).show()
-                        return@launch
-                    }
-                    val (uri, mime) = r
-                    val cur = exo.currentMediaItem ?: return@launch
-                    val keep = cur.localConfiguration?.subtitleConfigurations?.filter { it.id != "addon-pick" } ?: emptyList()
-                    val cfg = MediaItem.SubtitleConfiguration.Builder(uri)
-                        .setId("addon-pick")
-                        .setMimeType(mime)
-                        .setLanguage(st.lang)
-                        .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
-                        .build()
-                    val pos = exo.currentPosition
-                    exo.setMediaItem(cur.buildUpon().setSubtitleConfigurations(keep + cfg).build(), pos)
-                    exo.prepare(); exo.play()
-                    exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
-                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                        .setPreferredTextLanguage(st.lang)
-                        .build()
-                    activeAddonSub = st.url
-                    subBaseFile = Pair(uri, mime)
-                    subOffsetMs = 0L; subAppliedMs = 0L
-                    subsMenuOpen = false
-                }
-            }
-            Column(
-                Modifier.align(Alignment.CenterEnd).padding(end = 20.dp)
-                    .width(280.dp)
-                    .background(SurfaceC, RoundedCornerShape(14.dp))
-                    .border(1.dp, Line2, RoundedCornerShape(14.dp))
-                    .padding(vertical = 8.dp)
-                    .heightIn(max = 420.dp),
-            ) {
-                Text(
-                    "SUBTITLES" + (if (subBusy) " · LOADING…" else ""),
-                    color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                )
-                LazyColumn {
-                    item {
-                        SubMenuRow("Off", activeAddonSub == null && textTrackCount == 0) {
-                            exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
-                                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build()
-                            activeAddonSub = null
-                            subBaseFile = null
-                            subOffsetMs = 0L; subAppliedMs = 0L
-                            subsMenuOpen = false
-                        }
-                    }
-                    if (textTrackCount >= 1) item {
-                        SubMenuRow("Embedded tracks…", false) {
-                            subsMenuOpen = false
-                            runCatching {
-                                TrackSelectionDialogBuilder(context, "Subtitles", exo, C.TRACK_TYPE_TEXT)
-                                    .setShowDisableOption(true).build().show()
-                            }
-                        }
-                    }
-                    items(addonSubs.size) { i ->
-                        val st = addonSubs[i]
-                        SubMenuRow(langLabel(st.lang), activeAddonSub == st.url) { applyPick(st) }
-                    }
-                }
-            }
+            BackHandler { closePanel() }
+            SubtitlesPanel(
+                player = exo,
+                embedded = embeddedSubs,
+                addonSubs = addonSubs,
+                activeAddonSub = activeAddonSub,
+                streamSource = streamSource,
+                searching = subSearching,
+                busy = subBusy,
+                offsetMs = subOffsetMs,
+                canShift = subBaseFile != null,
+                onNudge = { d -> subOffsetMs += d },
+                onResetTiming = { subOffsetMs = 0L },
+                onPickAddon = { st -> applyPick(st) },
+                onPickEmbedded = { subsOff() },
+                onOff = { subsOff() },
+                onClose = { closePanel() },
+            )
         }
         // Skip intro / recap: a glass pill above the pills row, at the bottom edge when the chrome
         // is away. With the chrome hidden it takes focus, so OK on a remote is the skip.
@@ -4767,7 +4778,7 @@ private fun PlayerScreen(
             GlassPill(
                 SkipSegments.label(kind),
                 modifier = Modifier.align(Alignment.BottomEnd)
-                    .padding(end = 20.dp, bottom = if (chromeVisible) 150.dp else 40.dp)
+                    .padding(end = 20.dp, bottom = aboveChrome)
                     .focusRequester(skipFocus),
             ) { skipNow(); chromeTouchedAt = System.currentTimeMillis() }
             LaunchedEffect(kind, chromeVisible) { if (!chromeVisible) runCatching { skipFocus.requestFocus() } }
@@ -4776,7 +4787,7 @@ private fun PlayerScreen(
         if (upnextOpen && nextEpisode != null && !pip) {
             Column(
                 Modifier.align(Alignment.BottomEnd)
-                    .padding(end = 20.dp, bottom = 150.dp)
+                    .padding(end = 20.dp, bottom = if (chromeVisible) aboveChrome else 150.dp)
                     .width(300.dp)
                     .background(Color(0xE62C2C2E), RoundedCornerShape(16.dp))
                     .padding(18.dp),

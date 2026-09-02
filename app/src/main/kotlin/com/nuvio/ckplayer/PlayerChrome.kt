@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.horizontalScroll
@@ -12,7 +13,9 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,6 +35,15 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.outlined.Audiotrack
+import androidx.compose.material.icons.outlined.Bedtime
+import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.HighQuality
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.PersonAdd
+import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.Subtitles
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -42,6 +54,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -53,39 +68,47 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * Apple TV player layout: frosted-glass circles for back, PiP, fullscreen and
- * the centre transport; the title in clean semibold sans above a thick
- * fully-rounded scrubber; elapsed at the left end, remaining at the right;
- * glass pills for subtitles, audio, quality, speed and the party.
+ * Apple TV player layout: frosted-glass circles for back, info, PiP, fullscreen and the
+ * centre transport; the title with its mono source line and episode line over a thick
+ * fully-rounded scrubber; glass time pills at both ends of the bar; and ONE centred glass
+ * toolbar of icon+label items (Next · Subtitles · Audio · Quality · Speed · Sleep · Party)
+ * under it. A clock with the end time sits top-right. Nuvio's layout, Nebula's material.
  */
 
 private val Glass = Color(0x6B505058)
 private val GlassHot = Color(0x8C6E6E78)
 private val Ink = Color.White
 private val DimInk = Color(0xA8EBEBF5)
+private val BarGlass = Color(0xC72C2C2E)      // the web player's .qmenu material, rgba(44,44,46,.78)
+private val Hairline = Color(0x1AFFFFFF)
+private val Pill = RoundedCornerShape(50)
 
 @Composable
 private fun GlassCircle(
     icon: ImageVector,
     label: String,
-    size: androidx.compose.ui.unit.Dp = 44.dp,
-    iconSize: androidx.compose.ui.unit.Dp = 22.dp,
+    size: Dp = 44.dp,
+    iconSize: Dp = 22.dp,
+    on: Boolean = false,                 // a lit toggle (the info HUD) inverts to white
     onClick: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
+    val bg = if (on) (if (focused) Color.White else Color(0xEBFFFFFF)) else if (focused) GlassHot else Glass
     Box(
         Modifier.size(size)
-            .background(if (focused) GlassHot else Glass, CircleShape)
+            .background(bg, CircleShape)
             .clickable(interactionSource = interaction, indication = null) { onClick() },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = label, tint = Ink, modifier = Modifier.size(iconSize))
+        Icon(icon, contentDescription = label, tint = if (on) Color.Black else Ink, modifier = Modifier.size(iconSize))
     }
 }
 
@@ -97,7 +120,7 @@ internal fun GlassPill(label: String, value: String? = null, on: Boolean = false
     val bg = if (on) (if (focused) Color.White else Color(0xEBFFFFFF)) else if (focused) GlassHot else Glass
     val ink = if (on) Color.Black else Ink
     Row(
-        modifier.background(bg, RoundedCornerShape(50))
+        modifier.background(bg, Pill)
             .clickable(interactionSource = interaction, indication = null) { onClick() }
             .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -107,6 +130,110 @@ internal fun GlassPill(label: String, value: String? = null, on: Boolean = false
             value, color = if (on) Color(0x99000000) else DimInk, fontSize = 13.sp, fontWeight = FontWeight.Medium,
             modifier = Modifier.padding(start = 6.dp), maxLines = 1,
         )
+    }
+}
+
+/** One toolbar item: an outline icon and a short label (+ a dim value). Focus, like "on",
+    inverts it to a white pill with black ink — what the web player's .pui-btn:focus does. */
+@Composable
+private fun ToolItem(
+    icon: ImageVector?, label: String, value: String? = null, on: Boolean = false,
+    modifier: Modifier = Modifier, onClick: () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val lit = focused || on
+    val ink = if (lit) Color.Black else Ink
+    Row(
+        modifier.background(if (lit) Color.White else Color.Transparent, Pill)
+            .clickable(interactionSource = interaction, indication = null) { onClick() }
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (icon != null) {
+            Icon(icon, contentDescription = null, tint = ink, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(7.dp))
+        }
+        Text(label, color = ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        if (value != null) Text(
+            value, color = if (lit) Color(0x99000000) else DimInk, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(start = 6.dp), maxLines = 1,
+        )
+    }
+}
+
+/** A glass pill of tabular numerals at either end of the scrubber. */
+@Composable
+private fun TimePill(text: String, onClick: (() -> Unit)? = null) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    Text(
+        text, color = if (focused) Color.Black else Ink, fontFamily = Mono, fontSize = 12.sp,
+        fontWeight = FontWeight.Medium, maxLines = 1,
+        modifier = Modifier.background(if (focused) Color.White else Glass, Pill)
+            .then(if (onClick != null) Modifier.clickable(interactionSource = interaction, indication = null) { onClick() } else Modifier)
+            .padding(horizontal = 11.dp, vertical = 5.dp),
+    )
+}
+
+/** The title, the mono source line ("1080P · TORRENTIO") and the episode line ("S1 E1 · Pilot"). */
+@Composable
+private fun TitleBlock(title: String, sourceLine: String?, episodeTag: String?, compact: Boolean, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        Text(
+            title, color = Ink, fontSize = if (compact) 17.sp else 20.sp, fontWeight = FontWeight.SemiBold,
+            letterSpacing = (-0.3).sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+        if (!sourceLine.isNullOrEmpty()) Text(
+            sourceLine.uppercase(), color = Color(0x99EBEBF5), fontFamily = Mono, fontSize = 11.sp,
+            fontWeight = FontWeight.Medium, letterSpacing = 1.3.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 3.dp),
+        )
+        if (!episodeTag.isNullOrEmpty()) Text(
+            episodeTag, color = DimInk, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp),
+        )
+    }
+}
+
+/** The one toolbar: a pill of glass, centred when it fits, scrolling sideways when a phone is
+    narrower than its items (D-pad focus drags it along). */
+@Composable
+private fun PlayerToolbar(
+    hasNext: Boolean, showSubtitles: Boolean, showAudio: Boolean,
+    qualityLabel: String?, speedLabel: String, sleepLabel: String?, partyActive: Boolean,
+    subtitlesFocus: FocusRequester?,
+    onNext: () -> Unit, onSubtitles: () -> Unit, onAudio: () -> Unit, onQuality: () -> Unit,
+    onSpeedCycle: () -> Unit, onSleep: () -> Unit, onParty: () -> Unit, onInvite: () -> Unit, onReact: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Row(
+            Modifier.clip(Pill).background(BarGlass, Pill).border(1.dp, Hairline, Pill)
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 6.dp, vertical = 5.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (hasNext) ToolItem(Icons.Filled.SkipNext, "Next ›", onClick = onNext)
+            if (showSubtitles) ToolItem(
+                Icons.Outlined.Subtitles, "Subtitles",
+                modifier = if (subtitlesFocus != null) Modifier.focusRequester(subtitlesFocus) else Modifier,
+                onClick = onSubtitles,
+            )
+            if (showAudio) ToolItem(Icons.Outlined.Audiotrack, "Audio", onClick = onAudio)
+            if (qualityLabel != null) ToolItem(Icons.Outlined.HighQuality, "Quality", qualityLabel, onClick = onQuality)
+            ToolItem(Icons.Outlined.Speed, "Speed", speedLabel, onClick = onSpeedCycle)
+            ToolItem(Icons.Outlined.Bedtime, "Sleep", sleepLabel, on = sleepLabel != null, onClick = onSleep)
+            ToolItem(Icons.Outlined.Groups, if (partyActive) "Leave party" else "Party", onClick = onParty)
+            if (partyActive) {
+                ToolItem(Icons.Outlined.PersonAdd, "Invite", onClick = onInvite)
+                // the reactions are the party's own vocabulary, sent on the wire as they are
+                listOf("\uD83D\uDC4D", "\uD83D\uDE02", "\u2764\uFE0F", "\uD83D\uDD25").forEach { e ->
+                    ToolItem(null, e, onClick = { onReact(e) })
+                }
+            }
+        }
     }
 }
 
@@ -144,14 +271,14 @@ internal fun PauseBoard(
             )
             if (meta.isNotEmpty()) Row(
                 Modifier.padding(top = 14.dp),
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 meta.forEach { (t, next) ->
                     Text(
                         t, color = if (next) Color.Black else Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
-                            .background(if (next) Color(0xEBFFFFFF) else Glass, RoundedCornerShape(50))
+                            .background(if (next) Color(0xEBFFFFFF) else Glass, Pill)
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                     )
                 }
@@ -183,45 +310,6 @@ internal fun PlaybackInfoHud(rows: List<InfoRow>, modifier: Modifier = Modifier)
     }
 }
 
-/** Subtitle timing: one big number and four nudges, like a camera's exposure offset. */
-@Composable
-internal fun SubTimingPanel(offsetMs: Long, onNudge: (Long) -> Unit, onReset: () -> Unit, onDone: () -> Unit, modifier: Modifier = Modifier) {
-    Column(
-        modifier
-            .width(280.dp)
-            .background(Color(0xD91C1C1E), RoundedCornerShape(14.dp))
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("SUBTITLE TIMING", color = Color(0x8CEBEBF5), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp, modifier = Modifier.weight(1f))
-            GlassPill("Done", onClick = onDone)
-        }
-        Text(
-            fmtSubOffset(offsetMs), color = Ink, fontSize = 30.sp, fontWeight = FontWeight.SemiBold,
-            letterSpacing = (-0.4).sp, modifier = Modifier.padding(top = 10.dp).align(Alignment.CenterHorizontally),
-        )
-        Text(
-            when { offsetMs > 0 -> "Subtitles later"; offsetMs < 0 -> "Subtitles earlier"; else -> "In sync" },
-            color = DimInk, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.2.sp,
-            modifier = Modifier.padding(top = 2.dp, bottom = 12.dp).align(Alignment.CenterHorizontally),
-        )
-        Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp), modifier = Modifier.align(Alignment.CenterHorizontally)) {
-            GlassPill("−0.5", onClick = { onNudge(-500) })
-            GlassPill("−0.1", onClick = { onNudge(-100) })
-            GlassPill("+0.1", onClick = { onNudge(100) })
-            GlassPill("+0.5", onClick = { onNudge(500) })
-        }
-        Row(Modifier.padding(top = 8.dp).align(Alignment.CenterHorizontally)) {
-            GlassPill("Back in sync", on = offsetMs == 0L, onClick = onReset)
-        }
-        Text(
-            "If the words arrive before the voices, choose +.",
-            color = Color(0x8CEBEBF5), fontSize = 11.5.sp, lineHeight = 15.sp,
-            modifier = Modifier.padding(top = 12.dp),
-        )
-    }
-}
-
 @Composable
 internal fun TitleCardChrome(
     visible: Boolean,
@@ -249,7 +337,7 @@ internal fun TitleCardChrome(
     onInvite: () -> Unit = {},
     onReact: (String) -> Unit = {},
     onSubtitles: () -> Unit,
-    onSubStyle: () -> Unit,
+    onSubStyle: () -> Unit = {},        // kept for callers; Style lives in the Subtitles panel now
     onAudio: () -> Unit,
     onQuality: () -> Unit,
     onSpeedCycle: () -> Unit,
@@ -258,43 +346,55 @@ internal fun TitleCardChrome(
     dimTitle: Boolean = false,          // the pause board is saying it already
     infoOn: Boolean = false,
     onInfo: () -> Unit = {},
-    showTiming: Boolean = false,
+    showTiming: Boolean = false,        // kept for callers; Timing lives in the Subtitles panel now
     onTiming: () -> Unit = {},
     sleepLabel: String? = null,         // "38 min" / "End of episode" while a sleep timer is set
     onSleep: () -> Unit = {},
+    sourceLine: String? = null,         // "1080p · Torrentio" — the playing stream's signature
+    clockLine: String? = null,          // "9:41 pm · Ends 11:12 pm" (just the clock on live)
+    liveOffsetMs: Long = 0L,            // how far behind the live edge, for the left pill
+    subtitlesFocus: FocusRequester? = null,   // so the panel can hand focus back to its opener
 ) {
+    // remaining ↔ total on the right pill, for the sitting (outside the fade, so a hidden chrome forgets nothing)
+    var showTotal by remember { mutableStateOf(false) }
     AnimatedVisibility(visible, enter = fadeIn(), exit = fadeOut()) {
-        Box(Modifier.fillMaxSize()) {
-            Box(
-                Modifier.align(Alignment.TopCenter).fillMaxWidth().height(140.dp)
-                    .background(Brush.verticalGradient(0f to Color(0x8C000000), 1f to Color(0x00000000)))
-            )
-            Box(
-                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(220.dp)
-                    .background(Brush.verticalGradient(0f to Color(0x00000000), 1f to Color(0xC7000000)))
-            )
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            // a phone on its side has no room for a title above the bar: it sits beside Back instead
+            val compact = maxHeight < 480.dp
+            val narrow = maxWidth < 600.dp
+            Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(140.dp)
+                .background(Brush.verticalGradient(0f to Color(0x8C000000), 1f to Color(0x00000000))))
+            Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(if (compact) 200.dp else 260.dp)
+                .background(Brush.verticalGradient(0f to Color(0x00000000), 1f to Color(0xC7000000))))
 
-            // top: back · badges · window controls
-            Row(
-                Modifier.align(Alignment.TopStart).fillMaxWidth().padding(20.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            // top: back · (the title, on a short screen) · clock · badges · info · window controls
+            Row(Modifier.align(Alignment.TopStart).fillMaxWidth().padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
                 GlassCircle(Icons.AutoMirrored.Filled.ArrowBack, "Back", onClick = onBack)
-                Spacer(Modifier.weight(1f))
+                if (compact) TitleBlock(
+                    title, sourceLine, episodeTag, compact = true,
+                    modifier = Modifier.weight(1f).padding(horizontal = 14.dp).alpha(if (dimTitle) 0f else 1f),
+                )
+                // a narrow screen keeps the clock and drops the end time; the clock gives way, never the round buttons
+                val clock = if (clockLine != null && narrow) clockLine.substringBefore(" · ") else clockLine
+                if (clock != null) Text(
+                    clock, color = DimInk, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End,
+                    modifier = (if (compact) Modifier else Modifier.weight(1f)).padding(end = 14.dp),
+                ) else if (!compact) Spacer(Modifier.weight(1f))
                 partyBadge?.let {
                     Text(
                         it, color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(end = 12.dp)
-                            .background(Color.White, RoundedCornerShape(50))
+                            .background(Color.White, Pill)
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                     )
                 }
                 if (isLive) Text(
                     "LIVE", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(end = 12.dp)
-                        .background(Color(0xFFE50914), RoundedCornerShape(50))
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier.padding(end = 12.dp).background(Color(0xFFE50914), Pill).padding(horizontal = 12.dp, vertical = 6.dp),
                 )
+                GlassCircle(Icons.Outlined.Info, "Playback info", on = infoOn, onClick = onInfo)
+                Spacer(Modifier.width(12.dp))
                 if (canPip) {
                     GlassCircle(Icons.Filled.PictureInPictureAlt, "Picture-in-picture", onClick = onPip)
                     Spacer(Modifier.width(12.dp))
@@ -303,10 +403,7 @@ internal fun TitleCardChrome(
             }
 
             // centre transport
-            Row(
-                Modifier.align(Alignment.Center),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            Row(Modifier.align(Alignment.Center), verticalAlignment = Alignment.CenterVertically) {
                 GlassCircle(Icons.Filled.Replay10, "Back 10 seconds", size = 56.dp, iconSize = 26.dp) { onSeekBy(-10_000) }
                 Spacer(Modifier.width(34.dp))
                 GlassCircle(
@@ -317,41 +414,12 @@ internal fun TitleCardChrome(
                 GlassCircle(Icons.Filled.Forward10, "Forward 10 seconds", size = 56.dp, iconSize = 26.dp) { onSeekBy(10_000) }
             }
 
-            // bottom: title + pills, then the scrubber, then the times
+            // bottom: the title block (tall screens), the scrubber, the time pills, the toolbar
             Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp)) {
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Column(Modifier.weight(1f).padding(end = 16.dp).alpha(if (dimTitle) 0f else 1f)) {
-                        Text(
-                            title, color = Ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
-                            letterSpacing = (-0.3).sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        )
-                        episodeTag?.let {
-                            Text(it, color = DimInk, fontSize = 13.sp, modifier = Modifier.padding(top = 2.dp), maxLines = 1)
-                        }
-                    }
-                }
-                // more pills than a phone is wide: the row scrolls, and D-pad focus drags it along
-                Row(
-                    Modifier.padding(top = 10.dp).horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
-                ) {
-                    if (hasNext) GlassPill("Next ›", onClick = onNext)
-                    if (showSubtitles) GlassPill("Subtitles", onClick = onSubtitles)
-                    if (showSubtitles) GlassPill("Style", onClick = onSubStyle)
-                    if (showTiming) GlassPill("Timing", onClick = onTiming)
-                    if (showAudio) GlassPill("Audio", onClick = onAudio)
-                    if (qualityLabel != null) GlassPill("Quality", qualityLabel, onClick = onQuality)
-                    GlassPill("Speed", speedLabel, onClick = onSpeedCycle)
-                    GlassPill("Sleep", sleepLabel, on = sleepLabel != null, onClick = onSleep)
-                    GlassPill("Info", on = infoOn, onClick = onInfo)
-                    GlassPill(if (partyActive) "Leave party" else "Party", onClick = onParty)
-                    if (partyActive) {
-                        GlassPill("Invite", onClick = onInvite)
-                        listOf("\uD83D\uDC4D", "\uD83D\uDE02", "\u2764\uFE0F", "\uD83D\uDD25").forEach { e ->
-                            GlassPill(e, onClick = { onReact(e) })
-                        }
-                    }
-                }
+                if (!compact) TitleBlock(
+                    title, sourceLine, episodeTag, compact = false,
+                    modifier = Modifier.fillMaxWidth(0.72f).padding(bottom = 2.dp).alpha(if (dimTitle) 0f else 1f),
+                )
 
                 var trackWidth by remember { mutableStateOf(1) }
                 var dragFrac by remember { mutableStateOf<Float?>(null) }
@@ -395,23 +463,35 @@ internal fun TitleCardChrome(
                     // the Apple TV scrubber: thick, fully rounded, brightens under focus
                     val h = if (seekFocused || dragFrac != null) 12.dp else 9.dp
                     Box(Modifier.align(Alignment.CenterStart).fillMaxWidth().height(h)
-                        .background(Color(0x3DFFFFFF), RoundedCornerShape(50)))
+                        .background(Color(0x3DFFFFFF), Pill))
                     Box(Modifier.align(Alignment.CenterStart).fillMaxWidth(bufFrac).height(h)
-                        .background(Color(0x61FFFFFF), RoundedCornerShape(50)))
+                        .background(Color(0x61FFFFFF), Pill))
                     Box(Modifier.align(Alignment.CenterStart).fillMaxWidth(frac).height(h)
-                        .background(Ink, RoundedCornerShape(50)))
+                        .background(Ink, Pill))
                 }
-                Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-                    Text(
-                        if (isLive) "At the live edge" else fmtTime(positionMs),
-                        color = DimInk, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                // elapsed at the left end, remaining (or, on a tap, the total) at the right — glass pills
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TimePill(
+                        when {
+                            !isLive -> fmtTime(positionMs)
+                            liveOffsetMs > 12_000 -> "−" + fmtTime(liveOffsetMs) + " behind live"
+                            else -> "At the live edge"
+                        }
                     )
                     Spacer(Modifier.weight(1f))
-                    Text(
-                        if (isLive) "LIVE" else "−" + fmtTime((durationMs - positionMs).coerceAtLeast(0L)),
-                        color = DimInk, fontSize = 12.sp, fontWeight = FontWeight.Medium,
-                    )
+                    if (isLive) TimePill("LIVE")
+                    else TimePill(
+                        if (showTotal) fmtTime(durationMs) else "−" + fmtTime((durationMs - positionMs).coerceAtLeast(0L))
+                    ) { showTotal = !showTotal }
                 }
+                PlayerToolbar(
+                    hasNext = hasNext, showSubtitles = showSubtitles, showAudio = showAudio,
+                    qualityLabel = qualityLabel, speedLabel = speedLabel, sleepLabel = sleepLabel, partyActive = partyActive,
+                    subtitlesFocus = subtitlesFocus,
+                    onNext = onNext, onSubtitles = onSubtitles, onAudio = onAudio, onQuality = onQuality,
+                    onSpeedCycle = onSpeedCycle, onSleep = onSleep, onParty = onParty, onInvite = onInvite, onReact = onReact,
+                    modifier = Modifier.padding(top = 10.dp),
+                )
             }
         }
     }

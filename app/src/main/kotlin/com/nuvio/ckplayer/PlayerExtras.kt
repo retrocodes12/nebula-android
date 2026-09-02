@@ -101,6 +101,16 @@ internal fun fmtSubOffset(ms: Long): String {
     return (if (ms > 0) "+" else if (ms < 0) "−" else "") + String.format(Locale.US, "%.1f s", kotlin.math.abs(s))
 }
 
+/** "9:41 pm · Ends 11:12 pm" for the chrome's top-right; just the clock on live or while the
+    end is unknown. Follows the device's 12/24-hour setting; the end accounts for the speed. */
+internal fun clockLine(ctx: Context, remainMs: Long, speed: Float, live: Boolean): String {
+    val fmt = android.text.format.DateFormat.getTimeFormat(ctx)
+    fun at(ms: Long) = fmt.format(java.util.Date(ms)).replace("AM", "am").replace("PM", "pm")
+    val now = System.currentTimeMillis()
+    if (live || remainMs <= 0) return at(now)
+    return at(now) + " · Ends " + at(now + (remainMs / speed.coerceAtLeast(0.1f)).toLong())
+}
+
 private val SUB_TIME = Regex("(\\d{1,2}):(\\d{2}):(\\d{2})([,.])(\\d{3})|(\\d{1,2}):(\\d{2})\\.(\\d{3})")
 
 /**

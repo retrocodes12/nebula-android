@@ -1,5 +1,6 @@
 package com.nuvio.ckplayer
 
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -34,57 +35,48 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * Subtitle appearance panel — rows cycle their value on tap (or OK on a TV
- * remote), over a live sample that reflects size, colour, background, font and
- * edge. The whole column scrolls, because in immersive landscape it can be
- * taller than the screen.
+ * Subtitle appearance — a live sample that reflects size, colour, background, font and
+ * edge, and rows that cycle their value on tap (or OK on a TV remote). The pieces are
+ * shared by the Settings page (SubStylePanel) and the Style column of the in-player
+ * Subtitles panel.
  */
-@Composable
-internal fun SubStylePanel(onDone: () -> Unit) {
-    val ctx = LocalContext.current
-    @Suppress("UNUSED_EXPRESSION") SubStyle.version.value   // recompose on cycle
-    val style = SubStyle.get(ctx)
 
-    Column(
-        Modifier
-            .width(288.dp)
-            .background(SurfaceC, RoundedCornerShape(12.dp))
-            .border(1.dp, Line2, RoundedCornerShape(12.dp))
-            .padding(14.dp)
-            .verticalScroll(rememberScrollState()),
+/** The sample line every appearance choice is reflected in. */
+@Composable
+internal fun SubStylePreview(style: Map<String, String>, modifier: Modifier = Modifier) {
+    val fg = Color(SubStyle.COLOR.first { it.first == style.getValue("color") }.second)
+    val sampleStyle = TextStyle(
+        color = fg,
+        fontSize = 13.sp * SubStyle.sizeFactor(style.getValue("size")),
+        fontFamily = when (style.getValue("font")) {
+            "serif" -> FontFamily.Serif
+            "mono" -> FontFamily.Monospace
+            else -> FontFamily.SansSerif
+        },
+        shadow = when (style.getValue("edge")) {
+            "shadow" -> Shadow(Color.Black, Offset(2f, 3f), blurRadius = 5f)
+            "outline" -> Shadow(Color.Black, Offset(0f, 0f), blurRadius = 3f)
+            else -> null
+        },
+    )
+    Box(
+        modifier.fillMaxWidth()
+            .background(Color(0xFF2A3550), RoundedCornerShape(8.dp))
+            .padding(vertical = 12.dp, horizontal = 8.dp),
+        contentAlignment = Alignment.Center,
     ) {
         Text(
-            "SUBTITLE APPEARANCE", color = MutedC, fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp,
+            "Subtitles will look like this",
+            style = sampleStyle,
+            modifier = Modifier.background(Color(SubStyle.BG.first { it.first == style.getValue("bg") }.second)),
         )
-        // the sample honors size, colour, background, font and (approximately) edge
-        val fg = Color(SubStyle.COLOR.first { it.first == style.getValue("color") }.second)
-        val sampleStyle = TextStyle(
-            color = fg,
-            fontSize = 13.sp * SubStyle.sizeFactor(style.getValue("size")),
-            fontFamily = when (style.getValue("font")) {
-                "serif" -> FontFamily.Serif
-                "mono" -> FontFamily.Monospace
-                else -> FontFamily.SansSerif
-            },
-            shadow = when (style.getValue("edge")) {
-                "shadow" -> Shadow(Color.Black, Offset(2f, 3f), blurRadius = 5f)
-                "outline" -> Shadow(Color.Black, Offset(0f, 0f), blurRadius = 3f)
-                else -> null
-            },
-        )
-        Box(
-            Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 6.dp)
-                .background(Color(0xFF2A3550), RoundedCornerShape(8.dp))
-                .padding(vertical = 12.dp, horizontal = 8.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                "Subtitles will look like this",
-                style = sampleStyle,
-                modifier = Modifier.background(Color(SubStyle.BG.first { it.first == style.getValue("bg") }.second)),
-            )
-        }
+    }
+}
+
+/** The six cycling rows: size, colour, background, edge, font, position. */
+@Composable
+internal fun SubStyleRows(ctx: Context, style: Map<String, String>, modifier: Modifier = Modifier) {
+    Column(modifier) {
         SubStyle.ORDER.forEach { k ->
             val interaction = remember { MutableInteractionSource() }
             val focused by interaction.collectIsFocusedAsState()
@@ -105,6 +97,30 @@ internal fun SubStylePanel(onDone: () -> Unit) {
                 )
             }
         }
+    }
+}
+
+/** The Settings › Subtitle style page: preview, rows, Reset and Done in one hairline card. */
+@Composable
+internal fun SubStylePanel(onDone: () -> Unit) {
+    val ctx = LocalContext.current
+    @Suppress("UNUSED_EXPRESSION") SubStyle.version.value   // recompose on cycle
+    val style = SubStyle.get(ctx)
+
+    Column(
+        Modifier
+            .width(288.dp)
+            .background(SurfaceC, RoundedCornerShape(12.dp))
+            .border(1.dp, Line2, RoundedCornerShape(12.dp))
+            .padding(14.dp)
+            .verticalScroll(rememberScrollState()),
+    ) {
+        Text(
+            "SUBTITLE APPEARANCE", color = MutedC, fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp,
+        )
+        SubStylePreview(style, Modifier.padding(top = 10.dp, bottom = 6.dp))
+        SubStyleRows(ctx, style)
         Row(
             Modifier.fillMaxWidth().padding(top = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
