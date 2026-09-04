@@ -22,6 +22,10 @@ Android 8.0 (API 26) or newer.
 - **Playback.** Adaptive and encrypted streams play natively; quality, audio track, subtitle and
   speed pickers; add-on subtitles with your own styling and a timing nudge; a picture-quality
   policy (auto, best available, data saver); picture-in-picture.
+- **P2P streams.** Some add-ons answer with a file shared between viewers rather than a link.
+  Those streams are listed and played by a BitTorrent engine running on the phone, which pulls the
+  file in order and feeds it to the player over loopback. Off until you turn it on in Settings ›
+  Streams, because while one plays every other peer in that swarm can see your address.
 - **The quiet parts.** Pause for a moment and a board fades in with the title, synopsis, time
   left and what plays next. A playback HUD shows resolution, bitrate, buffer and codec.
 - **Instant next episode.** The app remembers which source you chose for a show and resolves the
@@ -55,6 +59,8 @@ app/src/main/kotlin/com/nuvio/ckplayer/
   PlayerExtras.kt      playback info rows, codec names, subtitle re-timing
   NextEpisode.kt       instant next episode: stream fingerprinting and the remembered pick
   Stremio.kt           add-on protocol client (manifests, catalogs, meta, streams, subtitles)
+  P2p.kt               P2P streams: the torrent engine, its settings and the preparing sheet
+  P2pServer.kt         loopback HTTP server that turns downloading pieces into a seekable file
   StreamBadges.kt      stream labels (resolution, size, language, source)
   HomeRows.kt          Home row order and visibility        SearchRecents.kt  recent searches
   Cloud.kt / Account.kt / Profile.kt / Social.kt            profile, sync, friends
