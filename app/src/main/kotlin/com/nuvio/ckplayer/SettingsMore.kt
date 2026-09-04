@@ -153,15 +153,15 @@ internal fun SettingsStreamsScreen(onBack: () -> Unit) {
             .padding(horizontal = 20.dp).padding(top = 20.dp, bottom = 110.dp),
     ) {
         BackBar("Streams", null, onBack)
-        SettingsHeader("P2P", "Streams that come from other viewers instead of a server")
+        SettingsHeader("P2P", "Torrents, played on this device")
         SettingsGroup {
             if (!P2p.available) SettingsRow(
                 Icons.Filled.CloudOff, "P2P streams",
-                "This device cannot run the P2P engine, so those streams stay hidden", false, null,
+                "This device cannot play torrents, so those streams stay hidden", false, null,
             ) else {
                 SettingsToggle(
                     "P2P streams",
-                    "Play streams that have no link, only a torrent \u00b7 while one plays, everyone else in that swarm can see this device's address",
+                    "Plays torrents \u00b7 while one plays, everyone else sharing that file can see this device's address",
                     Prefs.p2p, divider = Prefs.p2p && all,
                 ) {
                     Prefs.setP2p(ctx, it)
@@ -169,7 +169,7 @@ internal fun SettingsStreamsScreen(onBack: () -> Unit) {
                 }
                 if (Prefs.p2p && all) {
                     SettingsToggle(
-                        "Keep downloads", "Leave a watched file on the phone instead of clearing it when the player closes",
+                        "Keep downloads", "Leave a watched torrent on the phone instead of clearing it when the player closes",
                         Prefs.p2pKeep,
                     ) { Prefs.setP2pKeep(ctx, it) }
                     SettingsRow(

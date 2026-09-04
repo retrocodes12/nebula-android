@@ -148,7 +148,7 @@ object P2p {
             return Answer(problem = why)
         }
         if (!Prefs.p2p) return@withContext Answer(problem = "P2P streams are off. Settings › Streams turns them on.")
-        if (!available) return@withContext Answer(problem = "This device cannot play P2P streams.")
+        if (!available) return@withContext Answer(problem = "This device cannot play torrents.")
         val hash = s.infoHash.lowercase(Locale.US)
         if (!Regex("^[0-9a-f]{40}$").matches(hash)) return@withContext Answer(problem = "That stream has no usable address.")
         try {
@@ -210,7 +210,7 @@ object P2p {
                 delay(250)
             }
             stage = ""
-            if (!th.havePiece(first)) return@withContext fail("Nobody in the swarm is sending. Try another stream.")
+            if (!th.havePiece(first)) return@withContext fail("Nobody is sending this torrent. Try another stream.")
             Answer(url = l.url)
         } catch (e: CancellationException) {
             runCatching { release(ctx) }
@@ -389,7 +389,7 @@ internal fun P2pSheet(title: String, onCancel: () -> Unit) {
                     .navigationBarsPadding().padding(22.dp),
             ) {
                 Text(
-                    "PREPARING A P2P STREAM", color = MutedC, fontFamily = Mono, fontSize = 10.sp,
+                    "FINDING A TORRENT", color = MutedC, fontFamily = Mono, fontSize = 10.sp,
                     fontWeight = FontWeight.Medium, letterSpacing = 1.6.sp,
                 )
                 Text(
