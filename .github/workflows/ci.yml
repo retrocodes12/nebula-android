@@ -26,3 +26,16 @@ jobs:
 
       - name: Assemble debug
         run: gradle assembleDebug --no-daemon --stacktrace
+
+      # P2P streams are dead on arrival if libtorrent's native library misses the APK — it comes
+      # from a plain jar's lib/<abi>/ rather than an AAR, which is easy to lose in a dependency
+      # change and impossible to notice from a green compile. There is no device rig, so assert here.
+      - name: P2P engine is packaged
+        run: |
+          APK=$(find app/build/outputs/apk/debug -name '*.apk' | head -1)
+          echo "APK $(du -h "$APK" | cut -f1)"
+          unzip -l "$APK" | grep 'lib/.*\.so' || true
+          for abi in arm64-v8a armeabi-v7a; do
+            unzip -l "$APK" | grep -q "lib/$abi/libtorrent4j.so" \
+              || { echo "::error::libtorrent4j.so missing for $abi"; exit 1; }
+          done
