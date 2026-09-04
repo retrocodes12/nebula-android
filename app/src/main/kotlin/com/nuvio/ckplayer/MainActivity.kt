@@ -845,6 +845,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
             var p2pJob by remember { mutableStateOf<Job?>(null) }
             fun withP2p(st: StreamItem, then: (String) -> Unit) {
                 if (!P2p.isRow(st.url)) { then(st.url); return }
+                p2pJob?.cancel()                 // two rows tapped in a row: only the second one is wanted
                 p2pFor = st.name.lineSequence().firstOrNull()?.take(90)?.takeIf { it.isNotBlank() } ?: "P2P stream"
                 p2pJob = scope.launch {
                     val answer = P2p.open(ctx, st)

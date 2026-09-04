@@ -99,7 +99,9 @@ internal object P2pServer {
         writeHead(out, if (range != null) 206 else 200, headers)
         out.flush()
         if (method == "HEAD") return
-        pump(live, start, end, out)
+        // The player reads one range at a time; a seek opens a new request and abandons the old one.
+        // Claiming the serial here tells a read still waiting on a piece that nobody wants it any more.
+        pump(live, live.serial.incrementAndGet(), start, end, out)
     }
 
     /** Request line and headers; null when the player hung up before sending one. */
@@ -144,14 +146,14 @@ internal object P2pServer {
      * Writes [start]..[end] of the file, waiting on each piece in turn. A piece that never arrives
      * ends the response: the player reports that rather than sitting on a frozen picture forever.
      */
-    private fun pump(live: P2p.Live, start: Long, end: Long, out: OutputStream) {
+    private fun pump(live: P2p.Live, serial: Int, start: Long, end: Long, out: OutputStream) {
         var pos = start
         var file: RandomAccessFile? = null
         try {
             val buf = ByteArray(CHUNK)
             while (pos <= end) {
                 val piece = ((live.offset + pos) / live.pieceLen).toInt()
-                if (!await(live, piece)) return
+                if (!await(live, serial, piece)) return
                 if (file == null) file = RandomAccessFile(live.file, "r")
                 // never read past the piece just waited for
                 val pieceLast = (piece + 1).toLong() * live.pieceLen - live.offset - 1
@@ -175,7 +177,7 @@ internal object P2pServer {
     }
 
     /** Puts [piece] at the front of the queue and waits for it. False when it never came. */
-    private fun await(live: P2p.Live, piece: Int): Boolean {
+    private fun await(live: P2p.Live, serial: Int, piece: Int): Boolean {
         val h = live.handle
         if (h.havePiece(piece)) { prioritise(live, piece, moved = false); return true }
         prioritise(live, piece, moved = piece < live.head || piece > live.head + SEEK_JUMP)
@@ -183,7 +185,8 @@ internal object P2pServer {
         val until = live.waitingSince + STALL_MS
         while (System.currentTimeMillis() < until) {
             if (h.havePiece(piece)) { live.waitingSince = 0L; return true }
-            if (P2p.live !== live) return false          // the viewer moved on to another stream
+            if (P2p.live !== live) return false             // the viewer moved on to another stream
+            if (live.serial.get() != serial) return false   // a seek has already asked for somewhere else
             Thread.sleep(90)
         }
         live.waitingSince = 0L

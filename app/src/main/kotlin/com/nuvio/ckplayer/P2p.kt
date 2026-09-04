@@ -98,6 +98,8 @@ object P2p {
         val dir: File,
         val root: String,             // the torrent's own folder (or file) inside [dir] — what deleting removes
     ) {
+        /** Counts requests, so a read the player has already moved on from stops waiting. */
+        val serial = java.util.concurrent.atomic.AtomicInteger(0)
         /** The piece the reader is on, so a jump can be told from a steady read. */
         @Volatile var head: Int = firstPiece
         /** When the current read started waiting on a piece, 0 when nothing is waiting. */
@@ -138,6 +140,13 @@ object P2p {
      * stalling in the player. Cancelling the caller's job stops the download and clears up.
      */
     internal suspend fun open(ctx: Context, s: StreamItem): Answer = withContext(Dispatchers.IO) {
+        // Nothing is playing when this fails, so nothing should be left running: a torrent added a
+        // moment before the failure would otherwise keep pulling the swarm in the background, unseen.
+        fun fail(why: String): Answer {
+            stage = ""
+            runCatching { shutdown(ctx) }
+            return Answer(problem = why)
+        }
         if (!Prefs.p2p) return@withContext Answer(problem = "P2P streams are off. Settings › Streams turns them on.")
         if (!available) return@withContext Answer(problem = "This device cannot play P2P streams.")
         val hash = s.infoHash.lowercase(Locale.US)
@@ -151,17 +160,15 @@ object P2p {
             val dir = dataDir(ctx)
             coroutineContext.ensureActive()
             val meta = session.fetchMagnet(magnet(hash, s.sources, s.fileName), META_TIMEOUT_S, dir)
-                ?: return@withContext Answer(problem = "No peers answered. That stream looks dead.")
+                ?: return@withContext fail("No peers answered. That stream looks dead.")
             coroutineContext.ensureActive()
             val ti = TorrentInfo(meta)
             val files = ti.files()
             val index = pickFile(ti, s.fileIdx, s.fileName)
-                ?: return@withContext Answer(problem = "There is no video inside that torrent.")
+                ?: return@withContext fail("There is no video inside that torrent.")
             val size = files.fileSize(index)
             val free = runCatching { StatFs(dir.absolutePath).availableBytes }.getOrDefault(Long.MAX_VALUE)
-            if (size > free - FREE_MARGIN) {
-                return@withContext Answer(problem = "Not enough free space — that file is ${fmtSize(size)}.")
-            }
+            if (size > free - FREE_MARGIN) return@withContext fail("Not enough free space — that file is ${fmtSize(size)}.")
             stage = "Starting the download"
             val priorities = Priority.array(Priority.IGNORE, files.numFiles())
             priorities[index] = Priority.TOP_PRIORITY
@@ -174,7 +181,7 @@ object P2p {
                 delay(150); waited += 150
             }
             val th = handle?.takeIf { it.isValid }
-                ?: return@withContext Answer(problem = "The engine could not start that torrent.")
+                ?: return@withContext fail("The engine could not start that torrent.")
             val pieceLen = ti.pieceLength()
             val offset = files.fileOffset(index)
             val first = (offset / pieceLen).toInt()
@@ -203,19 +210,14 @@ object P2p {
                 delay(250)
             }
             stage = ""
-            if (!th.havePiece(first)) {
-                release(ctx)
-                return@withContext Answer(problem = "Nobody in the swarm is sending. Try another stream.")
-            }
+            if (!th.havePiece(first)) return@withContext fail("Nobody in the swarm is sending. Try another stream.")
             Answer(url = l.url)
         } catch (e: CancellationException) {
             runCatching { release(ctx) }
             stage = ""
             throw e
         } catch (t: Throwable) {
-            stage = ""
-            runCatching { release(ctx) }
-            Answer(problem = "Could not start that P2P stream.")
+            fail("Could not start that P2P stream.")
         }
     }
 
@@ -321,7 +323,8 @@ object P2p {
         val fs = ti.files()
         val n = fs.numFiles()
         fun playable(i: Int) = !fs.padFileAt(i) && VIDEO.containsMatchIn(fs.fileName(i))
-        if (wanted in 0 until n && !fs.padFileAt(wanted)) return wanted
+        if (wanted in 0 until n && !fs.padFileAt(wanted) &&
+            (playable(wanted) || (0 until n).none { playable(it) })) return wanted
         if (hintName.isNotEmpty()) {
             for (i in 0 until n) if (fs.fileName(i).equals(hintName, true)) return i
         }
