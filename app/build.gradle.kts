@@ -12,8 +12,12 @@ android {
         applicationId = "com.nuvio.ckplayer"
         minSdk = 26
         targetSdk = 34
-        versionCode = 63
-        versionName = "1.56.0"
+        versionCode = 64
+        versionName = "1.57.0"
+        // arm only: every phone and TV box Nebula runs on is arm64 or armv7, and libtorrent's native
+        // library is the only thing here with a processor. On anything else the engine reports itself
+        // unavailable and P2P streams stay hidden (P2p.available).
+        ndk.abiFilters += listOf("arm64-v8a", "armeabi-v7a")
     }
 
     // Read signing config from Gradle -P properties (passed explicitly on the CI
@@ -60,6 +64,10 @@ android {
     }
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        // libtorrent's native library is ~16 MB per processor uncompressed. This APK is sideloaded
+        // over a TV's downloader and a short link, so download size beats the small load-time win
+        // of storing it flat: 11 MB compressed instead of 30 MB for the two processors we ship.
+        jniLibs.useLegacyPackaging = true
     }
 }
 
@@ -84,4 +92,11 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("io.coil-kt:coil-compose:2.6.0")
+
+    // P2P streams (P2p.kt). The per-processor artifacts are plain jars carrying lib/<abi>/libtorrent4j.so,
+    // which the packager picks up as native libraries; they all pull in the shared Java classes.
+    val libtorrent = "2.1.0-35"
+    implementation("org.libtorrent4j:libtorrent4j:$libtorrent")
+    implementation("org.libtorrent4j:libtorrent4j-android-arm64:$libtorrent")
+    implementation("org.libtorrent4j:libtorrent4j-android-arm:$libtorrent")
 }

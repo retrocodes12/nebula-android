@@ -57,6 +57,7 @@ internal fun playbackInfoRows(
     bandwidth: DefaultBandwidthMeter,
     subOffsetMs: Long,
     scrubStatus: String? = null,
+    p2pLine: String? = null,
 ): List<InfoRow> {
     val rows = mutableListOf<InfoRow>()
     val vf = exo.videoFormat
@@ -95,6 +96,8 @@ internal fun playbackInfoRows(
     if (subOffsetMs != 0L) rows += InfoRow("Subtitle timing", fmtSubOffset(subOffsetMs))
     // so a screenshot of the panel says why the scrub tip had no picture
     if (scrubStatus != null) rows += InfoRow("Preview frames", scrubStatus, warn = scrubStatus.startsWith(ScrubPreview.UNAVAILABLE))
+    // the swarm behind a P2P stream: peers, how fast they are sending, how much of the file is here
+    if (p2pLine != null) rows += InfoRow("P2P", p2pLine, warn = P2p.stalled())
     return rows
 }
 

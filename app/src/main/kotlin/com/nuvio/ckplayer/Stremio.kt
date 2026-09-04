@@ -7,6 +7,7 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.Locale
 
 /** An installed add-on. `enabled` false = switched off in the list: kept and ranked, asked for nothing. */
 data class Addon(val manifestUrl: String, val name: String, val base: String, val logo: String? = null, val enabled: Boolean = true)
@@ -65,7 +66,15 @@ data class StreamItem(
     // behaviorHints.bingeGroup: the add-on's own "this is the same release
     // across episodes" — the strongest signal a next episode can follow
     val bingeGroup: String = "",
-)
+    // A torrent stream carries no address at all: an info hash, which file inside it, and where to
+    // look for peers. [url] then holds P2p.rowUrl(), which only the engine knows how to open.
+    val infoHash: String = "",
+    val fileIdx: Int = -1,
+    val sources: List<String> = emptyList(),
+    val fileName: String = "",
+) {
+    val isTorrent: Boolean get() = infoHash.isNotEmpty()
+}
 /** One episode of a series (a Stremio meta `videos` entry). */
 data class Episode(
     val id: String, val season: Int, val episode: Int?,
@@ -342,8 +351,19 @@ object Stremio {
         val out = mutableListOf<StreamItem>()
         for (i in 0 until arr.length()) {
             val s = arr.getJSONObject(i)
-            val url = s.optString("url")
-            if (url.isEmpty()) continue
+            var url = s.optString("url")
+            // A torrent stream has an infoHash where the url would be. Those rows were dropped on
+            // the floor until P2P streams (Settings › Streams) — with it on they get a stand-in
+            // address the engine resolves at play time; with it off they are still not playable.
+            val hash = s.optString("infoHash").trim().lowercase(Locale.US)
+            val torrent = url.isEmpty() && Regex("^[0-9a-f]{40}$").matches(hash)
+            if (url.isEmpty() && !(torrent && Prefs.p2p)) continue
+            val fileIdx = if (s.has("fileIdx")) s.optInt("fileIdx", -1) else -1
+            val sources = mutableListOf<String>()
+            s.optJSONArray("sources")?.let { src ->
+                for (k in 0 until src.length()) src.optString(k).trim().takeIf { it.isNotEmpty() }?.let(sources::add)
+            }
+            if (torrent) url = P2p.rowUrl(hash, fileIdx)
             val subs = mutableListOf<SubTrack>()
             val sarr = s.optJSONArray("subtitles")
             if (sarr != null) for (k in 0 until sarr.length()) {
@@ -354,7 +374,11 @@ object Stremio {
             val text = s.optString("title").ifEmpty { s.optString("description") }
             val bh = s.optJSONObject("behaviorHints")
             val vsize = bh?.optLong("videoSize") ?: 0L
-            out.add(StreamItem(s.optString("name"), text, url, subs, vsize, bh?.optString("bingeGroup").orEmpty()))
+            out.add(StreamItem(
+                s.optString("name"), text, url, subs, vsize, bh?.optString("bingeGroup").orEmpty(),
+                infoHash = if (torrent) hash else "", fileIdx = fileIdx, sources = sources,
+                fileName = bh?.optString("filename").orEmpty(),
+            ))
         }
         return out
     }

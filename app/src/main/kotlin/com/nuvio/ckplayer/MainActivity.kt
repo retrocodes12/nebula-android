@@ -202,6 +202,7 @@ import androidx.media3.session.MediaSession
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.TrackSelectionDialogBuilder
 import coil.compose.AsyncImage
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -837,6 +838,22 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 push(Screen.Detail(a, MetaItem(id, r.type, r.name.split(" · ").first(), r.poster, r.shape)))
             }
 
+            // A torrent row (P2p.kt) carries no address until the engine has found the file in the
+            // swarm and pulled the first pieces in, which can take most of a minute on a cold magnet.
+            // Everything else plays exactly as before: `then` is called on the spot.
+            var p2pFor by remember { mutableStateOf<String?>(null) }
+            var p2pJob by remember { mutableStateOf<Job?>(null) }
+            fun withP2p(st: StreamItem, then: (String) -> Unit) {
+                if (!P2p.isRow(st.url)) { then(st.url); return }
+                p2pFor = st.name.lineSequence().firstOrNull()?.take(90)?.takeIf { it.isNotBlank() } ?: "P2P stream"
+                p2pJob = scope.launch {
+                    val answer = P2p.open(ctx, st)
+                    p2pFor = null; p2pJob = null
+                    if (answer.url != null) then(answer.url)
+                    else Toasts.show(answer.problem ?: "Could not start that stream.")
+                }
+            }
+
             /** Play a specific episode of the current chain from the stream chosen
                 ahead of time (or chosen now, the same way), replacing the player in
                 place so Back doesn't have to walk back through every episode. */
@@ -850,17 +867,18 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                         NextEp.resolve(ctx, a, origin, seriesChain.type, ep.id)
                     }
                     val pick = res?.pick
-                    val rest = stack.dropLast(1)
-                    stack = rest + if (res != null && pick != null) {
+                    if (res != null && pick != null) {
                         // an untouched series adopts the first auto-pick as its taste; a hand-pick is never overwritten
                         NextEp.notePick(ctx, pick, res.addon, byHand = false)
-                        Screen.Play(
-                            pick.url, pick.name, pick.subtitles, seriesChain.type, ep.id, label, poster, res.addon.manifestUrl,
-                            sourceLine = StreamTwin.label(StreamTwin.sig(pick, res.addon)).ifEmpty { null },
-                        )
+                        withP2p(pick) { address ->
+                            stack = stack.dropLast(1) + Screen.Play(
+                                address, pick.name, pick.subtitles, seriesChain.type, ep.id, label, poster, res.addon.manifestUrl,
+                                sourceLine = StreamTwin.label(StreamTwin.sig(pick, res.addon)).ifEmpty { null },
+                            )
+                        }
                     } else {
                         // nothing auto-playable — fall back to the picker
-                        Screen.Streams(origin, MetaItem(ep.id, seriesChain.type, label, poster))
+                        stack = stack.dropLast(1) + Screen.Streams(origin, MetaItem(ep.id, seriesChain.type, label, poster))
                     }
                 }
             }
@@ -1048,16 +1066,18 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 onPlay = { st, from, byHand, fresh ->
                                     // remembered so the next episode keeps this source and quality
                                     NextEp.notePick(ctx, st, from, byHand)
-                                    push(
-                                        Screen.Play(
-                                            st.url, st.name, st.subtitles,
-                                            s.item.type, s.item.id, s.item.name,
-                                            s.item.poster, s.addon.manifestUrl,
-                                            description = s.item.description,
-                                            startOver = fresh,
-                                            sourceLine = StreamTwin.label(StreamTwin.sig(st, from)).ifEmpty { null },
+                                    withP2p(st) { address ->
+                                        push(
+                                            Screen.Play(
+                                                address, st.name, st.subtitles,
+                                                s.item.type, s.item.id, s.item.name,
+                                                s.item.poster, s.addon.manifestUrl,
+                                                description = s.item.description,
+                                                startOver = fresh,
+                                                sourceLine = StreamTwin.label(StreamTwin.sig(st, from)).ifEmpty { null },
+                                            )
                                         )
-                                    )
+                                    }
                                 },
                             )
                             is Screen.Play -> PlayerScreen(
@@ -1086,6 +1106,10 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 // outside the screen Box so it covers the nav bar too
                 AnimatedVisibility(visible = booting, enter = fadeIn(tween(0)), exit = fadeOut(tween(320))) {
                     BootScreen()
+                }
+                // finding a torrent in the swarm: held up until it answers, or the viewer stops it
+                p2pFor?.let { name ->
+                    P2pSheet(name) { p2pJob?.cancel(); p2pJob = null; p2pFor = null }
                 }
                 // toasts: a small pill under the status bar, over whatever screen is up
                 ToastHost(Modifier.align(Alignment.TopCenter).padding(horizontal = 24.dp))
@@ -4119,9 +4143,14 @@ private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual
                 }
             }
             Column(Modifier.weight(1f)) {
-                // the row that matches what you picked last time — same source, same quality
-                if (usual) Text(
-                    "SAME AS LAST TIME", color = Red, fontFamily = Mono, fontSize = 9.sp,
+                // the row that matches what you picked last time — same source, same quality — and
+                // whether this one comes from other viewers rather than a server
+                val eyebrow = listOfNotNull(
+                    "SAME AS LAST TIME".takeIf { usual },
+                    "P2P".takeIf { s.isTorrent },
+                ).joinToString(" · ")
+                if (eyebrow.isNotEmpty()) Text(
+                    eyebrow, color = if (usual) Red else MutedC, fontFamily = Mono, fontSize = 9.sp,
                     fontWeight = FontWeight.Medium, letterSpacing = 1.3.sp, modifier = Modifier.padding(bottom = 3.dp),
                 )
                 Text(name, color = TextC, fontSize = 15.sp, fontFamily = Sans, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -4635,6 +4664,7 @@ private fun PlayerScreen(
             runCatching { snapshotProgress() }
             runCatching { Social.publishSoon(context) }   // friends see the freshly watched title
             exo.removeListener(l); runCatching { session?.release() }; exo.release()
+            P2p.leave(context)          // engine off, download cleared — on its own thread, stopping it blocks
             if (activePipPlayer.value === exo) activePipPlayer.value = null
             // Clears (API 31+) auto-enter so backing out of the player can't PiP the browse UI.
             (activity as? MainActivity)?.refreshPipParams()
@@ -4706,6 +4736,7 @@ private fun PlayerScreen(
                     exo.currentMediaItem?.localConfiguration?.drmConfiguration != null,
                     scrubPreview?.status?.value,
                 ),
+                p2pLine = if (P2p.isLocal(url)) P2p.line() else null,
             )
         }
     }
@@ -4776,8 +4807,9 @@ private fun PlayerScreen(
     LaunchedEffect(pip) { if (pip) chromeVisible = false }
 
     // A party host arriving on a new stream takes the whole room along (mirrors the web player).
+    // Not a P2P stream: its address is this phone's own loopback engine and means nothing anywhere else.
     LaunchedEffect(Unit) {
-        if (partyUi.active() && partyUi.isHost) {
+        if (partyUi.active() && partyUi.isHost && !P2p.isLocal(url)) {
             partyUi.session?.sendStream(PartyStreamDesc(url, title, subs))
         }
     }
@@ -4947,6 +4979,7 @@ private fun PlayerScreen(
             onNext = { nextEpisode?.let { upnextCounting = false; autoRun = 0; onPlayNext(it) } },
             onParty = {
                 if (partyUi.active()) onPartyLeave()
+                else if (P2p.isLocal(url)) Toasts.show("A P2P stream plays only on this device — a party cannot follow it.")
                 else onPartyStart(PartyStreamDesc(url, title, subs, contentType, contentId, contentName, poster, addonUrl))
                 chromeTouchedAt = System.currentTimeMillis()
             },

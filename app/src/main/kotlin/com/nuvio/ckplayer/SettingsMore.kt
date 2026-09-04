@@ -24,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
@@ -50,6 +51,7 @@ import androidx.compose.ui.window.DialogProperties
 import coil.imageLoader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The customisation pass's new Settings pages — Home, Streams, Advanced — plus the two small sheets
@@ -142,11 +144,48 @@ internal fun SettingsHomeScreen(onBack: () -> Unit, onRows: () -> Unit) {
 internal fun SettingsStreamsScreen(onBack: () -> Unit) {
     val ctx = LocalContext.current
     val all = Prefs.everything
+    val scope = rememberCoroutineScope()
+    // how much of the phone the engine is holding — measured off the main thread, it walks a folder
+    var p2pCache by remember { mutableStateOf(0L) }
+    LaunchedEffect(Prefs.p2p) { if (Prefs.p2p) p2pCache = withContext(Dispatchers.IO) { P2p.cacheBytes(ctx) } }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp).padding(top = 20.dp, bottom = 110.dp),
     ) {
         BackBar("Streams", null, onBack)
+        SettingsHeader("P2P", "Streams that come from other viewers instead of a server")
+        SettingsGroup {
+            if (!P2p.available) SettingsRow(
+                Icons.Filled.CloudOff, "P2P streams",
+                "This device cannot run the P2P engine, so those streams stay hidden", false, null,
+            ) else {
+                SettingsToggle(
+                    "P2P streams",
+                    "Play streams that have no link, only a torrent \u00b7 while one plays, everyone else in that swarm can see this device's address",
+                    Prefs.p2p, divider = Prefs.p2p && all,
+                ) {
+                    Prefs.setP2p(ctx, it)
+                    if (!it) P2p.leave(ctx)          // anything running stops the moment it is switched off
+                }
+                if (Prefs.p2p && all) {
+                    SettingsToggle(
+                        "Keep downloads", "Leave a watched file on the phone instead of clearing it when the player closes",
+                        Prefs.p2pKeep,
+                    ) { Prefs.setP2pKeep(ctx, it) }
+                    SettingsRow(
+                        Icons.Filled.DeleteSweep, "Clear P2P downloads",
+                        if (p2pCache > 0L) "${P2p.fmtSize(p2pCache)} on this device" else "Nothing is stored right now",
+                        false,
+                    ) {
+                        scope.launch(Dispatchers.IO) {
+                            P2p.clearCache(ctx)
+                            p2pCache = P2p.cacheBytes(ctx)
+                        }
+                        Toasts.show("P2P downloads cleared.")
+                    }
+                }
+            }
+        }
         if (all) {
             SettingsHeader("THE LIST", "How each add-on's streams are shown")
             SettingsGroup {

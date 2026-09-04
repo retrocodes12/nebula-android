@@ -49,9 +49,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.56.0.apk
+          cp "$APK" Nebula-1.57.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.56.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.56.0 Nebula-1.56.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.56.0" \
-            --notes "A finish pass. The featured board has one button and a centred title, Continue Watching cards show the episode, the time left and a progress bar, Library has tabs for My List, Continue Watching and Upcoming with clear empty states, the bottom bar gains your profile, screens fade into one another and loading rows shimmer. Fixed: Check for updates no longer depends on GitHub's per-address limit, and preview frames while scrubbing now fetch through the same connection identity as the player, with the Info panel saying why when a host refuses them."
+          gh release delete v1.57.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.57.0 Nebula-1.57.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.57.0" \
+            --notes "P2P streams. Some add-ons answer with a torrent rather than a link, and until now Nebula ignored those rows completely. Settings > Streams > P2P streams turns them on: they are listed like any other stream with a P2P mark and their seed count, and playing one runs a real engine on the phone that pulls the file from the swarm in order and feeds it to the player. It is off until you turn it on, because while a P2P stream plays everyone else in that swarm can see this device address. Downloads are cleared when the player closes unless you ask to keep them, and the playback Info panel shows peers, speed and how much of the file is here."

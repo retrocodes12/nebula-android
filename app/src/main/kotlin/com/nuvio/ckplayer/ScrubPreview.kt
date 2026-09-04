@@ -88,6 +88,9 @@ internal class ScrubPreview(private val url: String, ctx: Context) {
             if (!u.startsWith("http://", ignoreCase = true) && !u.startsWith("https://", ignoreCase = true)) return false
             if (Regex("\\.mpd(\\?|#|$)", RegexOption.IGNORE_CASE).containsMatchIn(u)) return false
             if (Regex("\\.m3u8", RegexOption.IGNORE_CASE).containsMatchIn(u)) return false
+            // a P2P stream is downloaded in order: a second reader jumping ahead for frames would
+            // pull the swarm away from the pieces the picture needs
+            if (P2p.isLocal(u)) return false
             return true
         }
     }

@@ -94,6 +94,9 @@ object Prefs {
     var streamFacts by mutableStateOf(true); private set          // size · bitrate · seeds column
     var streamBadges by mutableStateOf(true); private set
     var addonMark by mutableStateOf("initial"); private set       // initial / name / hidden
+    // P2P (P2p.kt): off until someone turns it on — BitTorrent shows your address to the whole swarm
+    var p2p by mutableStateOf(false); private set                 // list and play torrent streams
+    var p2pKeep by mutableStateOf(false); private set             // leave a download on the phone after watching
     var autoPick by mutableStateOf("off"); private set            // off / last (same as last time) / first
     val autoStream: Boolean get() = autoPick != "off"             // the old switch, kept for callers
     var pickWait by mutableStateOf(6); private set                // seconds auto-pick waits for slow add-ons
@@ -155,6 +158,8 @@ object Prefs {
         streamBadges = p.getBoolean("pref_streambadges", true)
         addonMark = p.getString("pref_addonmark", "initial") ?: "initial"
         // the old on/off switch becomes "same as last time" once, then the new key is the truth
+        p2p = p.getBoolean("pref_p2p", false)
+        p2pKeep = p.getBoolean("pref_p2pkeep", false)
         autoPick = p.getString("pref_autopick", null) ?: (if (p.getBoolean("pref_autostream", false)) "last" else "off")
         pickWait = p.getInt("pref_pickwait", 6)
         welcome = p.getBoolean("pref_welcome", true)
@@ -212,6 +217,8 @@ object Prefs {
     fun setStreamFacts(ctx: Context, v: Boolean) { streamFacts = v; edit(ctx).putBoolean("pref_streamfacts", v).apply() }
     fun setStreamBadges(ctx: Context, v: Boolean) { streamBadges = v; edit(ctx).putBoolean("pref_streambadges", v).apply() }
     fun setAddonMark(ctx: Context, v: String) { addonMark = v; edit(ctx).putString("pref_addonmark", v).apply() }
+    fun setP2p(ctx: Context, v: Boolean) { p2p = v; edit(ctx).putBoolean("pref_p2p", v).apply() }
+    fun setP2pKeep(ctx: Context, v: Boolean) { p2pKeep = v; edit(ctx).putBoolean("pref_p2pkeep", v).apply() }
     /** Writes the old switch too, so nothing that still reads `pref_autostream` is surprised. */
     fun setAutoPick(ctx: Context, v: String) {
         autoPick = v

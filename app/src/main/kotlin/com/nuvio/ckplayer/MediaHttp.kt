@@ -4,9 +4,13 @@ package com.nuvio.ckplayer
 
 import android.content.Context
 import android.media.MediaDataSource
+import android.net.Uri
 import androidx.media3.common.util.Util
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.drm.DefaultDrmSessionManagerProvider
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import okhttp3.Cookie
@@ -33,6 +37,8 @@ internal object MediaHttp {
     val HEADERS = mapOf("X-Nebula-Client" to "android")
     private const val CONNECT_MS = 15_000
     private const val READ_MS = 20_000
+    /** The P2P engine may sit on one piece while the swarm finds it; that is slow, not broken. */
+    private const val P2P_READ_MS = 90_000
 
     /** The cookie store both stacks share: HttpURLConnection reads the process default, OkHttp gets a bridge. */
     private val cookies: CookieManager by lazy {
@@ -60,8 +66,10 @@ internal object MediaHttp {
     fun mediaSourceFactory(ctx: Context): DefaultMediaSourceFactory {
         val http = httpFactory(ctx)
         val drm = DefaultDrmSessionManagerProvider().apply { setDrmHttpDataSourceFactory(http) }
+        val quick = DefaultDataSource.Factory(ctx, http)                  // file:// subtitles keep working
+        val patient = DefaultDataSource.Factory(ctx, httpFactory(ctx).setReadTimeoutMs(P2P_READ_MS))
         return DefaultMediaSourceFactory(ctx)
-            .setDataSourceFactory(DefaultDataSource.Factory(ctx, http))   // file:// subtitles keep working
+            .setDataSourceFactory { Patient(quick.createDataSource(), patient.createDataSource()) }
             .setDrmSessionManagerProvider(drm)
     }
 
@@ -74,6 +82,40 @@ internal object MediaHttp {
             .connectTimeout(CONNECT_MS.toLong(), TimeUnit.MILLISECONDS)
             .readTimeout(READ_MS.toLong(), TimeUnit.MILLISECONDS)
             .build()
+    }
+}
+
+/**
+ * One reader per address. A web host that stops answering should fail inside twenty seconds, but the
+ * P2P engine's own loopback server (P2pServer) legitimately holds a response while the swarm finds
+ * the next piece — the same twenty seconds would call a working stream broken. The address decides,
+ * at open() time, which of the two readers actually does the work.
+ */
+private class Patient(private val quick: DataSource, private val patient: DataSource) : DataSource {
+    private var live: DataSource? = null
+
+    override fun addTransferListener(transferListener: TransferListener) {
+        quick.addTransferListener(transferListener)
+        patient.addTransferListener(transferListener)
+    }
+
+    override fun open(dataSpec: DataSpec): Long {
+        val d = if (P2p.isLocal(dataSpec.uri.toString())) patient else quick
+        live = d
+        return d.open(dataSpec)
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
+        (live ?: throw IOException("read before open")).read(buffer, offset, length)
+
+    override fun getUri(): Uri? = live?.uri
+
+    override fun getResponseHeaders(): Map<String, List<String>> = live?.responseHeaders ?: emptyMap()
+
+    override fun close() {
+        val d = live
+        live = null
+        d?.close()
     }
 }
 
