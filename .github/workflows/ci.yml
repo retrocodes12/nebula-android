@@ -34,7 +34,7 @@ jobs:
         run: |
           APK=$(find app/build/outputs/apk/debug -name '*.apk' | head -1)
           echo "APK $(du -h "$APK" | cut -f1)"
-          unzip -l "$APK" | grep 'lib/.*\.so' || true
+          unzip -v "$APK" | grep 'lib/.*\.so' || true
           for abi in arm64-v8a armeabi-v7a; do
             unzip -l "$APK" | grep -q "lib/$abi/libtorrent4j.so" \
               || { echo "::error::libtorrent4j.so missing for $abi"; exit 1; }
