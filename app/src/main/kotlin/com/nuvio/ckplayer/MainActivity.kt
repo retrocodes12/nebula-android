@@ -95,6 +95,7 @@ import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
@@ -110,6 +111,7 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.ViewAgenda
+import androidx.compose.material.icons.filled.VolunteerActivism
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -218,6 +220,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Prefs.load(this)
         Cloud.load(this)
+        Support.restore(this)
         Social.load(this)
         // only honor the launch intent on a fresh start — a recreated activity
         // (process restore, config change) must not jump back into the player
@@ -392,6 +395,7 @@ private sealed interface Screen {
     data object SettingsPlayback : Screen
     data object Profile : Screen
     data object SettingsParty : Screen
+    data object SettingsSupport : Screen
     data class Detail(val addon: Addon, val item: MetaItem) : Screen
     data class Catalog(val addon: Addon, val initial: CatalogRef? = null) : Screen
     data class Episodes(val addon: Addon, val item: MetaItem) : Screen
@@ -790,6 +794,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                     Toasts.show("This device was signed out of your profile. Nothing on it was deleted.")
                 }
                 Account.boot(ctx)            // pre-profile installs trade the master secret for a device token
+                Support.load(ctx)            // is there a link to show, and who is on the wall
                 Cloud.pullAll(ctx)
                 while (true) { delay(300_000); Cloud.pullAll(ctx) }
             }
@@ -957,6 +962,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                             is Screen.Settings -> SettingsScreen(
                                 onAddons = { push(Screen.Addons) },
                                 onLayout = { push(Screen.SettingsLayout) },
+                                onSupport = { push(Screen.SettingsSupport) },
                                 onHome = { push(Screen.SettingsHomeOpts) },
                                 onPlayback = { push(Screen.SettingsPlayback) },
                                 onStreams = { push(Screen.SettingsStreams) },
@@ -965,7 +971,10 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 onFriends = { push(Screen.Friends) },
                                 onAdvanced = { push(Screen.SettingsAdvanced) },
                             )
-                            is Screen.SettingsLayout -> SettingsLayoutScreen(onBack = { pop() })
+                            is Screen.SettingsLayout -> SettingsLayoutScreen(
+                                onBack = { pop() },
+                                onSupport = { push(Screen.SettingsSupport) },
+                            )
                             is Screen.SettingsHomeOpts -> SettingsHomeScreen(onBack = { pop() }, onRows = { push(Screen.SettingsHome) })
                             is Screen.SettingsStreams -> SettingsStreamsScreen(onBack = { pop() })
                             is Screen.SettingsAdvanced -> SettingsAdvancedScreen(
@@ -990,6 +999,10 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                             // reached from the nav's last item as a root, or pushed from Settings
                             is Screen.Profile -> ProfileScreen(onBack = { if (stack.size > 1) pop() else setTab(Screen.Home) })
                             is Screen.SettingsParty -> SettingsPartyScreen(onBack = { pop() }, onJoin = { partyJoin(it) })
+                            is Screen.SettingsSupport -> SettingsSupportScreen(
+                                onBack = { pop() },
+                                onProfile = { push(Screen.Profile) },
+                            )
                             is Screen.Library -> LibraryScreen(
                                 version = libraryVersion,
                                 onResume = { r -> openProgress(r) },
@@ -1806,8 +1819,15 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                         ) {
                             Avatar(f.optString("avatar"), f.optString("name").ifEmpty { f.optString("handle") }, 40.dp)
                             Column(Modifier.padding(start = 12.dp).weight(1f)) {
-                                Text(Social.friendLabel(f), color = TextC, fontSize = 15.sp,
-                                    fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Text(Social.friendLabel(f), color = TextC, fontSize = 15.sp,
+                                        fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false))
+                                    if (Social.friendSup(f)) SupporterMark()
+                                }
                                 val handle = f.optString("handle")
                                 Text(
                                     (if (handle.isNotEmpty()) "@$handle · " else "") + "${prof.optJSONArray("ratings")?.length() ?: 0} rated",
@@ -2855,6 +2875,7 @@ internal fun SettingsRow(
 private fun SettingsScreen(
     onAddons: () -> Unit,
     onLayout: () -> Unit,
+    onSupport: () -> Unit,
     onHome: () -> Unit,
     onPlayback: () -> Unit,
     onStreams: () -> Unit,
@@ -2946,6 +2967,17 @@ private fun SettingsScreen(
                 SettingsRow(Icons.Filled.Tune, "Advanced", "Welcome message, reset all settings, clear caches", false, onAdvanced)
             }
         }
+        // Hidden until the server has somewhere to send people (or this profile is already a supporter)
+        if (Support.visible) {
+            SettingsHeader("SUPPORT", "Free, no ads — chip in if you like")
+            SettingsGroup {
+                SettingsRow(
+                    Icons.Filled.VolunteerActivism, "Support Nebula",
+                    "Chip in if you like — a mark by your name, three more accents, the wall",
+                    false, onSupport,
+                )
+            }
+        }
         SettingsHeader("ABOUT", "Version, updates and privacy")
         SettingsGroup {
             SettingsRow(Icons.Filled.Download, "Check for updates", updSub, true) {
@@ -3022,9 +3054,10 @@ internal fun SettingsChips(title: String, sub: String?, options: List<Pair<Strin
 }
 
 @Composable
-private fun SettingsLayoutScreen(onBack: () -> Unit) {
+private fun SettingsLayoutScreen(onBack: () -> Unit, onSupport: () -> Unit) {
     val ctx = LocalContext.current
     val all = Prefs.everything
+    val sup = Cloud.profile?.sup == true
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp).padding(top = 20.dp, bottom = 110.dp),
@@ -3034,24 +3067,35 @@ private fun SettingsLayoutScreen(onBack: () -> Unit) {
         SettingsGroup {
             // swatch grid: three per row, tick on the current one
             Column(Modifier.fillMaxWidth().padding(14.dp)) {
-                Prefs.ACCENTS.chunked(3).forEachIndexed { ri, row ->
+                // the three supporter colours ride at the end of the same grid, locked until the mark is there
+                (Prefs.ACCENTS + Prefs.SUP_ACCENTS).chunked(3).forEachIndexed { ri, row ->
                     Row(
                         Modifier.fillMaxWidth().padding(top = if (ri == 0) 0.dp else 18.dp),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                     ) {
                         row.forEach { (key, label, color) ->
-                            val on = Prefs.accent == key
+                            val locked = !sup && Prefs.SUP_ACCENTS.any { it.first == key }
+                            // a locked colour still stored as the pref shows the fallback ticked, not itself
+                            val on = Prefs.activeAccent == key
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 modifier = Modifier.width(84.dp).clip(RoundedCornerShape(14.dp))
-                                    .clickable { Prefs.setAccent(ctx, key) }.padding(vertical = 6.dp),
+                                    .clickable {
+                                        if (locked) { Toasts.show("$label is a supporter colour."); onSupport() }
+                                        else Prefs.setAccent(ctx, key)
+                                    }.padding(vertical = 6.dp),
                             ) {
                                 Box(
-                                    Modifier.size(52.dp).clip(CircleShape).background(color)
+                                    Modifier.size(52.dp).clip(CircleShape)
+                                        .background(if (locked) color.copy(alpha = .45f) else color)
                                         .border(if (on) 3.dp else 0.dp, if (on) Color.White else Color.Transparent, CircleShape),
                                     contentAlignment = Alignment.Center,
                                 ) {
-                                    if (on) Text("✓", color = if (key == "white") Color.Black else Color.White,
+                                    if (locked) Icon(
+                                        Icons.Filled.Lock, contentDescription = "Supporter colour",
+                                        tint = Color.White, modifier = Modifier.size(20.dp),
+                                    )
+                                    else if (on) Text("✓", color = if (key == "white") Color.Black else Color.White,
                                         fontSize = 20.sp, fontWeight = FontWeight.Bold)
                                 }
                                 Text(
@@ -3065,6 +3109,11 @@ private fun SettingsLayoutScreen(onBack: () -> Unit) {
                         repeat(3 - row.size) { Box(Modifier.width(84.dp)) }
                     }
                 }
+                if (!sup) Text(
+                    "Gold, Ice and Mint are supporter colours.",
+                    color = FaintC, fontSize = 12.sp, lineHeight = 17.sp,
+                    modifier = Modifier.padding(top = 14.dp),
+                )
             }
         }
         if (all) {

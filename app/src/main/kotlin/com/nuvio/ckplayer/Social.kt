@@ -91,6 +91,8 @@ object Social {
     }
     fun friendKey(f: JSONObject): String = f.optString("handle").ifEmpty { null }?.let { "@$it" } ?: f.optString("code")
     fun friendLabel(f: JSONObject): String = f.optString("name").ifEmpty { friendKey(f) }.ifEmpty { "A friend" }
+    /** Friend cards carry the supporter mark too, so friends see each other's. */
+    fun friendSup(f: JSONObject): Boolean = f.optBoolean("sup")
 
     /** Add a friend by @handle (or one of the old 7-character codes). Returns (their label, null) or (null, error). */
     suspend fun addFriend(ctx: Context, raw: String): Pair<String?, String?> {

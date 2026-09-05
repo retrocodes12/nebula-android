@@ -26,10 +26,30 @@ object Prefs {
         Triple("rose", "Rose", Color(0xFFFF375F)),
     )
 
-    // A light accent (White) needs dark ink on top of it; every other accent
-    // carries white. Buttons, chips and badges all draw from this pair.
-    val accentColor: Color get() = ACCENTS.firstOrNull { it.first == accent }?.third ?: ACCENTS[0].third
-    val onAccent: Color get() = if (accent == "white") Color(0xFF111114) else Color.White
+    /** Three more, for supporters (Support.kt). Same shape, locked until the mark is there. */
+    val SUP_ACCENTS = listOf(
+        Triple("gold", "Gold", Color(0xFFE0B24A)),
+        Triple("ice", "Ice", Color(0xFF64D2FF)),
+        Triple("mint", "Mint", Color(0xFF66D4CF)),
+    )
+    /** Light accents need dark ink on top of them; every other one carries white. */
+    private val DARK_INK = setOf("white", "gold", "ice", "mint")
+
+    /**
+     * The accent actually in force. A supporter colour on a device that is not (yet)
+     * a supporter's falls back to the default WITHOUT the stored pref being rewritten,
+     * so signing back in brings the chosen colour straight back.
+     */
+    internal val activeAccent: String
+        get() = if (SUP_ACCENTS.any { it.first == accent } && Cloud.profile?.sup != true) ACCENTS[0].first else accent
+
+    // Buttons, chips and badges all draw from this pair.
+    val accentColor: Color
+        get() {
+            val key = activeAccent
+            return (ACCENTS + SUP_ACCENTS).firstOrNull { it.first == key }?.third ?: ACCENTS[0].third
+        }
+    val onAccent: Color get() = if (activeAccent in DARK_INK) Color(0xFF111114) else Color.White
 
     // ---- the settings console itself ----
     var setMode by mutableStateOf("essential"); private set       // essential (the common rows) / all

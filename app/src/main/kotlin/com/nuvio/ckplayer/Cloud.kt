@@ -80,13 +80,44 @@ object Cloud {
     private fun parseProfile(o: JSONObject?): Profile? {
         val h = o?.optString("handle") ?: return null
         if (h.isEmpty()) return null
-        return Profile(h, o.optString("name").ifEmpty { h }, o.optString("avatar").ifEmpty { Account.AVATARS[0] })
+        // /v1/profile/me carries `supporter: {since, wall} | null`; creds replies, a PUT reply
+        // and the copy stored below carry the flattened `sup` / `supSince` / `wall`.
+        val sup = o.optJSONObject("supporter")
+        return Profile(
+            h, o.optString("name").ifEmpty { h }, o.optString("avatar").ifEmpty { Account.AVATARS[0] },
+            sup = o.optBoolean("sup") || sup != null,
+            supSince = if (sup != null) sup.optLong("since") else o.optLong("supSince"),
+            wall = if (sup != null) sup.optBoolean("wall") else o.optBoolean("wall"),
+        )
     }
     /** Accepts any server object carrying handle/name/avatar (a creds reply, /me, a PUT reply). */
     internal fun setProfile(ctx: Context, o: JSONObject?) {
-        val p = parseProfile(o)
+        var p = parseProfile(o)
+        // A creds or PUT /v1/profile reply says `sup: true` and nothing more, so keep the date
+        // and the wall choice the last /v1/profile/me brought rather than blanking them.
+        val prev = profile
+        if (p != null && p.sup && p.supSince == 0L && prev != null && prev.handle == p.handle && prev.supSince > 0L) {
+            p = p.copy(supSince = prev.supSince, wall = prev.wall)
+        }
         profile = p
-        val json = if (p == null) "" else JSONObject().put("handle", p.handle).put("name", p.name).put("avatar", p.avatar).toString()
+        storeProfile(ctx, p)
+    }
+
+    /** Patch the supporter fields from a `{since, wall}` reply (redeem, wall on/off). */
+    internal fun noteSupporter(ctx: Context, s: JSONObject?) {
+        val p = profile ?: return
+        val next = if (s == null) p.copy(sup = false, supSince = 0L, wall = false)
+        else p.copy(sup = true, supSince = s.optLong("since", p.supSince), wall = s.optBoolean("wall"))
+        if (next == p) return
+        profile = next
+        storeProfile(ctx, next)
+    }
+
+    private fun storeProfile(ctx: Context, p: Profile?) {
+        val json = if (p == null) "" else JSONObject()
+            .put("handle", p.handle).put("name", p.name).put("avatar", p.avatar)
+            .put("sup", p.sup).put("supSince", p.supSince).put("wall", p.wall)
+            .toString()
         prefs(ctx).edit().putString("profile", json).apply()
     }
 

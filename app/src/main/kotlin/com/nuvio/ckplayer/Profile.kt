@@ -93,14 +93,18 @@ internal fun ProfileCard(onOpen: () -> Unit) {
     ) {
         Avatar(p?.avatar ?: "", p?.let { it.name.ifEmpty { it.handle } } ?: "?", 48.dp, dim = p == null)
         Column(Modifier.weight(1f)) {
-            Text(
-                when {
-                    p != null -> p.name.ifEmpty { "@${p.handle}" }
-                    state == "legacy" -> "Add a profile"
-                    else -> "Sign in or create a profile"
-                },
-                color = TextC, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    when {
+                        p != null -> p.name.ifEmpty { "@${p.handle}" }
+                        state == "legacy" -> "Add a profile"
+                        else -> "Sign in or create a profile"
+                    },
+                    color = TextC, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false),
+                )
+                if (p?.sup == true) SupporterMark()
+            }
             val n = Cloud.devices.size
             Text(
                 when {
@@ -345,8 +349,12 @@ private fun ProfileHead(me: Profile) {
     Row(Modifier.padding(bottom = 18.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         Avatar(me.avatar, me.name.ifEmpty { me.handle }, 72.dp)
         Column {
-            Text(me.name.ifEmpty { "@${me.handle}" }, color = TextC, fontSize = 24.sp, fontFamily = Sans, fontWeight = FontWeight.Bold,
-                letterSpacing = (-0.5).sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text(me.name.ifEmpty { "@${me.handle}" }, color = TextC, fontSize = 24.sp, fontFamily = Sans, fontWeight = FontWeight.Bold,
+                    letterSpacing = (-0.5).sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false))
+                if (me.sup) SupporterMark(17.dp)
+            }
             Text("@${me.handle}", color = MutedC, fontFamily = Mono, fontSize = 14.sp, modifier = Modifier.padding(top = 2.dp))
         }
     }
@@ -560,8 +568,9 @@ private fun PanelLabel(text: String) = Eyebrow(text, Modifier.padding(bottom = 1
 private fun Hint(text: String) =
     Text(text, color = FaintC, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 10.dp))
 
+/** The account-page text field; Support.kt reuses it for the supporter code. */
 @Composable
-private fun PField(
+internal fun PField(
     value: String, onChange: (String) -> Unit, placeholder: String,
     password: Boolean = false, caps: Boolean = false, words: Boolean = false, last: Boolean = false,
     onDone: () -> Unit = {}, modifier: Modifier = Modifier, fill: Boolean = true,

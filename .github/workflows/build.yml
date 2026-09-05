@@ -49,9 +49,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.57.1.apk
+          cp "$APK" Nebula-1.58.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.57.1 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.57.1 Nebula-1.57.1.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.57.1" \
-            --notes "Plainer words for P2P streams in Settings. The switch now says it plays torrents instead of talking around it, and the same goes for the sheet while one is being found. No change to how any of it works."
+          gh release delete v1.58.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.58.0 Nebula-1.58.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.58.0" \
+            --notes "Support Nebula. Nebula stays free, with no ads and no account required — and nothing that already exists moves behind this. If you want to chip in there is now a page for it in Settings, and a supporter gets a small thank-you: a mark beside their name, three more accent colours (Gold, Ice and Mint), and their name on the wall if they like."

@@ -8,7 +8,15 @@ import android.os.Build
 import org.json.JSONArray
 import org.json.JSONObject
 
-data class Profile(val handle: String, val name: String, val avatar: String)
+data class Profile(
+    val handle: String,
+    val name: String,
+    val avatar: String,
+    /** Supporter (Support.kt): a mark by the name, three more accents, an entry on the wall. */
+    val sup: Boolean = false,
+    val supSince: Long = 0L,
+    val wall: Boolean = false,
+)
 data class DeviceRec(val id: String, val name: String, val plat: String, val at: Long, val seen: Long, val me: Boolean)
 class TvCode(val code: String, val poll: String, val until: Long)
 
@@ -35,6 +43,10 @@ object Account {
             "wrong password" -> "Wrong password."
             "already has a profile" -> "This device already belongs to a profile — it will show up in a moment."
             "code not found or expired" -> "That code was not found — it may have expired."
+            "code not found" -> "That code was not found — check it against the thank-you note."
+            "already a supporter" -> "You're already a supporter."
+            "not a supporter" -> "Only supporters have a wall entry."
+            "no profile" -> "Sign in first — the supporter mark lives on your profile."
             "unauthorized" -> "This device was signed out. Sign in again."
             else -> "Something went wrong (${f.code})."
         }
