@@ -40,6 +40,9 @@ Android 8.0 (API 26) or newer.
 - **Nebula Profile.** An @handle and a password — no email. Add-ons, progress, My List and
   ratings follow you to every device; the TV signs in with a short code you approve from a phone.
   A profile is optional; everything works without one.
+- **Support Nebula.** Optional, and nothing that exists sits behind it. A supporter gets a small mark
+  beside their name, three more accent colours, and their name on the wall if they choose. The row
+  appears once a support link is configured on the server.
 - **Friends and watch parties.** Find each other by @handle, see what friends rate, recommend a
   title to one; a short code puts everyone on the same second, live streams included.
 - **Made for the couch.** Full D-pad navigation on Android TV; touch and long-press on phones.
