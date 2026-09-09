@@ -154,7 +154,7 @@ object Social {
             .sortedByDescending { it.at }
             .take(20)
             .forEach { r ->
-                val rootId = if (r.type == "series") r.id.substringBefore(':') else r.id
+                val rootId = if (r.type == "series") seriesIdOf(r.id) else r.id
                 recent.put(
                     JSONObject().put("type", r.type).put("id", r.id).put("name", r.name)
                         .put("poster", r.poster ?: "").put("shape", r.shape).put("at", r.at)

@@ -602,12 +602,30 @@ internal fun loadAddons(ctx: Context): List<Addon> {
     add-on stays installed and ranked but is never asked for anything. */
 internal fun activeAddons(ctx: Context): List<Addon> = loadAddons(ctx).filter { it.enabled }
 /**
+ * The series behind an episode id. "tt123:1:2" → tt123 and "12345:1:2" → 12345 (an imdb or bare id is its own
+ * first segment); "kitsu:12345:3" → kitsu:12345 and "tmdb:123:1:2" → tmdb:123 (a prefixed id is its first two).
+ * A bare series id comes back as it is, so callers can tell the two apart. Mirrors the player's seriesIdOf.
+ */
+internal fun seriesIdOf(episodeId: String): String {
+    val segs = episodeId.split(':')
+    if (segs.size < 2) return episodeId
+    return if (Regex("(?i)(tt)?\\d+").matches(segs[0])) segs[0] else segs.take(2).joinToString(":")
+}
+/** The season and episode numbers off an episode id's tail: (season, episode), or (null, episode) for an id
+    that carries no season (kitsu:ID:3); null for a bare series id. */
+internal fun episodeNumbersOf(episodeId: String): Pair<String?, String>? {
+    val root = seriesIdOf(episodeId)
+    if (root == episodeId) return null
+    val tail = episodeId.removePrefix("$root:").split(':')
+    return if (tail.size >= 2) tail[tail.size - 2] to tail[tail.size - 1] else tail[0].takeIf { it.isNotEmpty() }?.let { null to it }
+}
+/**
  * Resuming an episode from Continue watching bypasses the picker, so rebuild the
  * chain in the background — otherwise "next episode" would be dead there.
  * Stremio episode ids are "<seriesId>:<season>:<episode>".
  */
 private suspend fun hydrateSeriesChain(ctx: Context, addon: Addon, type: String, episodeId: String) {
-    val seriesId = episodeId.substringBefore(':')
+    val seriesId = seriesIdOf(episodeId)
     if (seriesId.isEmpty() || seriesId == episodeId) return
     val order = listOf(addon) + activeAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
     for (a in order) {
@@ -839,7 +857,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
             fun openProgressDetails(r: ProgressRec) {
                 val addons = activeAddons(ctx)
                 val a = addons.firstOrNull { it.manifestUrl == r.addonUrl } ?: addons.firstOrNull() ?: return
-                val id = if (r.type == "series") r.id.substringBefore(':') else r.id
+                val id = if (r.type == "series") seriesIdOf(r.id) else r.id
                 push(Screen.Detail(a, MetaItem(id, r.type, r.name.split(" · ").first(), r.poster, r.shape)))
             }
 
@@ -1839,7 +1857,7 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                         if (openCode == fCode) {
                             FriendRow("Watched recently", profItems(prof.optJSONArray("recent")).map { r ->
                                 if (r.optString("type") == "series")
-                                    JSONObject(r.toString()).put("id", r.optString("id").substringBefore(':'))
+                                    JSONObject(r.toString()).put("id", seriesIdOf(r.optString("id")))
                                 else r
                             }, onOpen)
                             FriendRow("Rated", profItems(prof.optJSONArray("ratings")), onOpen)
@@ -2637,7 +2655,8 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                 Row(Modifier.padding(top = 12.dp)) {
                     Button(
                         onClick = {
-                            val u = url.trim()
+                            // a stremio:// install link is the manifest address behind a scheme only Stremio registers
+                            val u = url.trim().replace(Regex("^stremio://", RegexOption.IGNORE_CASE), "https://")
                             if (!Regex("manifest\\.json").containsMatchIn(u)) {
                                 status = "Enter a manifest URL (…/manifest.json)"; statusErr = true; return@Button
                             }
@@ -4024,9 +4043,8 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             item(key = "hero") {
                 // episode context header — art, S/E kicker, episode title, series name
                 val art = item.background ?: item.poster
-                val segs = item.id.split(":")
-                val kick = if (item.type == "series" && segs.size >= 3)
-                    "SEASON ${segs[segs.size - 2]} · EPISODE ${segs[segs.size - 1]}" else null
+                val kick = if (item.type == "series") episodeNumbersOf(item.id)?.let { (s, e) ->
+                    if (s != null) "SEASON $s · EPISODE $e" else "EPISODE $e" } else null
                 val parts = item.name.split(" · ")
                 val heroTitle = if (parts.size >= 3) parts.drop(2).joinToString(" · ") else parts.lastOrNull() ?: item.name
                 val heroSub = if (parts.size >= 2) parts[0] else null
@@ -4412,11 +4430,11 @@ private fun PlayerScreen(
     val showName = nameParts.firstOrNull()?.takeIf { it.isNotEmpty() } ?: title
     val episodeName = if (contentType == "series" && nameParts.size >= 3) nameParts.drop(2).joinToString(" · ") else null
     // "S1 E1 · Pilot" when the name is known, else "Season 1 · Episode 1" — the web player's wording
-    val episodeTag = contentId?.takeIf { contentType == "series" }?.split(":")
-        ?.takeIf { it.size >= 3 }?.let {
-            val s = it[it.size - 2]; val e = it[it.size - 1]
-            if (episodeName != null) "S$s E$e · $episodeName" else "Season $s · Episode $e"
-        }
+    val episodeTag = contentId?.takeIf { contentType == "series" }?.let { episodeNumbersOf(it) }?.let { (s, e) ->
+        val short = if (s != null) "S$s E$e" else "E$e"
+        val long = if (s != null) "Season $s · Episode $e" else "Episode $e"
+        if (episodeName != null) "$short · $episodeName" else long
+    }
     // the stream's add-on, named on the subtitle cards it side-loaded
     val streamSource = remember(addonUrl, subs) {
         if (subs.isEmpty()) null else addonUrl?.let { u -> loadAddons(context).firstOrNull { it.manifestUrl == u }?.name }
