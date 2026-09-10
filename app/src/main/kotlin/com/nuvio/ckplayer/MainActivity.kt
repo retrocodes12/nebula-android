@@ -415,6 +415,7 @@ private sealed interface Screen {
         val description: String? = null,   // the synopsis the pause board shows
         val startOver: Boolean = false,     // skip the resume point this once
         val sourceLine: String? = null,     // "1080p · Torrentio": the chrome's source line, from the picked stream
+        val startAtMs: Long = -1L,          // a source swap mid-play: the exact second to start from, under the resume floor or not
     ) : Screen
 }
 
@@ -878,6 +879,21 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 }
             }
 
+            /** The stall watchdog's pick (StallWatch.kt): the same title from another row, replacing the
+                player in place from the same second; the next episodes follow the source that worked. */
+            fun swapSource(st: StreamItem, from: Addon, atMs: Long) {
+                val cur = stack.lastOrNull() as? Screen.Play ?: return
+                NextEp.notePick(ctx, st, from, byHand = true)
+                withP2p(st) { address ->
+                    stack = stack.dropLast(1) + cur.copy(
+                        url = address, title = st.name, subs = st.subtitles, addonUrl = from.manifestUrl,
+                        startOver = false, startAtMs = atMs,
+                        sourceLine = StreamTwin.label(StreamTwin.sig(st, from)).ifEmpty { null },
+                    )
+                    Toasts.show("Switched to " + StallWatch.name(st, from))
+                }
+            }
+
             /** Play a specific episode of the current chain from the stream chosen
                 ahead of time (or chosen now, the same way), replacing the player in
                 place so Back doesn't have to walk back through every episode. */
@@ -1054,7 +1070,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 onEpisodes = { push(Screen.Episodes(s.addon, s.item)) },
                                 onPlayMovie = {
                                     seriesChain.clear()
-                                    push(Screen.Streams(s.addon, s.item))
+                                    push(Screen.Streams(s.addon, s.item.copy(runtime = metaFullCache[s.item.type + ":" + s.item.id]?.runtime)))
                                 },
                                 onResumeEpisode = { r -> openProgress(r) },
                                 onPlayEpisode = { ep ->
@@ -1065,6 +1081,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                         // the streams header is a landscape banner — hand it the
                                         // backdrop, not a portrait poster to crop
                                         background = s.item.background ?: ep.thumbnail,
+                                        runtime = metaFullCache[s.item.type + ":" + s.item.id]?.runtime,   // sizes become rates against it
                                     )))
                                 },
                             )
@@ -1085,6 +1102,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                         // the streams header is a landscape banner — hand it the
                                         // backdrop, not a portrait poster to crop
                                         background = s.item.background ?: ep.thumbnail,
+                                        runtime = metaFullCache[s.item.type + ":" + s.item.id]?.runtime,   // sizes become rates against it
                                     )))
                                 },
                                 // no episode data anywhere → replace this screen with the flat stream list
@@ -1119,9 +1137,11 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 description = s.description,
                                 startOver = s.startOver,
                                 sourceLine = s.sourceLine,
+                                startAtMs = s.startAtMs,
                                 currentEpisode = seriesChain.episodes.getOrNull(seriesChain.index),
                                 nextEpisode = seriesChain.next(),
                                 onPlayNext = { ep -> playEpisode(ep) },
+                                onSwapSource = { st, from, at -> swapSource(st, from, at) },
                                 onPrefetchNext = { prefetchNext() },
                                 onProgressSaved = { homeState.invalidateContinue() },
                                 onPartyStart = { partyStart(it) },
@@ -4003,7 +4023,9 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             // Same as last time: the add-on picked last (if it answered) and the row closest to that pick;
             // First stream: the top row of the highest-ranked add-on that answered
             val (a, list) = if (Prefs.autoPick == "last") (secs.firstOrNull { it.first.manifestUrl == pf?.addonUrl } ?: secs.first()) else secs.first()
-            val pick = if (Prefs.autoPick == "last") (StreamTwin.match(list, pf, a) ?: list.first()) else list.first()
+            // never a row this connection cannot carry while another is there (Settings › Streams)
+            val pick = if (Prefs.autoPick == "last") (StreamTwin.match(list, pf, a) ?: list.first())
+                else (list.firstOrNull { !StreamBadges.slow(it, item.runtime) } ?: list.first())
             play(pick, a, false)
         }
         val timer = if (Prefs.autoPick != "off" && autoPlayedFor != item.id) launch { delay(Prefs.pickWait * 1000L); decide() } else null
@@ -4013,7 +4035,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                 if (a.manifestUrl != addon.manifestUrl &&
                     !manifestFor(a.manifestUrl).canStream(item.type, item.id)) return@runCatching
                 val raw = Stremio.loadStreams(a.base, item.type, item.id)
-                val streams = arrangeStreams(raw)
+                val streams = arrangeStreams(raw, item.runtime)
                 if (raw.isNotEmpty() && streams.isEmpty()) floored = true
                 if (streams.isNotEmpty()) {
                     // the row that matches what was picked last time heads its
@@ -4120,7 +4142,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                 }
             items(streams) { s ->
                 Box(Modifier.padding(horizontal = 16.dp)) {
-                    StreamRow(s, from.name, item.name, usual = s.url == usualUrl, onPlay = { play(it, from, true) })
+                    StreamRow(s, from.name, item.name, usual = s.url == usualUrl, slow = StreamBadges.slow(s, item.runtime), onPlay = { play(it, from, true) })
                 }
             }
             }
@@ -4130,17 +4152,22 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
 
 /** Settings › Streams applied to one add-on's answer: the quality floor first (rows with no
     resolution plate stay), then the order — as listed, best quality first, or smallest first. */
-private fun arrangeStreams(raw: List<StreamItem>): List<StreamItem> {
+internal fun arrangeStreams(raw: List<StreamItem>, runtime: String? = null): List<StreamItem> {
     val floor = when (Prefs.minRes) { "720" -> 2; "1080" -> 3; "4k" -> 4; else -> 0 }
     val kept = if (floor == 0) raw else raw.filter { s ->
         val r = StreamBadges.resRank(s.name + "\n" + s.title)
         r == 0 || r >= floor
     }
-    return when (Prefs.streamSort) {
+    val ordered = when (Prefs.streamSort) {
         "quality" -> kept.sortedByDescending { StreamBadges.resRank(it.name + "\n" + it.title) }
         "size" -> kept.sortedBy { StreamBadges.sizeBytes(it.videoSize, it.title).let { b -> if (b <= 0L) Long.MAX_VALUE else b } }
         else -> kept
     }
+    // Streams your connection cannot carry = Mark and move down: the rows this device cannot keep up with sink under
+    // the ones that fit, whatever the order above chose (StreamBadges.slow; the row itself carries the mark)
+    if (Prefs.slowMark != "move" || Prefs.bw <= 0) return ordered
+    val (slow, fits) = ordered.partition { StreamBadges.slow(it, runtime) }
+    return fits + slow
 }
 
 internal fun partyDisplayName(ctx: Context): String {
@@ -4172,7 +4199,7 @@ private fun StreamFilterChip(label: String, on: Boolean, onClick: () -> Unit) {
 /** A stream row: resolution plate, release name, badges, and a right-hand
     spec column — the parts you actually choose by, nothing said twice. */
 @Composable
-private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual: Boolean = false, onPlay: (StreamItem) -> Unit) {
+private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual: Boolean = false, slow: Boolean = false, onPlay: (StreamItem) -> Unit) {
     val raw = remember(s.url) { s.name + "\n" + s.title }
     val plate = remember(s.url) { StreamBadges.plate(raw) }
     val m = remember(s.url) { StreamBadges.match(raw, if (plate != null) "resolution" else null) }
@@ -4240,12 +4267,15 @@ private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual
                 }
                 if (sub.isNotEmpty()) Text(sub, color = MutedC, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 5.dp))
             }
-            // Stream details (Settings › Streams): size, bitrate, seeds as the right-hand column
-            if (Prefs.streamFacts && (f.size != null || f.bitrate != null || f.seeds != null)) {
+            // Stream details (Settings › Streams): size, bitrate, seeds as the right-hand column — and under them the word
+            // that this row is faster than the connection this device has measured (StreamBadges.slow)
+            val facts = Prefs.streamFacts && (f.size != null || f.bitrate != null || f.seeds != null)
+            if (facts || slow) {
                 Column(horizontalAlignment = Alignment.End) {
-                    f.size?.let { Text(it, color = TextC, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
-                    val line2 = listOfNotNull(f.bitrate, f.seeds?.let { "$it seeds" }).joinToString(" · ")
+                    if (facts) f.size?.let { Text(it, color = TextC, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
+                    val line2 = if (facts) listOfNotNull(f.bitrate, f.seeds?.let { "$it seeds" }).joinToString(" · ") else ""
                     if (line2.isNotEmpty()) Text(line2, color = MutedC, fontFamily = Mono, fontSize = 11.sp, modifier = Modifier.padding(top = 2.dp))
+                    if (slow) Text("may stall here", color = FaintC, fontFamily = Mono, fontSize = 10.sp, letterSpacing = 0.5.sp, modifier = Modifier.padding(top = 2.dp))
                 }
             }
             // Add-on on each row: its initial in an accent ring, its name in the mono register, or nothing
@@ -4338,9 +4368,11 @@ private fun PlayerScreen(
     description: String? = null,
     startOver: Boolean = false,          // ignore the resume point this once
     sourceLine: String? = null,          // "1080p · Torrentio" under the title
+    startAtMs: Long = -1L,               // a source swap: start from this second, whatever the resume point says
     currentEpisode: Episode? = null,
     nextEpisode: Episode? = null,
     onPlayNext: (Episode) -> Unit = {},
+    onSwapSource: (StreamItem, Addon, Long) -> Unit = { _, _, _ -> },
     onPrefetchNext: () -> Unit = {},
     onProgressSaved: () -> Unit = {},
     onPartyStart: (PartyStreamDesc) -> Unit = {},
@@ -4378,6 +4410,11 @@ private fun PlayerScreen(
     var skipFlash by remember { mutableStateOf<Triple<Int, Int, Long>?>(null) } // zone (-1/+1), total secs, stamp
     var heldSpeed by remember { mutableStateOf<Float?>(null) }                  // speed to restore after hold-to-speed
     var dragSeek by remember { mutableStateOf<Pair<Long, Long>?>(null) }        // target ms, delta ms
+    // the stall watchdog (StallWatch.kt): its memory, the sibling on offer and when the offer went up
+    val stallWatch = remember { StallWatch() }
+    var swapOffer by remember { mutableStateOf<Pair<StreamItem, Addon>?>(null) }
+    var swapShownAt by remember { mutableStateOf(0L) }
+    val bwTick = remember { IntArray(1) }
     var pauseBoardOn by remember { mutableStateOf(false) }
     var pausedSince by remember { mutableStateOf(0L) }
     var pinfoOn by remember { mutableStateOf(false) }
@@ -4563,9 +4600,24 @@ private fun PlayerScreen(
         )
         onProgressSaved()
     }
+    /** Three stalls in ninety seconds: find the row after this one and put it on the pill (a party viewer follows the host instead). */
+    fun offerSwap() {
+        if (partyUi.active() && !partyUi.isHost) return
+        if (P2p.isLocal(url)) return                     // a P2P play: the row behind it is not this address
+        val type = contentType ?: return
+        val id = contentId ?: return
+        stallWatch.busy = true
+        scope.launch {
+            val c = runCatching { StallWatch.pick(StallWatch.siblings(context, type, id, addonUrl, null), url, null) }.getOrNull()
+            stallWatch.busy = false; stallWatch.offered = true
+            if (c != null) { swapOffer = c; swapShownAt = System.currentTimeMillis() }
+            else Toasts.show("This source keeps stalling — another stream from the list may do better.")
+        }
+    }
 
     LaunchedEffect(url) {
-        // a fresh episode starts with the up-next card closed and undismissed
+        // a fresh episode starts with the up-next card closed and undismissed, and the stall watchdog at zero
+        stallWatch.reset(); swapOffer = null
         upnextOpen = false; upnextCounting = false; upnextDismissed = false; stillAsk = false; subForced = false
         // and without the last one's add-on subtitle: its file and timing must not be re-fed into this item
         activeAddonSub = null; subBaseFile = null; subOffsetMs = 0L; subAppliedMs = 0L
@@ -4603,11 +4655,11 @@ private fun PlayerScreen(
                 Progress.resumeAt(context, contentType, contentId)
             } else 0L
             // Start over is a one-play choice: the saved point is skipped, not erased
-            val resume = if (startOver) 0L else saved
+            val resume = if (startAtMs >= 0) startAtMs else if (startOver) 0L else saved   // a source swap lands on its own second
             if (resume > 0) exo.setMediaItem(b.build(), resume) else exo.setMediaItem(b.build())
             exo.prepare()
             // the pill is drawn inside the app now, so it stays quiet inside a picture-in-picture window
-            if (!inPipMode.value && (resume > 0 || (startOver && saved > 0))) {
+            if (startAtMs < 0 && !inPipMode.value && (resume > 0 || (startOver && saved > 0))) {
                 Toasts.show(if (resume > 0) "Resumed from ${fmtTime(resume)}" else "Starting from the beginning")
             }
         }.onFailure { error = it.message }
@@ -4712,9 +4764,13 @@ private fun PlayerScreen(
                 if (videoSize.height > 0) qualityLabel = "${videoSize.height}p"
             }
             override fun onPositionDiscontinuity(old: Player.PositionInfo, new: Player.PositionInfo, reason: Int) {
+                if (reason == Player.DISCONTINUITY_REASON_SEEK) stallWatch.seekAt = System.currentTimeMillis()
                 if (reason == Player.DISCONTINUITY_REASON_SEEK && partyUi.active() && partyUi.isHost) hostDirty = true
             }
             override fun onPlaybackStateChanged(state: Int) {
+                // the stall watchdog: a buffering state after playback began counts; three in ninety seconds offer a sibling
+                if (state == Player.STATE_READY && stallWatch.playedAt == 0L) stallWatch.playedAt = System.currentTimeMillis()
+                if (state == Player.STATE_BUFFERING && exo.playWhenReady && stallWatch.note()) offerSwap()
                 if (state != Player.STATE_ENDED) return
                 snapshotProgress(done = true)          // ticks it off the episode list
                 if (sleepMode == "ep") {
@@ -4770,6 +4826,13 @@ private fun PlayerScreen(
             bufMs = exo.bufferedPosition.coerceAtLeast(0L)
             liveOffMs = if (exo.isCurrentMediaItemLive && exo.currentLiveOffset != C.TIME_UNSET) exo.currentLiveOffset.coerceAtLeast(0L) else 0L
             val now = System.currentTimeMillis()
+            // what this line carries (Settings › Streams): the engine's estimate, 20 s in, every ~5 s of play — a P2P
+            // play would measure the loopback, so it is left out
+            if (exo.isPlaying && stallWatch.playedAt > 0 && now - stallWatch.playedAt > 20_000 && !P2p.isLocal(url)) {
+                bwTick[0]++
+                if (bwTick[0] % 12 == 0) bandwidth.bitrateEstimate.let { if (it > 0) Prefs.noteBandwidth(context, it) }
+            }
+            if (swapOffer != null && now - swapShownAt > 60_000) swapOffer = null   // an offer nobody took lapses once playback has settled
             // Controls hide after (Settings › Playback)
             if (chromeVisible && exo.isPlaying && !subPanelOpen && !sleepMenuOpen && !scrubbing &&
                 now - chromeTouchedAt > (Prefs.controlsHide * 1000f).toLong()) chromeVisible = false
@@ -4811,6 +4874,7 @@ private fun PlayerScreen(
                     scrubPreview?.status?.value,
                 ),
                 p2pLine = if (P2p.isLocal(url)) P2p.line() else null,
+                stalls = stallWatch.total,
             )
         }
     }
@@ -5211,6 +5275,23 @@ private fun PlayerScreen(
                     .focusRequester(skipFocus),
             ) { skipNow(); chromeTouchedAt = System.currentTimeMillis() }
             LaunchedEffect(kind, chromeVisible) { if (!chromeVisible) runCatching { skipFocus.requestFocus() } }
+        }
+        // A source that keeps stalling (StallWatch.kt): the row after it, on a pill one step above the skip's; one press
+        // switches with the second kept. With the chrome hidden it takes focus, so OK on a remote is the switch.
+        swapOffer?.let { (st, from) ->
+            if (pip) return@let
+            val swapFocus = remember { FocusRequester() }
+            GlassPill(
+                "Keeps stalling · Try " + StallWatch.name(st, from),
+                modifier = Modifier.align(Alignment.BottomEnd)
+                    .padding(end = 20.dp, bottom = aboveChrome + 54.dp)
+                    .focusRequester(swapFocus),
+            ) {
+                swapOffer = null
+                runCatching { snapshotProgress() }
+                onSwapSource(st, from, if (exo.isCurrentMediaItemLive) -1L else exo.currentPosition.coerceAtLeast(0L))
+            }
+            LaunchedEffect(st.url, chromeVisible) { if (!chromeVisible && skipKind == null) runCatching { swapFocus.requestFocus() } }
         }
         // Up next: offered near the end, counts down and autoplays once the episode ends.
         if (upnextOpen && nextEpisode != null && !pip) {

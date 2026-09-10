@@ -115,6 +115,10 @@ object Prefs {
     var streamFacts by mutableStateOf(true); private set          // size · bitrate · seeds column
     var streamBadges by mutableStateOf(true); private set
     var addonMark by mutableStateOf("initial"); private set       // initial / name / hidden
+    var slowMark by mutableStateOf("move"); private set           // move / mark / off — rows this connection cannot carry
+    // what this device measured its connection to be, in bits per second, while something played (0 = nothing yet);
+    // a measurement, not a choice — it lives outside the pref_ keys so Reset all settings leaves it alone
+    var bw by mutableStateOf(0L); private set
     // P2P (P2p.kt): off until someone turns it on — BitTorrent shows your address to the whole swarm
     var p2p by mutableStateOf(false); private set                 // list and play torrent streams
     var p2pKeep by mutableStateOf(false); private set             // leave a download on the phone after watching
@@ -179,6 +183,8 @@ object Prefs {
         streamFacts = p.getBoolean("pref_streamfacts", true)
         streamBadges = p.getBoolean("pref_streambadges", true)
         addonMark = p.getString("pref_addonmark", "initial") ?: "initial"
+        slowMark = p.getString("pref_slowmark", "move") ?: "move"
+        bw = if (System.currentTimeMillis() - p.getLong("bw_at", 0L) < 30L * 86_400_000L) p.getLong("bw_bps", 0L) else 0L
         // the old on/off switch becomes "same as last time" once, then the new key is the truth
         p2p = p.getBoolean("pref_p2p", false)
         p2pKeep = p.getBoolean("pref_p2pkeep", false)
@@ -240,6 +246,13 @@ object Prefs {
     fun setStreamFacts(ctx: Context, v: Boolean) { streamFacts = v; edit(ctx).putBoolean("pref_streamfacts", v).apply() }
     fun setStreamBadges(ctx: Context, v: Boolean) { streamBadges = v; edit(ctx).putBoolean("pref_streambadges", v).apply() }
     fun setAddonMark(ctx: Context, v: String) { addonMark = v; edit(ctx).putString("pref_addonmark", v).apply() }
+    fun setSlowMark(ctx: Context, v: String) { slowMark = v; edit(ctx).putString("pref_slowmark", v).apply() }
+    /** One sample of the engine's bandwidth estimate: weighted toward the newest play, never a single reading. */
+    fun noteBandwidth(ctx: Context, bps: Long) {
+        val v = if (bw > 0) (bw * 0.6 + bps * 0.4).toLong() else bps
+        bw = v
+        edit(ctx).putLong("bw_bps", v).putLong("bw_at", System.currentTimeMillis()).apply()
+    }
     fun setP2p(ctx: Context, v: Boolean) { p2p = v; edit(ctx).putBoolean("pref_p2p", v).apply() }
     fun setP2pKeep(ctx: Context, v: Boolean) { p2pKeep = v; edit(ctx).putBoolean("pref_p2pkeep", v).apply() }
     /** Writes the old switch too, so nothing that still reads `pref_autostream` is surprised. */

@@ -77,6 +77,32 @@ object StreamBadges {
         return (n * (if (m.groupValues[2].uppercase().startsWith("G")) 1073741824.0 else 1048576.0)).toLong()
     }
 
+    /** "1h 52min", "112 min" or "112" → seconds; 0 when the meta does not say. */
+    fun runtimeSecs(rt: String?): Long {
+        val s = rt ?: return 0L
+        val h = RE_HOURS.find(s)?.groupValues?.get(1)?.toLongOrNull()
+        val m = RE_MINS.find(s)?.groupValues?.get(1)?.toLongOrNull()
+        if (h != null || m != null) return (h ?: 0L) * 3600 + (m ?: 0L) * 60
+        return (s.trim().takeWhile { it.isDigit() }.toLongOrNull() ?: 0L) * 60
+    }
+
+    /** What a row needs, in bits per second: its stated rate, else its size over the title's running time; 0 when it does not say. */
+    fun bps(videoSize: Long, text: String, runtime: String?): Long {
+        RE_BITRATE.find(text)?.let { return (it.groupValues[1].toDouble() * 1e6).toLong() }
+        val bytes = sizeBytes(videoSize, text)
+        val secs = runtimeSecs(runtime)
+        return if (bytes > 0 && secs > 0) bytes * 8 / secs else 0L
+    }
+
+    /** A row faster than four fifths of what this device measured (Settings › Streams): the ones no buffer can save. */
+    fun slow(s: StreamItem, runtime: String?): Boolean {
+        if (Prefs.slowMark == "off" || Prefs.bw <= 0) return false
+        val need = bps(s.videoSize, s.name + "\n" + s.title, runtime)
+        return need > 0 && need.toDouble() > Prefs.bw * 0.8
+    }
+    private val RE_HOURS = Regex("""(\d+)\s*h""", RegexOption.IGNORE_CASE)
+    private val RE_MINS = Regex("""(\d+)\s*m""", RegexOption.IGNORE_CASE)
+
     /** The resolution leads the row as a plate — it is what you choose by. */
     data class Plate(val res: String, val tag: String)
     fun plate(raw: String): Plate? = when {

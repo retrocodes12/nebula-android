@@ -89,6 +89,7 @@ internal fun playbackInfoRows(
     subOffsetMs: Long,
     scrubStatus: String? = null,
     p2pLine: String? = null,
+    stalls: Int = 0,
 ): List<InfoRow> {
     val rows = mutableListOf<InfoRow>()
     val vf = exo.videoFormat
@@ -111,6 +112,7 @@ internal fun playbackInfoRows(
     val buf = exo.totalBufferedDuration / 1000.0
     val goal = if (Prefs.buffer > 0) Prefs.buffer else DefaultLoadControl.DEFAULT_MAX_BUFFER_MS / 1000
     rows += InfoRow("Buffer", String.format(Locale.US, "%.1f s ahead · aims for %s", buf, bufferLabel(goal)), warn = exo.isPlaying && buf < 3)
+    if (stalls > 0) rows += InfoRow("Stalls", "$stalls this play", warn = stalls > 2)
     exo.videoDecoderCounters?.let { dc ->
         val shown = dc.renderedOutputBufferCount + dc.droppedBufferCount
         if (shown > 0) rows += InfoRow(

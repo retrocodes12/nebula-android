@@ -197,6 +197,10 @@ internal fun SettingsStreamsScreen(onBack: () -> Unit) {
                     "Minimum quality", "Hide streams below this · streams that do not say stay",
                     listOf("any" to "Any", "720" to "720p", "1080" to "1080p", "4k" to "4K"), Prefs.minRes,
                 ) { Prefs.setMinRes(ctx, it) }
+                SettingsChips(
+                    "Streams your connection cannot carry", "Measured while you watch · Marked rows are never picked for you · Move down keeps them under the ones that fit",
+                    listOf("move" to "Mark and move down", "mark" to "Mark only", "off" to "Ignore"), Prefs.slowMark,
+                ) { Prefs.setSlowMark(ctx, it) }
                 SettingsToggle("Stream details", "Size, bitrate and seeds at the end of a row", Prefs.streamFacts) { Prefs.setStreamFacts(ctx, it) }
                 SettingsToggle("Badges", "The small picture and sound marks under a name", Prefs.streamBadges) { Prefs.setStreamBadges(ctx, it) }
                 SettingsChips(

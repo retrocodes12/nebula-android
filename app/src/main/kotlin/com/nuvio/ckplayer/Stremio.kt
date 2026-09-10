@@ -57,6 +57,7 @@ data class MetaItem(
     val background: String? = null, val logo: String? = null,
     val description: String? = null,
     val genres: List<String> = emptyList(),      // the hero's meta line names the first one
+    val runtime: String? = null,                 // "112 min": a row's size becomes a rate against it (StreamBadges.bps)
 )
 data class SubTrack(val url: String, val lang: String)
 data class StreamItem(
