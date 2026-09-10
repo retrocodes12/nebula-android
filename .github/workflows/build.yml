@@ -49,9 +49,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.59.0.apk
+          cp "$APK" Nebula-1.60.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.59.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.59.0 Nebula-1.59.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.59.0" \
-            --notes "A fix pass. Series whose ids carry a prefix now open the right title: an episode id is <series>:<season>:<episode>, but some catalogues write the series part with a colon of its own, so Continue watching's View details opened a title that did not exist, next episode was dead after resuming from a card, and the Season and Episode labels read nonsense. An add-on's install link can also be pasted straight into the add-ons box — the link those sites hand out was refused before."
+          gh release delete v1.60.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.60.0 Nebula-1.60.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.60.0" \
+            --notes "A new Buffer ahead choice in Settings, under Playback: load one, two or four minutes of video ahead of yourself so a shaky connection stops interrupting you. Auto stays the way it was, and the playback info panel now says what the buffer is aiming for. A longer buffer takes more memory, and it applies from the next video you start."
