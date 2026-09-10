@@ -94,6 +94,7 @@ object Prefs {
     var lastSpeed by mutableStateOf(1.0f); private set
     var quality by mutableStateOf("auto"); private set            // auto / high (start high) / saver (≤720p)
     var maxRes by mutableStateOf(0); private set                  // 0 = no cap, else 720 / 1080 / 1440
+    var buffer by mutableStateOf(0); private set                  // seconds loaded ahead: 0 = the engine's own 50 s, else 60 / 120 / 240
     var audioLang by mutableStateOf(""); private set              // "" = device language
     var subLang by mutableStateOf(""); private set
     var subLang2 by mutableStateOf(""); private set               // "" = none
@@ -158,6 +159,7 @@ object Prefs {
         lastSpeed = p.getFloat("pref_lastspeed", 1.0f)
         quality = p.getString("pref_quality", "auto") ?: "auto"
         maxRes = p.getInt("pref_maxres", 0)
+        buffer = p.getInt("pref_buffer", 0)
         audioLang = p.getString("pref_audiolang", "") ?: ""
         subLang = p.getString("pref_sublang", "") ?: ""
         subLang2 = p.getString("pref_sublang2", "") ?: ""
@@ -219,6 +221,7 @@ object Prefs {
     fun setLastSpeed(ctx: Context, v: Float) { lastSpeed = v; edit(ctx).putFloat("pref_lastspeed", v).apply() }
     fun setQuality(ctx: Context, v: String) { quality = v; edit(ctx).putString("pref_quality", v).apply() }
     fun setMaxRes(ctx: Context, v: Int) { maxRes = v; edit(ctx).putInt("pref_maxres", v).apply() }
+    fun setBuffer(ctx: Context, v: Int) { buffer = v; edit(ctx).putInt("pref_buffer", v).apply() }
     fun setAudioLang(ctx: Context, v: String) { audioLang = v; edit(ctx).putString("pref_audiolang", v).apply() }
     fun setSubLang(ctx: Context, v: String) { subLang = v; edit(ctx).putString("pref_sublang", v).apply() }
     fun setSubLang2(ctx: Context, v: String) { subLang2 = v; edit(ctx).putString("pref_sublang2", v).apply() }
