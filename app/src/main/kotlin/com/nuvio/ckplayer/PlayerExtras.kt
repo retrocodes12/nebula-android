@@ -6,7 +6,9 @@ import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import java.io.File
 import java.util.Locale
@@ -50,6 +52,35 @@ private fun Format.isHdr(): Boolean {
     return t == C.COLOR_TRANSFER_ST2084 || t == C.COLOR_TRANSFER_HLG
 }
 
+/** Settings › Buffer ahead: seconds loaded ahead → seconds gathered again after a stall before playback resumes. */
+internal val BUFFER_STEPS = mapOf(60 to 3, 120 to 4, 240 to 5)
+
+/** 240 → "4 min", 50 → "50 s": the words Settings and the HUD use for a buffer length. */
+internal fun bufferLabel(secs: Int): String = if (secs >= 60) "${secs / 60} min" else "$secs s"
+
+/**
+ * The load control for Settings › Buffer ahead, or null for Auto (the engine's stock 50 s). The stock byte cap
+ * (~140 MB) is what actually ends loading on a high-bitrate stream, so it grows with the seconds — but never past
+ * half of what this process may allocate: the buffer is plain byte arrays on the Java heap, and 4 min of a 4K
+ * stream would want ~600 MB. What does not fit simply buffers less, and the HUD shows what it got.
+ */
+@UnstableApi
+internal fun bufferLoadControl(secs: Int): LoadControl? {
+    val resume = BUFFER_STEPS[secs] ?: return null
+    val stock = DefaultLoadControl.DEFAULT_VIDEO_BUFFER_SIZE.toLong() + DefaultLoadControl.DEFAULT_AUDIO_BUFFER_SIZE
+    val want = stock * secs * 1000 / DefaultLoadControl.DEFAULT_MAX_BUFFER_MS
+    val room = Runtime.getRuntime().maxMemory() / 2
+    val bytes = maxOf(stock, minOf(want, room)).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    return DefaultLoadControl.Builder()
+        .setBufferDurationsMs(
+            secs * 1000, secs * 1000,
+            DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
+            maxOf(DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS, resume * 1000),
+        )
+        .setTargetBufferBytes(bytes)
+        .build()
+}
+
 /** Reads the player once and returns the rows the HUD shows, top to bottom. */
 @UnstableApi
 internal fun playbackInfoRows(
@@ -78,7 +109,8 @@ internal fun playbackInfoRows(
     if (streamBps > 0) rows += InfoRow("Stream", fmtBits(streamBps))
     if (est > 0) rows += InfoRow("Connection", fmtBits(est), warn = streamBps > 0 && est < streamBps * 1.15)
     val buf = exo.totalBufferedDuration / 1000.0
-    rows += InfoRow("Buffer", String.format(Locale.US, "%.1f s ahead", buf), warn = exo.isPlaying && buf < 3)
+    val goal = if (Prefs.buffer > 0) Prefs.buffer else DefaultLoadControl.DEFAULT_MAX_BUFFER_MS / 1000
+    rows += InfoRow("Buffer", String.format(Locale.US, "%.1f s ahead · aims for %s", buf, bufferLabel(goal)), warn = exo.isPlaying && buf < 3)
     exo.videoDecoderCounters?.let { dc ->
         val shown = dc.renderedOutputBufferCount + dc.droppedBufferCount
         if (shown > 0) rows += InfoRow(

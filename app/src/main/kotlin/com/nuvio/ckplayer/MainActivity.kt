@@ -3191,7 +3191,7 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
             .padding(horizontal = 20.dp).padding(top = 20.dp, bottom = 110.dp),
     ) {
         BackBar("Playback", null, onBack)
-        SettingsHeader("PLAYER", if (all) "Gestures, speed, the controls and picture quality" else "Picture quality")
+        SettingsHeader("PLAYER", if (all) "Gestures, speed, the controls, picture quality and the buffer" else "Picture quality and the buffer")
         SettingsGroup {
             // Essential keeps Picture quality alone here; every other row is an Everything row (the brief's E marks)
             if (all) {
@@ -3240,13 +3240,17 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
                 "Auto adapts to your connection · Start high opens at the best rendition · Data saver caps at 720p",
                 listOf("auto" to "Auto", "high" to "Start high", "saver" to "Data saver"),
                 Prefs.quality,
-                divider = all,
             ) { Prefs.setQuality(ctx, it) }
             if (all) SettingsChips(
                 "Resolution cap", "Never fetch a picture taller than this, whatever the connection allows",
                 listOf("0" to "No cap", "720" to "720p", "1080" to "1080p", "1440" to "1440p"), Prefs.maxRes.toString(),
-                divider = false,
             ) { Prefs.setMaxRes(ctx, it.toInt()) }
+            // the one knob for the spinner, so it shows in Essential too; the load control is built with the player (PlayerExtras.kt)
+            SettingsChips(
+                "Buffer ahead", "How much video is loaded ahead of you · Longer rides out a shaky connection but takes more memory · From the next video on",
+                listOf("0" to "Auto", "60" to "1 min", "120" to "2 min", "240" to "4 min"), Prefs.buffer.toString(),
+                divider = false,
+            ) { Prefs.setBuffer(ctx, it.toInt()) }
         }
         SettingsHeader("NEXT EPISODE", "Rolling on, skipping ahead and coming back")
         SettingsGroup {
@@ -4400,6 +4404,8 @@ private fun PlayerScreen(
     val exo = remember {
         ExoPlayer.Builder(context)
             .setBandwidthMeter(bandwidth)
+            // Settings › Buffer ahead: a longer load control when one is chosen; Auto keeps the engine's own (PlayerExtras.kt)
+            .let { b -> bufferLoadControl(Prefs.buffer)?.let { b.setLoadControl(it) } ?: b }
             // one HTTP identity (UA, X-Nebula-Client, cookies) shared with the scrub-frame reader — MediaHttp.kt
             .setMediaSourceFactory(MediaHttp.mediaSourceFactory(context))
             // Without these the app behaves as if it were the only thing on the
