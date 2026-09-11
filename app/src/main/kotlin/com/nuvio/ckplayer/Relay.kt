@@ -115,10 +115,11 @@ internal object Relay {
         resolve(ctx)
     }
 
-    /** The relay stopped answering: forget it for two minutes. */
-    fun drop() {
+    /** The relay stopped answering: forget it for two minutes, and stop the Settings row claiming it is sharing. */
+    fun drop(ctx: Context) {
         live = null; via = null
         deadUntil = System.currentTimeMillis() + 120_000
+        refreshStatus(ctx)
     }
 
     fun url(u: String, l: Live): String = l.base + "/relay?u=" + Uri.encode(u) + "&k=" + l.token

@@ -4743,10 +4743,12 @@ private fun PlayerScreen(
     DisposableEffect(Unit) {
         val l = object : Player.Listener {
             override fun onPlayerError(e: PlaybackException) {
-                // Play through your PC: the sharing computer stopped answering — the same item again, direct, from where it was
+                // Play through your PC: the sharing computer stopped answering — the same item again, direct, from where it
+                // was. Only a reading failure counts (Media3's 2xxx codes): a decoder that cannot play this file fails
+                // the same way direct, and dropping the relay for it would hide the real error behind a silent restart.
                 val item = exo.currentMediaItem
-                if (Relay.via != null && item != null) {
-                    Relay.drop(); viaRelay = null
+                if (Relay.via != null && item != null && e.errorCode in 2000..2999) {
+                    Relay.drop(context); viaRelay = null
                     val pos = exo.currentPosition
                     if (!exo.isCurrentMediaItemLive && pos > 0) exo.setMediaItem(item, pos) else exo.setMediaItem(item)
                     exo.prepare()
