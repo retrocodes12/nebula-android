@@ -10,6 +10,7 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.drm.DefaultDrmSessionManagerProvider
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -69,7 +70,8 @@ internal object MediaHttp {
         val quick = DefaultDataSource.Factory(ctx, http)                  // file:// subtitles keep working
         val patient = DefaultDataSource.Factory(ctx, httpFactory(ctx).setReadTimeoutMs(P2P_READ_MS))
         return DefaultMediaSourceFactory(ctx)
-            .setDataSourceFactory { Patient(quick.createDataSource(), patient.createDataSource()) }
+            // Play through your PC (Relay.kt) sits outside: while a TV play uses a relay every address is rewritten to it first
+            .setDataSourceFactory { ResolvingDataSource(Patient(quick.createDataSource(), patient.createDataSource()), Relay.resolver()) }
             .setDrmSessionManagerProvider(drm)
     }
 

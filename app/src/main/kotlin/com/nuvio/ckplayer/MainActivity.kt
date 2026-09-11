@@ -3269,8 +3269,18 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
             SettingsChips(
                 "Buffer ahead", "How much video is loaded ahead of you · Longer rides out a shaky connection but takes more memory · From the next video on",
                 listOf("0" to "Auto", "60" to "1 min", "120" to "2 min", "240" to "4 min"), Prefs.buffer.toString(),
-                divider = false,
+                divider = Account.isTv(ctx),
             ) { Prefs.setBuffer(ctx, it.toInt()) }
+            // Play through your PC (Relay.kt): the TV only — a computer on the network holds the video for it
+            if (Account.isTv(ctx)) {
+                LaunchedEffect(Prefs.relay) { Relay.refresh(ctx) }
+                SettingsChips(
+                    "Play through your PC",
+                    Relay.status.ifEmpty { "A computer on your network that is sharing fetches and holds the video for this TV — far more than the TV's own memory can" },
+                    listOf("auto" to "Auto", "off" to "Off"), Prefs.relay,
+                    divider = false,
+                ) { Prefs.setRelay(ctx, it) }
+            }
         }
         SettingsHeader("NEXT EPISODE", "Rolling on, skipping ahead and coming back")
         SettingsGroup {
@@ -4419,6 +4429,7 @@ private fun PlayerScreen(
     var pausedSince by remember { mutableStateOf(0L) }
     var pinfoOn by remember { mutableStateOf(false) }
     var infoRows by remember { mutableStateOf<List<InfoRow>>(emptyList()) }
+    var viaRelay by remember { mutableStateOf<Relay.Live?>(null) }             // Play through your PC: the sharing computer this play goes through
     var subOffsetMs by remember { mutableStateOf(0L) }
     var liveOffMs by remember { mutableStateOf(0L) }                            // behind the live edge, for the left pill
     var subBaseFile by remember { mutableStateOf<Pair<Uri, String>?>(null) }   // unshifted add-on subtitle, mime
@@ -4621,6 +4632,12 @@ private fun PlayerScreen(
         upnextOpen = false; upnextCounting = false; upnextDismissed = false; stillAsk = false; subForced = false
         // and without the last one's add-on subtitle: its file and timing must not be re-fed into this item
         activeAddonSub = null; subBaseFile = null; subOffsetMs = 0L; subAppliedMs = 0L
+        // Play through your PC (Relay.kt, the TV only): the sharing computer, when one answers — settled before the item is set
+        Relay.via = null; viaRelay = null
+        if (url.startsWith("http://") || url.startsWith("https://")) {
+            val l = Relay.resolve(context)
+            if (l != null) { Relay.via = l; viaRelay = l }
+        }
         runCatching {
             val b = MediaItem.Builder().setUri(url)
             when {
@@ -4725,7 +4742,19 @@ private fun PlayerScreen(
 
     DisposableEffect(Unit) {
         val l = object : Player.Listener {
-            override fun onPlayerError(e: PlaybackException) { error = "Playback error ${e.errorCodeName} (${e.errorCode})" }
+            override fun onPlayerError(e: PlaybackException) {
+                // Play through your PC: the sharing computer stopped answering — the same item again, direct, from where it was
+                val item = exo.currentMediaItem
+                if (Relay.via != null && item != null) {
+                    Relay.drop(); viaRelay = null
+                    val pos = exo.currentPosition
+                    if (!exo.isCurrentMediaItemLive && pos > 0) exo.setMediaItem(item, pos) else exo.setMediaItem(item)
+                    exo.prepare()
+                    Toasts.show("Your PC stopped answering — playing direct")
+                    return
+                }
+                error = "Playback error ${e.errorCodeName} (${e.errorCode})"
+            }
             override fun onTracksChanged(tracks: Tracks) {
                 var v = 0
                 var au = 0
@@ -4794,6 +4823,7 @@ private fun PlayerScreen(
             runCatching { snapshotProgress() }
             runCatching { Social.publishSoon(context) }   // friends see the freshly watched title
             exo.removeListener(l); runCatching { session?.release() }; exo.release()
+            Relay.via = null            // the next play asks again
             P2p.leave(context)          // engine off, download cleared — on its own thread, stopping it blocks
             if (activePipPlayer.value === exo) activePipPlayer.value = null
             // Clears (API 31+) auto-enter so backing out of the player can't PiP the browse UI.
@@ -4875,6 +4905,7 @@ private fun PlayerScreen(
                 ),
                 p2pLine = if (P2p.isLocal(url)) P2p.line() else null,
                 stalls = stallWatch.total,
+                viaLine = viaRelay?.let { "${it.name} on your network" },
             )
         }
     }

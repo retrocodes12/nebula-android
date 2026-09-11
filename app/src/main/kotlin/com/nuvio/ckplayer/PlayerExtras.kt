@@ -90,6 +90,7 @@ internal fun playbackInfoRows(
     scrubStatus: String? = null,
     p2pLine: String? = null,
     stalls: Int = 0,
+    viaLine: String? = null,
 ): List<InfoRow> {
     val rows = mutableListOf<InfoRow>()
     val vf = exo.videoFormat
@@ -127,6 +128,7 @@ internal fun playbackInfoRows(
     val speed = exo.playbackParameters.speed
     if (speed != 1f) rows += InfoRow("Speed", speed.toString().trimEnd('0').trimEnd('.') + "×")
     if (exo.currentMediaItem?.localConfiguration?.drmConfiguration != null) rows += InfoRow("Encryption", "Decrypted on device")
+    if (viaLine != null) rows += InfoRow("Via", viaLine)                    // Play through your PC: the sharing computer
     if (subOffsetMs != 0L) rows += InfoRow("Subtitle timing", fmtSubOffset(subOffsetMs))
     // so a screenshot of the panel says why the scrub tip had no picture
     if (scrubStatus != null) rows += InfoRow("Preview frames", scrubStatus, warn = scrubStatus.startsWith(ScrubPreview.UNAVAILABLE))
