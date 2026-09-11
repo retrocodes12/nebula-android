@@ -49,9 +49,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.60.0.apk
+          cp "$APK" Nebula-1.61.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.60.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.60.0 Nebula-1.60.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.60.0" \
-            --notes "A new Buffer ahead choice in Settings, under Playback: load one, two or four minutes of video ahead of yourself so a shaky connection stops interrupting you. Auto stays the way it was, and the playback info panel now says what the buffer is aiming for. A longer buffer takes more memory, and it applies from the next video you start."
+          gh release delete v1.61.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.61.0 Nebula-1.61.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.61.0" \
+            --notes "When a source keeps stalling, Nebula now offers a switch: after three stalls in a minute and a half a button appears over the controls naming another source for the same thing, and one press moves you to it at the same second. Streams your connection cannot carry are marked, moved down the list and no longer chosen for you, and you can turn that off in Settings under Streams. On a TV there is also Play through your PC: turn Share with your TV on in the desktop app, sign both into the same profile, and the TV plays through that computer, which holds far more video ahead than the TV can."
