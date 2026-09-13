@@ -518,6 +518,7 @@ private class HomeUiState {
 
 /** Search tab state, hoisted for the same reason. */
 private class SearchUiState {
+    val discover = DiscoverUiState()
     var query by mutableStateOf("")
     var submitted by mutableStateOf("")
     var sections by mutableStateOf<List<CatRow>>(emptyList())
@@ -1966,7 +1967,7 @@ internal fun SkeletonRow(leadingWidth: Dp, leadingHeight: Dp, circle: Boolean) {
 
 /** Placeholder shaped like a poster/landscape card. */
 @Composable
-private fun SkeletonCell(modifier: Modifier = Modifier) {
+internal fun SkeletonCell(modifier: Modifier = Modifier) {
     Column(modifier) {
         SkelBox(Modifier.fillMaxWidth().aspectRatio(16f / 9f), RoundedCornerShape(12.dp))
         SkelBox(Modifier.padding(top = 8.dp).fillMaxWidth(0.7f).height(12.dp))
@@ -2580,11 +2581,16 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
             }
             st.submitted.isNotBlank() && st.sections.isEmpty() ->
                 Text("No matches for “${st.submitted.trim()}”.", color = MutedC, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
-            st.submitted.isBlank() -> SearchIdle(
-                ctx, remember { activeAddons(ctx) },
-                onRecent = { q -> st.query = q; st.submitted = q; RecentSearches.note(ctx, q) },
-                onAddon = onAddon,
-            )
+            st.submitted.isBlank() -> DiscoverSection(
+                ctx, st.discover, Modifier.weight(1f),
+                onOpen = onOpen,
+            ) {
+                SearchIdle(
+                    ctx, remember { activeAddons(ctx) },
+                    onRecent = { q -> st.query = q; st.submitted = q; RecentSearches.note(ctx, q) },
+                    onAddon = onAddon,
+                )
+            }
             else -> LazyColumn(state = st.listState, contentPadding = PaddingValues(bottom = 104.dp)) {
                 items(st.sections, key = { it.addon.manifestUrl + "/" + it.catalog.id }) { r ->
                     Column {

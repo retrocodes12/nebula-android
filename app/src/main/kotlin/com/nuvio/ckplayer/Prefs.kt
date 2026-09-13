@@ -53,6 +53,10 @@ object Prefs {
 
     // ---- the settings console itself ----
     var setMode by mutableStateOf("essential"); private set       // essential (the common rows) / all
+    // ---- Search › Discover: the last picked type / catalog key / genre, so the grid reopens where it was ----
+    var discType by mutableStateOf(""); private set
+    var discCatalog by mutableStateOf(""); private set               // manifestUrl|type|id, "" = first available
+    var discGenre by mutableStateOf(""); private set                 // "" = All genres
     val everything: Boolean get() = setMode == "all"
 
     // ---- appearance ----
@@ -193,11 +197,18 @@ object Prefs {
         autoPick = p.getString("pref_autopick", null) ?: (if (p.getBoolean("pref_autostream", false)) "last" else "off")
         pickWait = p.getInt("pref_pickwait", 6)
         welcome = p.getBoolean("pref_welcome", true)
+        discType = p.getString("pref_disctype", "") ?: ""
+        discCatalog = p.getString("pref_disccat", "") ?: ""
+        discGenre = p.getString("pref_discgenre", "") ?: ""
     }
 
     private fun edit(ctx: Context) = ctx.getSharedPreferences(P, Context.MODE_PRIVATE).edit()
 
     fun setSetMode(ctx: Context, v: String) { setMode = v; edit(ctx).putString("pref_setmode", v).apply() }
+    fun setDiscover(ctx: Context, type: String, catalog: String, genre: String) {
+        discType = type; discCatalog = catalog; discGenre = genre
+        edit(ctx).putString("pref_disctype", type).putString("pref_disccat", catalog).putString("pref_discgenre", genre).apply()
+    }
     fun setAccent(ctx: Context, v: String) { accent = v; edit(ctx).putString("pref_accent", v).apply() }
     fun setSurface(ctx: Context, v: String) { surface = v; edit(ctx).putString("pref_surface", v).apply() }
     fun setTextSize(ctx: Context, v: String) { textSize = v; edit(ctx).putString("pref_textsize", v).apply() }
