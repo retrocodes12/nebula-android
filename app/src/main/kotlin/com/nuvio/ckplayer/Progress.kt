@@ -141,8 +141,11 @@ object Progress {
 
     /** The twenty most recent things worth resuming — newest first, or A to Z when Settings › Home says so. */
     fun continueList(ctx: Context): List<ProgressRec> {
+        // what was opened from an add-on switched off in the list stays out — switched back on, it returns
+        val off = loadAddons(ctx).filterNot { it.enabled }.map { it.manifestUrl }.toSet()
         val recent = load(ctx).values
             .filter { !it.done && !it.dismissed && it.pos >= MIN_POS_MS && it.dur > 0 && it.pos <= it.dur - END_GAP_MS }
+            .filter { it.addonUrl.isEmpty() || it.addonUrl !in off }
             .sortedByDescending { it.at }
             .take(20)
         return if (Prefs.cwSort == "az") recent.sortedBy { it.name.lowercase() } else recent

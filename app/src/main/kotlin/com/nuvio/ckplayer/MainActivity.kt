@@ -992,7 +992,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 version = addonsVersion,
                                 onBack = { pop() },
                                 onOpen = { push(Screen.Catalog(it)) },
-                                onAddonsChanged = { manifestCache.clear(); homeState.invalidate() },
+                                onAddonsChanged = { manifestCache.clear(); homeState.invalidate(); homeState.invalidateContinue() },   // an add-on off takes its titles out of Continue watching
                             )
                             is Screen.Settings -> SettingsScreen(
                                 onAddons = { push(Screen.Addons) },
