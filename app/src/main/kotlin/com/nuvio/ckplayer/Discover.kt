@@ -21,6 +21,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -109,7 +113,14 @@ private fun PickPill(label: String, onClick: () -> Unit) {
             .padding(start = 15.dp, end = 10.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, color = TextC, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        // One line, always: a Row hands the last pill whatever width is left, and a
+        // wrapping Text then stacked "All genres" a syllable per line. Long catalog
+        // names end in an ellipsis instead; the row scrolls when three don't fit.
+        Text(
+            label, color = TextC, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+            maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 200.dp),
+        )
         Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = MutedC, modifier = Modifier.padding(start = 2.dp).size(18.dp))
     }
 }
@@ -260,7 +271,10 @@ internal fun DiscoverSection(
                 if (st.options.isNotEmpty() && current != null) {
                     Text("Discover", color = TextC, fontSize = 28.sp, fontFamily = Sans, fontWeight = FontWeight.Bold, letterSpacing = (-0.8).sp,
                         modifier = Modifier.padding(top = 30.dp, bottom = 12.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         PickPill(typeLabel(current.catalog.type)) { picker = "type" }
                         PickPill(current.catalog.name.ifEmpty { "Catalog" }) { picker = "catalog" }
                         if (current.catalog.genres.isNotEmpty()) PickPill(st.genre ?: "All genres") { picker = "genre" }
