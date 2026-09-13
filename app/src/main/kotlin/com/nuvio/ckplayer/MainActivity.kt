@@ -128,6 +128,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -3349,6 +3350,7 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
         SettingsGroup {
             SettingsRow(Icons.Filled.ClosedCaption, "Subtitle style", "Size, colour, background, edge, font, position and bold", false, onSubtitles)
         }
+        MdblistSettings()
     }
 }
 
@@ -4600,6 +4602,32 @@ private fun PlayerScreen(
         Toasts.show(when (mode) { "" -> "Sleep timer off"; "ep" -> "Stopping when this episode ends"; else -> "Pausing in ${sleepText(minutes * 60_000L)}" })
     }
 
+    // MDBList tracking (Mdblist.kt). The ids are re-read after every composition: an episode hop reuses this
+    // player, and the listener below outlives the parameters it was built with.
+    val mdbl = remember { MdblSession() }
+    val appVersion = remember {
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty()
+    }
+    fun mdblPct(): Double? {
+        val d = exo.duration
+        if (exo.isCurrentMediaItemLive || d == C.TIME_UNSET || d <= 0) return null
+        return exo.currentPosition.coerceAtLeast(0L) * 100.0 / d
+    }
+    fun mdblSend(event: String, given: Double? = null) {
+        val pct = given ?: mdblPct() ?: return
+        if (!Mdblist.canTrack(mdbl.type, mdbl.id)) return
+        mdbl.sentAt = System.currentTimeMillis(); mdbl.sentPos = exo.currentPosition; mdbl.lastPct = pct
+        Mdblist.scrobble(context, event, mdbl.type, mdbl.id, pct, appVersion)
+    }
+    SideEffect {
+        if (mdbl.id != contentId || mdbl.type != contentType) {
+            // the player moved on to another item in place: the old one's last word first
+            if (mdbl.started && mdbl.lastPct > 0) Mdblist.scrobble(context, "stop", mdbl.type, mdbl.id, mdbl.lastPct, appVersion)
+            mdbl.type = contentType; mdbl.id = contentId
+            mdbl.started = false; mdbl.on = false; mdbl.seekAt = 0L; mdbl.lastPct = -1.0
+        }
+    }
+
     /** Write the current position into the store. Live streams have nothing to resume. */
     fun snapshotProgress(done: Boolean = false) {
         val id = contentId ?: return
@@ -4712,6 +4740,16 @@ private fun PlayerScreen(
         while (true) {
             delay(5000)
             if (exo.isPlaying) snapshotProgress()
+            // MDBList: a real jump moves the resume point (a run of remote steps adds up, a party's drift
+            // corrections do not), and a long stretch of play refreshes it
+            if (exo.isPlaying && mdbl.on) {
+                mdblPct()?.let { mdbl.lastPct = it }
+                val now = System.currentTimeMillis()
+                if (mdbl.seekAt > 0 && now - mdbl.seekAt >= 2500) {
+                    mdbl.seekAt = 0L
+                    if (kotlin.math.abs(exo.currentPosition - (mdbl.sentPos + (now - mdbl.sentAt))) >= 30_000) mdblSend("start")
+                } else if (now - mdbl.sentAt >= Mdblist.BEAT_MS) mdblSend("start")
+            }
         }
     }
 
@@ -4795,6 +4833,11 @@ private fun PlayerScreen(
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 (activity as? MainActivity)?.refreshPipParams()
                 if (partyUi.active() && partyUi.isHost) hostDirty = true
+                // MDBList: playing → start; a real pause (not a buffering blip, not the end) → pause
+                if (isPlaying && !mdbl.on) { mdbl.on = true; mdbl.started = true; mdblSend("start") }
+                else if (!isPlaying && mdbl.on && !exo.playWhenReady && exo.playbackState != Player.STATE_ENDED) {
+                    mdbl.on = false; mdbl.seekAt = 0L; mdblSend("pause")
+                }
             }
             override fun onVideoSizeChanged(videoSize: VideoSize) {
                 (activity as? MainActivity)?.refreshPipParams()
@@ -4802,6 +4845,7 @@ private fun PlayerScreen(
             }
             override fun onPositionDiscontinuity(old: Player.PositionInfo, new: Player.PositionInfo, reason: Int) {
                 if (reason == Player.DISCONTINUITY_REASON_SEEK) stallWatch.seekAt = System.currentTimeMillis()
+                if (reason == Player.DISCONTINUITY_REASON_SEEK && mdbl.on) mdbl.seekAt = System.currentTimeMillis()
                 if (reason == Player.DISCONTINUITY_REASON_SEEK && partyUi.active() && partyUi.isHost) hostDirty = true
             }
             override fun onPlaybackStateChanged(state: Int) {
@@ -4810,6 +4854,7 @@ private fun PlayerScreen(
                 if (state == Player.STATE_BUFFERING && exo.playWhenReady && stallWatch.note()) offerSwap()
                 if (state != Player.STATE_ENDED) return
                 snapshotProgress(done = true)          // ticks it off the episode list
+                if (mdbl.started) { mdbl.started = false; mdbl.on = false; mdblSend("stop", 100.0) }
                 if (sleepMode == "ep") {
                     // the night ends here: no up-next, the board says why
                     sleepMode = ""; sleepAt = 0L; sleepFired = true; sleepRender()
@@ -4829,6 +4874,10 @@ private fun PlayerScreen(
         onDispose {
             // last word on the resume point before the player goes away
             runCatching { snapshotProgress() }
+            runCatching {                                  // MDBList hears where it was left
+                val p = mdblPct()
+                if (mdbl.started && p != null && p > 0) { mdbl.started = false; mdblSend("stop", p) }
+            }
             runCatching { Social.publishSoon(context) }   // friends see the freshly watched title
             exo.removeListener(l); runCatching { session?.release() }; exo.release()
             Relay.via = null            // the next play asks again

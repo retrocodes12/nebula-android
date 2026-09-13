@@ -42,7 +42,7 @@ import java.util.concurrent.TimeUnit
 object Cloud {
     private const val BASE = "https://play.rifflehq.in/cloud"
     private const val PREFS = "ckplayer"
-    private val SYNC_KEYS = listOf("addons", "progress", "library", "sub_style", "ratings")
+    private val SYNC_KEYS = listOf("addons", "progress", "library", "sub_style", "ratings", "mdblist")
     private val JSON_MT = "application/json".toMediaType()
 
     private val http = OkHttpClient.Builder()
@@ -243,6 +243,7 @@ object Cloud {
         "library" -> Library.all(ctx).length() > 0
         "ratings" -> Ratings.all(ctx).length() > 0
         "sub_style" -> SubStyle.at(ctx) > 0
+        "mdblist" -> Mdblist.at(ctx) > 0
         else -> false
     }
 
@@ -288,6 +289,7 @@ object Cloud {
         "library" -> mergeLibrary(ctx, remote)
         "ratings" -> mergeRatings(ctx, remote)
         "sub_style" -> mergeSubStyle(ctx, remote)
+        "mdblist" -> Mdblist.merge(ctx, remote)
         else -> false to false
     }
 
@@ -336,6 +338,7 @@ object Cloud {
             SubStyle.get(ctx).forEach { (k, v) -> style.put(k, v) }
             JSONObject().put("style", style).put("at", SubStyle.at(ctx)).toString()
         }
+        "mdblist" -> Mdblist.doc(ctx)
         else -> null
     }
 
