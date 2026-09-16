@@ -69,7 +69,7 @@ import kotlin.math.roundToInt
  * player's own HTTP identity (MediaHttp.kt: same User-Agent, headers and cookies ExoPlayer sends),
  * so the host sees one client — and pulls one small frame per 10-second bucket, on the IO
  * dispatcher, one at a time: the latest request wins and everything asked for in between is
- * dropped. Frames live in a 96-entry LRU; `release()` on player dispose closes the reader. Only
+ * dropped. Frames live in a 200-entry LRU; `release()` on player dispose closes the reader. Only
  * plain http(s) files qualify (`eligible`): manifests, encrypted and live streams get the bubble
  * with no picture. [status] says in words what happened ("Ready", "Waiting", "Unavailable — …")
  * for the playback Info panel. Nothing here ever touches the player.
@@ -87,13 +87,15 @@ import kotlin.math.roundToInt
 internal class ScrubPreview(private val url: String, ctx: Context) {
     companion object {
         const val BUCKET_MS = 10_000L
-        private const val CAP = 96
+        private const val CAP = 200                 // 256×144 RGB 565 = 74 KB each: ~15 MB full
         private const val NEAR = 6                  // a cached frame within a minute stands in until the right one lands
-        private const val SWEEP_MAX = 40            // frames the background sweep may pull
-        private const val SWEEP_GAP_MS = 30_000L    // never closer than this — a short file gets fewer
+        private const val SWEEP_MAX = 120           // frames the background sweep may pull (a 2 h film: one a minute)
+        private const val SWEEP_GAP_MS = 20_000L    // never closer than this — a short file gets fewer
         private const val SWEEP_EDGE = 0.03f        // skip the first and last 3 %: logos and credits
-        private const val SWEEP_BUDGET = 48L * 1024 * 1024   // bytes the sweep may cost; a scrub itself is never budgeted
-        private const val SWEEP_PAUSE_MS = 250L     // between swept frames: the film's own download comes first
+        private const val SWEEP_BUDGET = 128L * 1024 * 1024  // bytes the sweep may cost (Wi-Fi only); a scrub itself is never budgeted
+        private const val SWEEP_PAUSE_MS = 120L     // between swept frames: the film's own download comes first
+        private const val REST_MS = 160L            // a finger still this long wants its exact frame; a moving one gets neighbours
+        private const val NEIGHBOUR_MS = 5 * 60_000L // how far around a moving finger the plan is pulled forward
         const val WAITING = "Waiting"
         const val READY = "Ready"
         const val UNAVAILABLE = "Unavailable — "
@@ -134,6 +136,7 @@ internal class ScrubPreview(private val url: String, ctx: Context) {
     private var near = NEAR                                 // how far a stand-in may be, in buckets (under lock)
     @Volatile private var busy = false                      // the player is buffering: the sweep waits
     @Volatile private var wantedMs = -1L                    // where the finger / ghost is now; -1 = nothing wanted
+    @Volatile private var wantedAt = 0L                     // when it last moved: the exact frame waits for it to rest
     @Volatile private var dead = false                      // unreadable file, or released: stay quiet for good
     @Volatile private var reason: String? = null            // why it is dead, in words (null = released or alive)
     private val frameState = mutableStateOf<Bitmap?>(null)
@@ -149,6 +152,7 @@ internal class ScrubPreview(private val url: String, ctx: Context) {
     fun request(posMs: Long) {
         if (dead) return
         val ms = posMs.coerceAtLeast(0L)
+        if (ms != wantedMs) wantedAt = System.currentTimeMillis()
         wantedMs = ms
         val b = ms / BUCKET_MS
         val start: Boolean
@@ -223,19 +227,38 @@ internal class ScrubPreview(private val url: String, ctx: Context) {
         return pick
     }
 
-    /** A position to fetch: what the finger wants, else the sweep's next; [swept] says which. */
-    private class Want(val ms: Long, val swept: Boolean)
+    /** A position to fetch: [paced] = a background sweep frame (pause before it), else the finger's business. */
+    private class Want(val ms: Long, val paced: Boolean)
+
+    /** Under the lock: the planned position nearest [ms] within [NEIGHBOUR_MS] and not yet covered, taken out of the plan. */
+    private fun takeNear(ms: Long): Long? {
+        var pick = -1; var dist = NEIGHBOUR_MS + 1
+        for (i in sweep.indices) {
+            val d = abs(sweep[i] - ms)
+            if (d < dist) { dist = d; pick = i }
+        }
+        if (pick < 0) return null
+        val p = sweep.removeAt(pick)
+        val pb = p / BUCKET_MS
+        return if (!cache.containsKey(pb) && pb !in misses) p else takeNear(ms)
+    }
 
     /**
      * Under the lock: what to fetch next, or null when there is nothing to do — the worker then exits.
-     * The finger always comes first; the sweep runs only while the player is not buffering and
-     * the budget holds, and drops positions the cache already covers.
+     * A finger at REST gets its exact frame; a finger still MOVING gets the plan pulled forward around
+     * it instead (an exact frame for a place it has already left would land stale, and every one it
+     * waited on was a second the tip showed nothing new — the Founder's "kind of slow", 09-17); then
+     * the sweep, only while the player is not buffering and the budget holds, skipping covered buckets.
      */
     private fun nextWant(): Want? = synchronized(lock) {
         val want = wantedMs
         val b = want / BUCKET_MS
         if (dead) { running = false; return@synchronized null }
-        if (want >= 0 && !cache.containsKey(b) && b !in misses) return@synchronized Want(want, false)
+        if (want >= 0 && !cache.containsKey(b) && b !in misses) {
+            if (System.currentTimeMillis() - wantedAt >= REST_MS) return@synchronized Want(want, false)
+            takeNear(want)?.let { return@synchronized Want(it, false) }
+            return@synchronized Want(want, false)
+        }
         if (!busy && (source?.bytesFetched ?: 0L) < SWEEP_BUDGET) {
             while (sweep.isNotEmpty()) {
                 val p = sweep.removeFirst()
@@ -252,7 +275,7 @@ internal class ScrubPreview(private val url: String, ctx: Context) {
     private suspend fun work() {
         while (true) {
             val want = nextWant() ?: break
-            if (want.swept) delay(SWEEP_PAUSE_MS)
+            if (want.paced) delay(SWEEP_PAUSE_MS)
             val b = want.ms / BUCKET_MS
             val bmp = fetch(want.ms)
             val decoded: Boolean
