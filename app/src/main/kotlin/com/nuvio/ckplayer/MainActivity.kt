@@ -3473,7 +3473,11 @@ private fun DetailScreen(
         metaTried = true
     }
 
-    val resume = remember(ck, full) {
+    // bumped whenever an episode is marked by hand, so everything that reads the
+    // progress store on this page is re-read — the hero button's LABEL above all,
+    // which otherwise goes on offering "Resume S1E3" for an episode just ticked off
+    var marks by remember(ck) { mutableIntStateOf(0) }
+    val resume = remember(ck, full, marks) {
         if (item.type == "series") seriesResumeRec(ctx, item.id)
         else Progress.get(ctx, item.type, item.id)?.takeIf {
             !it.done && !it.dismissed && it.pos >= Progress.MIN_POS_MS && it.dur > 0 && it.pos <= it.dur - Progress.END_GAP_MS
@@ -3613,8 +3617,11 @@ private fun DetailScreen(
                             if (r.addonUrl.isEmpty()) r.copy(addonUrl = addon.manifestUrl) else r
                         )
                         item.type == "series" -> {
-                            val first = episodes.sortedWith(compareBy({ it.season == 0 }, { it.season }, { it.episode ?: 0 })).firstOrNull()
-                            if (first != null) onPlayEpisode(first) else onEpisodes()
+                            // nothing half-watched, but episodes may still be ticked off —
+                            // continue the show from up next rather than restarting it at episode 1
+                            val go = seriesUpNext(ctx, item.type, episodes)
+                                ?: episodes.sortedWith(compareBy({ it.season == 0 }, { it.season }, { it.episode ?: 0 })).firstOrNull()
+                            if (go != null) onPlayEpisode(go) else onEpisodes()
                         }
                         else -> onPlayMovie()
                     }
@@ -3673,7 +3680,7 @@ private fun DetailScreen(
                     itemType = item.type, ep = ep, upNext = ep.id == upNextId, first = i == 0,
                     onClick = { onPlayEpisode(ep) },
                     // a mark moves "Up next"; the season on screen deliberately stays put
-                    onMarked = { upNextId = seriesUpNext(ctx, item.type, episodes)?.id },
+                    onMarked = { marks++; upNextId = seriesUpNext(ctx, item.type, episodes)?.id },
                 )
             }
             item { Spacer(Modifier.height(24.dp)) }
@@ -4053,8 +4060,13 @@ private fun EpisodesScreen(
         LaunchedEffect(current, upNextId, eps.size) {
             val k = current to eps.size
             if (scrolledFor == k) return@LaunchedEffect
+            if (eps.isEmpty()) return@LaunchedEffect          // still filling — do not claim the key
+            scrolledFor = k
+            // a season with no up-next in it starts at the top: one LazyListState is
+            // shared across seasons, so leaving it alone lands the next season
+            // wherever the last one was scrolled to
             val i = eps.indexOfFirst { it.id == upNextId }
-            if (i >= 0) { scrolledFor = k; listState.scrollToItem(maxOf(0, i - 1)) }
+            listState.scrollToItem(if (i >= 0) maxOf(0, i - 1) else 0)
         }
         LazyColumn(Modifier.fillMaxWidth(), state = listState, contentPadding = PaddingValues(bottom = 20.dp)) {
             if (episodes.isEmpty()) items(6) { SkeletonRow(112.dp, 63.dp, circle = false) }
