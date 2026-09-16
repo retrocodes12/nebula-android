@@ -39,6 +39,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -218,8 +219,34 @@ import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
 
+/**
+ * Is the remote's OK physically down right now? The Activity's own dispatch sees
+ * the press that starts a long-press regardless of what is focused, which is the
+ * thing a Compose key modifier cannot do — it only ever sees keys aimed at a
+ * focused descendant, and a sheet that has just opened has nothing focused yet.
+ * [CardSheet] reads this to know whether the press that opened it is still held.
+ */
+internal object KeyWatch {
+    var okDown by mutableStateOf(false)
+        private set
+
+    fun note(event: android.view.KeyEvent) {
+        val ok = event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
+            event.keyCode == android.view.KeyEvent.KEYCODE_ENTER ||
+            event.keyCode == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER
+        if (!ok) return
+        if (event.action == android.view.KeyEvent.ACTION_DOWN) okDown = true
+        else if (event.action == android.view.KeyEvent.ACTION_UP) okDown = false
+    }
+}
+
 class MainActivity : ComponentActivity() {
     private val pendingPlay = mutableStateOf<PlayReq?>(null)
+
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        KeyWatch.note(event)
+        return super.dispatchKeyEvent(event)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -548,9 +575,11 @@ private fun seriesCursor(ctx: Context, type: String, videos: List<Episode>): Ser
     if (i > last) return SeriesCursor(null, flat[last])
     return SeriesCursor(flat[i], flat[i])
 }
+
 /** Just the ring target — null when the show is finished or nothing is started. */
 private fun seriesUpNext(ctx: Context, type: String, videos: List<Episode>): Episode? =
     seriesCursor(ctx, type, videos)?.upNext
+
 /** "Resume S2E4" from the id tail past the series prefix; kitsu-style single
     tails become "Resume E3"; anything else is plain "Resume". */
 private fun resumeLabel(seriesId: String, epId: String): String {
@@ -1362,19 +1391,26 @@ internal fun CardSheet(
     val shown = remember { MutableTransitionState(false) }
     var closing by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { shown.targetState = true }
-    // a remote lands on the first row, the way SubtitlesPanel does it; a finger
-    // needs no focus, and a pre-lit row on a phone reads as already chosen
     val firstFocus = remember { FocusRequester() }
+    val sheetFocus = remember { FocusRequester() }
     val keys = LocalInputModeManager.current.inputMode == InputMode.Keyboard
-    LaunchedEffect(shown.currentState) {
-        if (keys && shown.currentState) runCatching { firstFocus.requestFocus() }
-    }
     // The OK that opened this sheet is usually STILL DOWN — a long-press fires at
-    // ~500 ms and the sheet settles ~800 ms in, while the remote goes on sending
-    // ACTION_DOWN. Compose's own "did this node see the press" guard is per-node and
-    // a repeat registers a fresh press on the row we just focused, so the release
-    // would fire it. Nothing counts until that press has been let go.
-    var armed by remember { mutableStateOf(!keys) }
+    // ~500 ms and the remote goes on sending ACTION_DOWN. A row activates on the
+    // release, and Compose's "did this node see the press" guard is per-node, so a
+    // repeat registers a fresh press on whatever we just focused and the release
+    // fires it. Nothing counts until that press has been let go.
+    //
+    // Two things make that safe. The sheet takes focus ONTO ITSELF first, so the
+    // release cannot be missed for want of a focused descendant — that is the bug
+    // the first attempt had, and it left a viewer who let go on the haptic with a
+    // sheet that never armed. And the opening state comes from [KeyWatch], which
+    // sees the press in the Activity's own dispatch whatever is focused.
+    var armed by remember { mutableStateOf(!keys || !KeyWatch.okDown) }
+    LaunchedEffect(Unit) { if (!armed) runCatching { sheetFocus.requestFocus() } }
+    // a finger needs no focus, and a pre-lit row on a phone reads as already chosen
+    LaunchedEffect(armed, shown.currentState) {
+        if (keys && armed && shown.currentState) runCatching { firstFocus.requestFocus() }
+    }
     // let the slide-out finish before the dialog goes, so it doesn't blink away
     LaunchedEffect(closing, shown.isIdle) {
         if (closing && shown.isIdle && !shown.currentState) onDismiss()
@@ -1408,11 +1444,16 @@ internal fun CardSheet(
                     Modifier.fillMaxWidth()
                         // swallow every OK belonging to the press that opened us —
                         // its release is what arms the sheet (see `armed` above)
+                        .focusRequester(sheetFocus)
+                        .focusable()
                         .onPreviewKeyEvent { ev ->
+                            if (armed) return@onPreviewKeyEvent false
                             val ok = ev.key == Key.DirectionCenter || ev.key == Key.Enter || ev.key == Key.NumPadEnter
                             if (!ok) return@onPreviewKeyEvent false
-                            if (ev.type == KeyEventType.KeyUp && !armed) { armed = true; return@onPreviewKeyEvent true }
-                            !armed
+                            // swallow every OK belonging to the press that opened us;
+                            // its release is what arms the sheet
+                            if (ev.type == KeyEventType.KeyUp) armed = true
+                            true
                         }
                         .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                         .background(Color(0xFF141418))
