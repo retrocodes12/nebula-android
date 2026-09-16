@@ -161,10 +161,11 @@ internal fun PickSheet(title: String, options: List<Pair<String, String>>, curre
                             val interaction = remember { MutableInteractionSource() }
                             val focused by interaction.collectIsFocusedAsState()
                             Row(
-                                Modifier.fillMaxWidth()
-                                    .background(if (focused) Color(0x14FFFFFF) else Color.Transparent)
+                                Modifier.fillMaxWidth().padding(horizontal = 8.dp)
+                                    .background(if (focused) Color(0x14FFFFFF) else Color.Transparent, RoundedCornerShape(10.dp))
+                                    .border(2.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(10.dp))
                                     .clickable(interactionSource = interaction, indication = null) { close(value) }
-                                    .padding(horizontal = 22.dp, vertical = 14.dp),
+                                    .padding(horizontal = 14.dp, vertical = 14.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(label, color = if (on) TextC else MutedC, fontSize = 15.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium, modifier = Modifier.weight(1f))
@@ -269,8 +270,8 @@ internal fun DiscoverSection(
             Column {
                 header()
                 if (st.options.isNotEmpty() && current != null) {
-                    Text("Discover", color = TextC, fontSize = 28.sp, fontFamily = Sans, fontWeight = FontWeight.Bold, letterSpacing = (-0.8).sp,
-                        modifier = Modifier.padding(top = 30.dp, bottom = 12.dp))
+                    // an eyebrow, not a second page title under "Search"
+                    Eyebrow("Discover", Modifier.padding(top = 28.dp, bottom = 12.dp), color = MutedC)
                     Row(
                         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -280,7 +281,7 @@ internal fun DiscoverSection(
                         if (current.catalog.genres.isNotEmpty()) PickPill(st.genre ?: "All genres") { picker = "genre" }
                     }
                     Text(
-                        current.addon.name.ifEmpty { "Add-on" } + " • " + typeLabel(current.catalog.type),
+                        current.addon.name.ifEmpty { "Add-on" } + "  ·  " + typeLabel(current.catalog.type),
                         color = MutedC, fontSize = 14.sp, modifier = Modifier.padding(top = 12.dp, bottom = 14.dp),
                     )
                     if (st.status.isNotEmpty()) Text(st.status, color = MutedC, fontSize = 14.sp, modifier = Modifier.padding(bottom = 10.dp))

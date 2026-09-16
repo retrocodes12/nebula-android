@@ -104,11 +104,11 @@ internal fun SubtitlesPanel(
 
     // every choice by language: the stream's own tracks first, then what the add-ons offered
     val byLang = LinkedHashMap<String, MutableList<SubChoice>>()
-    embedded.forEach { e ->
+    embedded.forEachIndexed { ei, e ->
         val f = e.format
         val id = f.id ?: ""
-        if (id == "addon-pick") return@forEach                 // the add-on card below stands for it
-        val lang = langLabel(f.language ?: "und")
+        if (id == "addon-pick") return@forEachIndexed          // the add-on card below stands for it
+        val lang = langLabel(f.language ?: "und").ifEmpty { f.label?.takeIf { it.isNotBlank() } ?: "Track ${ei + 1}" }
         var label = f.label?.takeIf { it.isNotBlank() } ?: lang
         if ((f.roleFlags and C.ROLE_FLAG_DESCRIBES_MUSIC_AND_SOUND) != 0) label += " · SDH"
         if ((f.selectionFlags and C.SELECTION_FLAG_FORCED) != 0) label += " · Forced"
@@ -121,7 +121,7 @@ internal fun SubtitlesPanel(
         }
     }
     addonSubs.forEach { a ->
-        val lang = langLabel(a.track.lang)
+        val lang = langLabel(a.track.lang).ifEmpty { "Other" }
         val list = byLang.getOrPut(lang) { mutableListOf() }
         val nth = list.count { it.badge == a.source } + 1
         list += SubChoice(a.source, if (nth == 1) lang else "$lang · $nth", activeAddonSub == a.track.url) { onPickAddon(a.track) }

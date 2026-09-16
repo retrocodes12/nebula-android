@@ -227,7 +227,7 @@ internal fun SettingsSupportScreen(onBack: () -> Unit, onProfile: () -> Unit) {
                         busy = false
                         if (err == null) {
                             code = ""; status = ""
-                            Toasts.show("You're a supporter — thank you. Three more accents are yours in Appearance.")
+                            Toasts.show("You’re a supporter — thank you. Three more accents are yours in Appearance.")
                         } else {
                             status = err
                         }
@@ -258,7 +258,7 @@ private fun SupporterPanel(me: Profile, onWall: (Boolean) -> Unit) {
     SupportPanel {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SupporterMark(20.dp)
-            Text("You're a supporter", color = TextC, fontSize = 19.sp, fontFamily = Sans, fontWeight = FontWeight.Bold)
+            Text("You’re a supporter", color = TextC, fontSize = 19.sp, fontFamily = Sans, fontWeight = FontWeight.Bold)
         }
         val since = Support.sinceText(me.supSince)
         Text(

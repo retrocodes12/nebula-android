@@ -423,3 +423,11 @@ object Stremio {
         }
     }
 }
+
+/** What a viewer reads when an add-on call fails — never `it.message`, which is a Java stack string
+    ("Unable to resolve host …: No address associated with hostname") under the add-on's name. */
+internal fun friendlyError(t: Throwable?): String = when (t) {
+    is org.json.JSONException -> "This add-on answered with something Nebula could not read."
+    is java.io.IOException -> "Couldn’t reach this add-on."
+    else -> "This add-on didn’t answer properly."
+}

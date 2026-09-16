@@ -133,7 +133,7 @@ internal fun LibraryScreen(
         val narrow = LocalConfiguration.current.screenWidthDp < 400
         Segmented {
             Chip("My List", libTab == 0, inSeg = true) { libTab = 0 }
-            Chip(if (narrow) "Continue" else "Continue Watching", libTab == 1, inSeg = true) { libTab = 1 }
+            Chip(if (narrow) "Continue" else "Continue watching", libTab == 1, inSeg = true) { libTab = 1 }
             Chip("Upcoming", libTab == 2, inSeg = true) { libTab = 2 }
         }
         Spacer(Modifier.height(14.dp))

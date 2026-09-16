@@ -44,7 +44,7 @@ object Account {
             "already has a profile" -> "This device already belongs to a profile — it will show up in a moment."
             "code not found or expired" -> "That code was not found — it may have expired."
             "code not found" -> "That code was not found — check it against the thank-you note."
-            "already a supporter" -> "You're already a supporter."
+            "already a supporter" -> "You’re already a supporter."
             "not a supporter" -> "Only supporters have a wall entry."
             "no profile" -> "Sign in first — the supporter mark lives on your profile."
             "unauthorized" -> "This device was signed out. Sign in again."
