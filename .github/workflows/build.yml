@@ -49,9 +49,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.69.0.apk
+          cp "$APK" Nebula-1.70.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.69.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.69.0 Nebula-1.69.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.69.0" \
-            --notes "This build puts the app back the way it was before tonight’s design pass (1.68.0), while that pass is looked at again. Nothing else changes."
+          gh release delete v1.70.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.70.0 Nebula-1.70.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.70.0" \
+            --notes "The Play button on a title page now matches the round buttons beside it. And the picture you see while dragging the scrubber arrives straight away: the player now reads frames from across the film quietly in the background while you watch, on Wi-Fi, so there is one waiting wherever you drag to."
