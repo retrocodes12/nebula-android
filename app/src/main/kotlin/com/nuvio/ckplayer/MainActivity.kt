@@ -89,6 +89,7 @@ import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkRemove
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DragHandle
@@ -104,6 +105,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -130,6 +132,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.key
@@ -485,6 +488,26 @@ private fun seriesResumeRec(ctx: Context, seriesId: String): ProgressRec? =
             it.id.startsWith("$seriesId:") &&
             it.pos >= Progress.MIN_POS_MS && it.dur > 0 && it.pos <= it.dur - Progress.END_GAP_MS
     }.maxByOrNull { it.at }
+
+/** Where the viewer is in a series: the newest watched or in-progress episode,
+    or the one after it when that episode is finished. Null before anything is
+    started. Mirrors the shared player's seriesCursor(), and is re-read after a
+    mark made by hand as well as when a list first opens. */
+private fun seriesUpNext(ctx: Context, type: String, videos: List<Episode>): Episode? {
+    val flat = videos.sortedWith(compareBy({ it.season == 0 }, { it.season }, { it.episode ?: 0 }))
+    val all = Progress.all(ctx)
+    var newest: ProgressRec? = null
+    var newestIdx = -1
+    flat.forEachIndexed { i, e ->
+        val r = all[Progress.key(type, e.id)] ?: return@forEachIndexed
+        if (r.dismissed) return@forEachIndexed
+        if (!r.done && !(r.pos >= Progress.MIN_POS_MS && r.dur > 0)) return@forEachIndexed
+        val cur = newest
+        if (cur == null || r.at > cur.at) { newest = r; newestIdx = i }
+    }
+    if (newestIdx < 0) return null
+    return flat[if (newest?.done == true) minOf(newestIdx + 1, flat.size - 1) else newestIdx]
+}
 
 /** "Resume S2E4" from the id tail past the series prefix; kitsu-style single
     tails become "Resume E3"; anything else is plain "Resume". */
@@ -3499,18 +3522,7 @@ private fun DetailScreen(
             episodes = found
             seriesChain.set(item.type, item.name, addon, found)
             // open at the viewer's place in the show, next-up highlighted
-            val flat = found.sortedWith(compareBy({ it.season == 0 }, { it.season }, { it.episode ?: 0 }))
-            val all = Progress.all(ctx)
-            var newest: ProgressRec? = null
-            var newestIdx = -1
-            flat.forEachIndexed { i, e ->
-                val r = all[Progress.key(item.type, e.id)] ?: return@forEachIndexed
-                if (r.dismissed) return@forEachIndexed
-                if (!r.done && !(r.pos >= Progress.MIN_POS_MS && r.dur > 0)) return@forEachIndexed
-                val cur = newest
-                if (cur == null || r.at > cur.at) { newest = r; newestIdx = i }
-            }
-            val up = if (newestIdx >= 0) flat[if (newest?.done == true) minOf(newestIdx + 1, flat.size - 1) else newestIdx] else null
+            val up = seriesUpNext(ctx, item.type, found)
             upNextId = up?.id
             selectedSeason = up?.season
                 ?: found.map { it.season }.distinct().sortedWith(compareBy({ it == 0 }, { it })).firstOrNull()
@@ -3657,7 +3669,12 @@ private fun DetailScreen(
             if (epsLoading) items(4) { SkeletonRow(112.dp, 63.dp, circle = false) }
             items(eps.size, key = { eps[it].id }) { i ->
                 val ep = eps[i]
-                EpisodeRow(itemType = item.type, ep = ep, upNext = ep.id == upNextId, first = i == 0, onClick = { onPlayEpisode(ep) })
+                EpisodeRow(
+                    itemType = item.type, ep = ep, upNext = ep.id == upNextId, first = i == 0,
+                    onClick = { onPlayEpisode(ep) },
+                    // a mark moves "Up next"; the season on screen deliberately stays put
+                    onMarked = { upNextId = seriesUpNext(ctx, item.type, episodes)?.id },
+                )
             }
             item { Spacer(Modifier.height(24.dp)) }
         }
@@ -3669,17 +3686,37 @@ private fun DetailScreen(
     the overview beneath. Rows are transparent and divided by hairlines — a
     list, not a stack of tiles — and only the target row wears a mark. */
 @Composable
-private fun EpisodeRow(itemType: String, ep: Episode, upNext: Boolean, first: Boolean, onClick: () -> Unit) {
+private fun EpisodeRow(
+    itemType: String,
+    ep: Episode,
+    upNext: Boolean,
+    first: Boolean,
+    onClick: () -> Unit,
+    onMarked: () -> Unit = {},
+) {
     val ctx = LocalContext.current
+    // the tick is read here rather than passed in, so a mark made in the sheet
+    // repaints this row without the whole list being rebuilt
+    var stamp by remember(itemType, ep.id) { mutableIntStateOf(0) }
+    var sheet by remember(itemType, ep.id) { mutableStateOf(false) }
+    if (sheet) EpisodeSheet(
+        itemType = itemType, ep = ep,
+        onPlay = onClick,
+        onChanged = { stamp++; onMarked() },
+        onDismiss = { sheet = false },
+    )
     Column {
         if (!first) Box(Modifier.fillMaxWidth().height(1.dp).background(LineC))
-        FocusCard(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth(), onClick = onClick) {
+        FocusCard(
+            shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth(),
+            onClick = onClick, onLongClick = { sheet = true },
+        ) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                val pr = Progress.get(ctx, itemType, ep.id)
+                val pr = remember(stamp, itemType, ep.id) { Progress.get(ctx, itemType, ep.id) }
                 Box {
                     val thumbMod = Modifier.width(112.dp).height(63.dp).clip(RoundedCornerShape(8.dp)).background(SurfaceC)
                     if (ep.thumbnail != null) {
@@ -3732,6 +3769,57 @@ private fun EpisodeRow(itemType: String, ep: Episode, upNext: Boolean, first: Bo
             }
         }
     }
+}
+
+/**
+ * Held on an episode: play it, or tick it off by hand. A row that has never
+ * been played can only be marked watched; one with a tick or a part-way
+ * position can be put back. The mark written is deliberately the same record
+ * playing to the end leaves, so the list, the series cursor and Continue
+ * watching all agree afterwards.
+ */
+@Composable
+private fun EpisodeSheet(
+    itemType: String,
+    ep: Episode,
+    onPlay: () -> Unit,
+    onChanged: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val ctx = LocalContext.current
+    val pr = remember(itemType, ep.id) { Progress.get(ctx, itemType, ep.id) }
+    val resumable = remember(pr) {
+        pr != null && !pr.done && !pr.dismissed && pr.pos >= Progress.MIN_POS_MS &&
+            pr.dur > 0 && pr.pos <= pr.dur - Progress.END_GAP_MS
+    }
+    val tag = "S${ep.season}" + (ep.episode?.let { "E$it" } ?: "")
+    val date = ep.released?.let {
+        runCatching {
+            java.time.LocalDate.parse(it.take(10))
+                .format(java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy"))
+        }.getOrNull()
+    }
+    val kick = "Season ${ep.season}" + (ep.episode?.let { " · Episode $it" } ?: "")
+    val actions = buildList {
+        add(SheetAction(Icons.Filled.PlayArrow, if (resumable) "Resume" else "Play") { onPlay() })
+        if (pr?.done != true) add(SheetAction(Icons.Filled.CheckCircle, "Mark as watched") {
+            Progress.markWatched(ctx, itemType, ep.id); onChanged()
+            Toasts.show("$tag marked as watched.")
+        })
+        // only worth offering against something to undo: a tick, or a place to resume
+        if (pr?.done == true || resumable) add(SheetAction(Icons.Filled.RemoveCircleOutline, "Mark as not watched") {
+            Progress.markUnwatched(ctx, itemType, ep.id); onChanged()
+            Toasts.show("$tag marked as not watched.")
+        })
+    }
+    CardSheet(
+        title = ep.name.ifEmpty { "Episode ${ep.episode ?: ""}".trim() },
+        sub = listOfNotNull(kick, date).joinToString("  ·  "),
+        poster = ep.thumbnail,
+        shape = if (ep.thumbnail != null) "landscape" else "poster",
+        actions = actions,
+        onDismiss = onDismiss,
+    )
 }
 
 // ---------- catalog ----------
@@ -3937,18 +4025,7 @@ private fun EpisodesScreen(
         status = "${found.size} episodes"
         // open at the viewer's place in the show: the season of the newest
         // watched/in-progress episode; a finished episode advances to the next
-        val flat = found.sortedWith(compareBy({ it.season == 0 }, { it.season }, { it.episode ?: 0 }))
-        val all = Progress.all(ctx)
-        var newest: ProgressRec? = null
-        var newestIdx = -1
-        flat.forEachIndexed { i, e ->
-            val r = all[Progress.key(item.type, e.id)] ?: return@forEachIndexed
-            if (r.dismissed) return@forEachIndexed
-            if (!r.done && !(r.pos >= Progress.MIN_POS_MS && r.dur > 0)) return@forEachIndexed
-            val cur = newest
-            if (cur == null || r.at > cur.at) { newest = r; newestIdx = i }
-        }
-        val up = if (newestIdx >= 0) flat[if (newest?.done == true) minOf(newestIdx + 1, flat.size - 1) else newestIdx] else null
+        val up = seriesUpNext(ctx, item.type, found)
         upNextId = up?.id
         selectedSeason = up?.season
             ?: found.map { it.season }.distinct().sortedWith(compareBy({ it == 0 }, { it })).firstOrNull()
@@ -3969,15 +4046,26 @@ private fun EpisodesScreen(
             }
         }
         val listState = rememberLazyListState()
+        // Land on "Up next" when the list first fills and when the season changes —
+        // but NOT when a mark moves the marker under the reader's thumb, so the
+        // scroll key deliberately leaves upNextId out.
+        var scrolledFor by remember { mutableStateOf<Pair<Int?, Int>?>(null) }
         LaunchedEffect(current, upNextId, eps.size) {
+            val k = current to eps.size
+            if (scrolledFor == k) return@LaunchedEffect
             val i = eps.indexOfFirst { it.id == upNextId }
-            if (i >= 0) listState.scrollToItem(maxOf(0, i - 1))
+            if (i >= 0) { scrolledFor = k; listState.scrollToItem(maxOf(0, i - 1)) }
         }
         LazyColumn(Modifier.fillMaxWidth(), state = listState, contentPadding = PaddingValues(bottom = 20.dp)) {
             if (episodes.isEmpty()) items(6) { SkeletonRow(112.dp, 63.dp, circle = false) }
             items(eps.size, key = { eps[it].id }) { i ->
                 val ep = eps[i]
-                EpisodeRow(itemType = item.type, ep = ep, upNext = ep.id == upNextId, first = i == 0, onClick = { onPlayEpisode(ep) })
+                EpisodeRow(
+                    itemType = item.type, ep = ep, upNext = ep.id == upNextId, first = i == 0,
+                    onClick = { onPlayEpisode(ep) },
+                    // a mark moves "Up next"; the season on screen deliberately stays put
+                    onMarked = { upNextId = seriesUpNext(ctx, item.type, episodes)?.id },
+                )
             }
         }
     }

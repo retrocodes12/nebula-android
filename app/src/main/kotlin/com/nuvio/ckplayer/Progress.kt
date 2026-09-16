@@ -120,6 +120,23 @@ object Progress {
         persist(ctx, m)
     }
 
+    /** Tick something off by hand. Deliberately the SAME `done` record that playing
+        it to the end leaves, so the episode ticks, the series cursor advances and
+        Continue watching drops it exactly as if it had been watched. */
+    fun markWatched(ctx: Context, type: String, id: String) {
+        val m = load(ctx)
+        m[key(type, id)] = ProgressRec(type, id, done = true, at = System.currentTimeMillis())
+        persist(ctx, m)
+    }
+
+    /** Undo that, or a part-way position: the dismissed tombstone every list and
+        the cursor read as "never started". */
+    fun markUnwatched(ctx: Context, type: String, id: String) {
+        val m = load(ctx)
+        m[key(type, id)] = ProgressRec(type, id, dismissed = true, at = System.currentTimeMillis())
+        persist(ctx, m)
+    }
+
     fun clear(ctx: Context, type: String, id: String) {
         val m = load(ctx)
         val k = key(type, id)
