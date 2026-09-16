@@ -79,12 +79,19 @@ object Progress {
 
     private fun persistRaw(ctx: Context, m: MutableMap<String, ProgressRec>) {
         if (m.size > MAX) {
-            // Marks carry `at = now`, so a season ticked off by hand is the newest
-            // thing here and the oldest records are what go. Losing a resume point
-            // costs a position; losing a `dismissed` tombstone costs more — it is the
-            // only thing stopping another device pushing the old record back on the
-            // next merge — so tombstones are the last to be dropped.
-            m.entries.sortedWith(compareBy({ it.value.dismissed }, { it.value.at }))
+            // What dies first matters. A mark carries `at = now`, so a season ticked
+            // off by hand is the newest thing here and a plain oldest-first trim takes
+            // a LIVE resume point — a position the viewer cannot get back. Rank
+            // instead, the way the shared player's saveProgress does: stale tombstones
+            // go first (old enough that no device can still hold the record they exist
+            // to beat), then ticks, and a resume point is the last thing dropped.
+            val now = System.currentTimeMillis()
+            fun rank(r: ProgressRec): Int = when {
+                r.dismissed -> if (now - r.at > 180L * 24 * 3600_000) 0 else 2
+                r.done -> 2
+                else -> 3
+            }
+            m.entries.sortedWith(compareBy({ rank(it.value) }, { it.value.at }))
                 .take(m.size - MAX).map { it.key }
                 .forEach { m.remove(it) }
         }

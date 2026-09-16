@@ -3860,15 +3860,21 @@ private fun EpisodeSheet(
             Progress.markWatched(ctx, itemType, ep.id); onChanged()
             Toasts.show("$tag marked as watched.")
         })
-        // only worth offering against something to undo: a tick, or a place to resume
-        if (pr?.done == true || resumable) add(SheetAction(Icons.Filled.RemoveCircleOutline, "Mark as not watched") {
+        // Only worth offering against something to undo. Two names for one call on
+        // purpose: against a tick it means "not watched"; against a part-way episode
+        // it THROWS AWAY a position, and a label that does not say so is a trap.
+        val ticked = pr?.done == true
+        if (ticked || resumable) add(SheetAction(
+            Icons.Filled.RemoveCircleOutline,
+            if (ticked) "Mark as not watched" else "Forget my place",
+        ) {
             Progress.markUnwatched(ctx, itemType, ep.id); onChanged()
-            Toasts.show("$tag marked as not watched.")
+            Toasts.show(if (ticked) "$tag marked as not watched." else "$tag back to the start.")
         })
     }
     CardSheet(
         title = ep.name.ifEmpty { "Episode ${ep.episode ?: ""}".trim() },
-        sub = listOfNotNull(kick, epAirDate(ep), left).joinToString("  ·  "),
+        sub = listOfNotNull(kick, epAirDate(ep), left).joinToString(" · "),
         // a thumbnail-less episode falls back to the show's own poster rather than
         // the two-letter placeholder box
         poster = ep.thumbnail ?: seriesPoster,
