@@ -91,6 +91,10 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkRemove
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircleOutline
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DragHandle
@@ -1374,6 +1378,26 @@ internal fun FocusCard(
                 onClick = onClick,
             )
     ) { content() }
+}
+
+/**
+ * A round icon button for the title page's action row. Four of these fit where two
+ * ghost pills did — the row is the only place on the page with real estate to
+ * spare, and every pixel it gives back is a pixel of Cast above the fold.
+ * [on] fills it white the way the Play pill is filled, so a state you have set
+ * reads at a glance rather than needing its label.
+ */
+@Composable
+internal fun RoundAction(icon: ImageVector, label: String, on: Boolean = false, onClick: () -> Unit) {
+    Box(
+        Modifier.size(48.dp).clip(CircleShape)
+            .background(if (on) Color.White else Color(0x1FFFFFFF))
+            .then(if (on) Modifier else Modifier.border(1.dp, Color(0x38FFFFFF), CircleShape))
+            .clickable(onClickLabel = label) { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = label, tint = if (on) Color.Black else TextC, modifier = Modifier.size(21.dp))
+    }
 }
 
 /** One row inside a [CardSheet]. */
@@ -3609,6 +3633,7 @@ private fun DetailScreen(
     var metaTried by remember(ck) { mutableStateOf(metaFullCache[ck] != null) }
     var inList by remember(ck) { mutableStateOf(Library.inList(ctx, item.type, item.id)) }
     var recOpen by remember(ck) { mutableStateOf(false) }
+    var moreOpen by remember(ck) { mutableStateOf(false) }
     if (recOpen) RecommendSheet(item.type, item) { recOpen = false }
 
     LaunchedEffect(ck) {
@@ -3797,29 +3822,110 @@ private fun DetailScreen(
                     fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 6.dp),
                 )
             }
-            // the secondary actions are ghosts: one outline, no fill
-            Button(
-                onClick = { inList = Library.toggle(ctx, item.type, item, addon.manifestUrl) },
-                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
-                border = BorderStroke(1.dp, Color(0x47FFFFFF)),
-                shape = RoundedCornerShape(12.dp),
-            ) { Text(if (inList) "✓ In My List" else "+ My List", color = TextC, fontWeight = FontWeight.SemiBold) }
-            // Surprise me: a random aired episode for a comfort show (web parity)
+            // The secondary actions are round icons rather than a row of ghost pills:
+            // four of them fit where two pills did, which is what keeps Cast above
+            // the fold. Marking watched has a VISIBLE control here at last — until
+            // now the only way to it was holding an episode row, which nothing
+            // advertised.
+            val watched = remember(ck, marks, Progress.syncVersion) {
+                item.type == "movie" && Progress.get(ctx, item.type, item.id)?.done == true
+            }
+            if (item.type == "movie") RoundAction(
+                if (watched) Icons.Filled.CheckCircle else Icons.Filled.CheckCircleOutline,
+                if (watched) "Mark as not watched" else "Mark as watched",
+                on = watched,
+            ) {
+                if (watched) Progress.markUnwatched(ctx, item.type, item.id)
+                else Progress.markWatched(ctx, item.type, item.id)
+                marks++
+                Toasts.show(if (watched) "Marked as not watched." else "Marked as watched.")
+            }
+            RoundAction(
+                if (inList) Icons.Filled.Check else Icons.Filled.Add,
+                if (inList) "Remove from My List" else "Add to My List",
+                on = inList,
+            ) { inList = Library.toggle(ctx, item.type, item, addon.manifestUrl) }
             val pool = if (item.type == "series") surprisePool(episodes) else emptyList()
-            if (pool.size >= 2) Button(
-                onClick = { surprisePick(pool)?.let { onPlayEpisode(it, PlayIntent.TAP) } },
-                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
-                border = BorderStroke(1.dp, Color(0x47FFFFFF)),
-                shape = RoundedCornerShape(12.dp),
-            ) { Text("Surprise me", color = TextC, fontWeight = FontWeight.SemiBold) }
-            if (Social.on) Button(
-                onClick = { recOpen = true },
-                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
-                border = BorderStroke(1.dp, Color(0x47FFFFFF)),
-                shape = RoundedCornerShape(12.dp),
-            ) { Text("Recommend", color = TextC, fontWeight = FontWeight.SemiBold) }
+            if (pool.size >= 2 || Social.on) RoundAction(Icons.Filled.MoreVert, "More") { moreOpen = true }
+        }
+        if (moreOpen) {
+            val pool = if (item.type == "series") surprisePool(episodes) else emptyList()
+            CardSheet(
+                title = item.name, sub = null, poster = full?.poster ?: item.poster,
+                shape = item.posterShape,
+                actions = buildList {
+                    // a random aired episode for a comfort show (web parity)
+                    if (pool.size >= 2) add(SheetAction(Icons.Filled.Shuffle, "Surprise me") {
+                        surprisePick(pool)?.let { onPlayEpisode(it, PlayIntent.TAP) }
+                    })
+                    if (Social.on) add(SheetAction(Icons.Filled.Favorite, "Recommend to a friend") { recOpen = true })
+                },
+                onDismiss = { moreOpen = false },
+            )
         }
         RatingStars(item)
+
+        // Trailers. A catalogue only ever names a video id, never a file, so the
+        // card is a thumbnail built from that id and the tap hands the link to
+        // whatever the phone opens it with — we are not a trailer player.
+        full?.trailers?.takeIf { it.isNotEmpty() }?.let { trailers ->
+            Eyebrow("Trailers", Modifier.padding(top = 20.dp, bottom = 10.dp))
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                items(trailers.size) { i ->
+                    val t = trailers[i]
+                    Column(Modifier.width(174.dp).clickable {
+                        runCatching {
+                            ctx.startActivity(
+                                Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=" + t.key))
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }.onFailure { Toasts.show("Nothing here opens that.") }
+                    }) {
+                        AsyncImage(
+                            model = "https://img.youtube.com/vi/" + t.key + "/hqdefault.jpg",
+                            contentDescription = t.title, contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                                .clip(RoundedCornerShape(10.dp)).background(SurfaceC),
+                        )
+                        Text(
+                            t.title, color = MutedC, fontSize = 12.sp, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 6.dp),
+                        )
+                    }
+                }
+            }
+        }
+
+        // Movie Details: the facts that do not fit the line under the title, as a
+        // plain two-column table with a hairline between rows.
+        val details = listOfNotNull(
+            (full?.releaseInfo ?: item.releaseInfo)?.let { "Release Info" to it },
+            full?.runtime?.let { "Runtime" to it },
+            full?.country?.let { "Origin Country" to it },
+            full?.director?.takeIf { it.isNotEmpty() }?.let { "Director" to it.joinToString(", ") },
+            full?.writer?.takeIf { it.isNotEmpty() }?.let { "Writer" to it.joinToString(", ") },
+            full?.genres?.takeIf { it.isNotEmpty() }?.let { "Genres" to it.take(4).joinToString(", ") },
+        )
+        if (details.isNotEmpty()) {
+            Text(
+                if (item.type == "series") "Show Details" else "Movie Details",
+                color = TextC, fontSize = 19.sp, fontWeight = FontWeight.Bold,
+                letterSpacing = (-0.3).sp, modifier = Modifier.padding(top = 24.dp, bottom = 4.dp),
+            )
+            details.forEachIndexed { i, (k, v) ->
+                if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(LineC))
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 14.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Text(k, color = MutedC, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                    Text(
+                        v, color = TextC, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.End, modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
         } }   // header item
 
         if (item.type == "series") {

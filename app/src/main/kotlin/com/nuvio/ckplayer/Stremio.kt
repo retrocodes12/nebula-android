@@ -96,8 +96,15 @@ data class FullMeta(
     val genres: List<String>,
     val cast: List<String> = emptyList(),
     val director: List<String> = emptyList(),
+    val writer: List<String> = emptyList(),
+    val country: String? = null,
+    val trailers: List<Trailer> = emptyList(),
     val videos: List<Episode>,
 )
+
+/** A trailer the catalogue names. [key] is the video id the thumbnail and the
+    watch link are built from; catalogues only ever give us that, not a file. */
+data class Trailer(val title: String, val key: String)
 
 object Stremio {
 
@@ -256,6 +263,24 @@ object Stremio {
         val director = mutableListOf<String>()
         (meta.optJSONArray("director"))?.let { c -> for (i in 0 until c.length()) director.add(c.optString(i)) }
             ?: meta.optString("director").takeIf { it.isNotEmpty() }?.let { director.add(it) }
+        val writer = mutableListOf<String>()
+        meta.optJSONArray("writer")?.let { c -> for (i in 0 until c.length()) writer.add(c.optString(i)) }
+        // two shapes in the wild: `trailers` [{source,type}] and `trailerStreams` [{title,ytId}]
+        val trailers = mutableListOf<Trailer>()
+        meta.optJSONArray("trailerStreams")?.let { t ->
+            for (i in 0 until t.length()) {
+                val o = t.optJSONObject(i) ?: continue
+                val k = o.optString("ytId")
+                if (k.isNotEmpty()) trailers.add(Trailer(o.optString("title").ifEmpty { "Trailer" }, k))
+            }
+        }
+        if (trailers.isEmpty()) meta.optJSONArray("trailers")?.let { t ->
+            for (i in 0 until t.length()) {
+                val o = t.optJSONObject(i) ?: continue
+                val k = o.optString("source")
+                if (k.isNotEmpty()) trailers.add(Trailer(o.optString("type").ifEmpty { "Trailer" }, k))
+            }
+        }
         return FullMeta(
             name = meta.optString("name"),
             description = meta.optString("description").ifEmpty { meta.optString("overview").ifEmpty { null } },
@@ -270,6 +295,9 @@ object Stremio {
             genres = genres.filter { it.isNotEmpty() },
             cast = cast.filter { it.isNotEmpty() }.take(6),
             director = director.filter { it.isNotEmpty() }.take(2),
+            writer = writer.filter { it.isNotEmpty() }.take(2),
+            country = meta.optString("country").ifEmpty { null },
+            trailers = trailers.take(6),
             videos = parseVideos(meta.optJSONArray("videos")),
         )
     }
