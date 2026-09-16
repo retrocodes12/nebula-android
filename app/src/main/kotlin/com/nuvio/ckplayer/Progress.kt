@@ -72,7 +72,13 @@ object Progress {
 
     private fun persistRaw(ctx: Context, m: MutableMap<String, ProgressRec>) {
         if (m.size > MAX) {
-            m.entries.sortedByDescending { it.value.at }.drop(MAX).map { it.key }
+            // Marks carry `at = now`, so a season ticked off by hand is the newest
+            // thing here and the oldest records are what go. Losing a resume point
+            // costs a position; losing a `dismissed` tombstone costs more — it is the
+            // only thing stopping another device pushing the old record back on the
+            // next merge — so tombstones are the last to be dropped.
+            m.entries.sortedWith(compareBy({ it.value.dismissed }, { it.value.at }))
+                .take(m.size - MAX).map { it.key }
                 .forEach { m.remove(it) }
         }
         val o = JSONObject()
@@ -124,6 +130,7 @@ object Progress {
         it to the end leaves, so the episode ticks, the series cursor advances and
         Continue watching drops it exactly as if it had been watched. */
     fun markWatched(ctx: Context, type: String, id: String) {
+        if (id.isEmpty()) return
         val m = load(ctx)
         m[key(type, id)] = ProgressRec(type, id, done = true, at = System.currentTimeMillis())
         persist(ctx, m)
@@ -132,6 +139,7 @@ object Progress {
     /** Undo that, or a part-way position: the dismissed tombstone every list and
         the cursor read as "never started". */
     fun markUnwatched(ctx: Context, type: String, id: String) {
+        if (id.isEmpty()) return
         val m = load(ctx)
         m[key(type, id)] = ProgressRec(type, id, dismissed = true, at = System.currentTimeMillis())
         persist(ctx, m)

@@ -140,6 +140,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.platform.LocalInputModeManager
@@ -507,6 +508,15 @@ private fun seriesUpNext(ctx: Context, type: String, videos: List<Episode>): Epi
     }
     if (newestIdx < 0) return null
     return flat[if (newest?.done == true) minOf(newestIdx + 1, flat.size - 1) else newestIdx]
+}
+
+/** An episode's air date as "23 Jun 2022", or null when it has none or it will not parse.
+    One copy: the row and the sheet must never disagree about a date. */
+private fun epAirDate(ep: Episode): String? = ep.released?.let {
+    runCatching {
+        java.time.LocalDate.parse(it.take(10))
+            .format(java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy"))
+    }.getOrNull()
 }
 
 /** "Resume S2E4" from the id tail past the series prefix; kitsu-style single
@@ -1097,7 +1107,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                     push(Screen.Streams(s.addon, s.item.copy(runtime = metaFullCache[s.item.type + ":" + s.item.id]?.runtime)))
                                 },
                                 onResumeEpisode = { r -> openProgress(r) },
-                                onPlayEpisode = { ep ->
+                                onPlayEpisode = { ep, fresh ->
                                     seriesChain.index = seriesChain.episodes.indexOfFirst { it.id == ep.id }
                                     val label = seriesChain.label(ep)
                                     push(Screen.Streams(s.addon, MetaItem(
@@ -1106,7 +1116,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                         // backdrop, not a portrait poster to crop
                                         background = s.item.background ?: ep.thumbnail,
                                         runtime = metaFullCache[s.item.type + ":" + s.item.id]?.runtime,   // sizes become rates against it
-                                    )))
+                                    ), startOver = fresh, decided = fresh))
                                 },
                             )
                             is Screen.Catalog -> CatalogScreen(
@@ -1118,7 +1128,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                             is Screen.Episodes -> EpisodesScreen(
                                 s.addon, s.item,
                                 onBack = { pop() },
-                                onPlayEpisode = { ep ->
+                                onPlayEpisode = { ep, fresh ->
                                     seriesChain.index = seriesChain.episodes.indexOfFirst { it.id == ep.id }
                                     val label = seriesChain.label(ep)
                                     push(Screen.Streams(s.addon, MetaItem(
@@ -1127,7 +1137,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                         // backdrop, not a portrait poster to crop
                                         background = s.item.background ?: ep.thumbnail,
                                         runtime = metaFullCache[s.item.type + ":" + s.item.id]?.runtime,   // sizes become rates against it
-                                    )))
+                                    ), startOver = fresh, decided = fresh))
                                 },
                                 // no episode data anywhere → replace this screen with the flat stream list
                                 onFallback = { stack = stack.dropLast(1) + Screen.Streams(s.addon, s.item) },
@@ -1272,6 +1282,10 @@ internal fun FocusCard(
                 interactionSource = interaction,
                 indication = null,
                 onLongClickLabel = "More options",
+                // combinedClickable buzzes on its own for a touch hold, so leaving it
+                // on gave a phone two buzzes ~0 ms apart; the key path does NOT buzz
+                // by itself, which is why the manual one stays
+                hapticFeedbackEnabled = false,
                 // the buzz is the whole affordance here — nothing on the card
                 // itself advertises that a hold does anything
                 onLongClick = onLongClick?.let {
@@ -1308,6 +1322,13 @@ internal fun CardSheet(
     val shown = remember { MutableTransitionState(false) }
     var closing by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { shown.targetState = true }
+    // a remote lands on the first row, the way SubtitlesPanel does it; a finger
+    // needs no focus, and a pre-lit row on a phone reads as already chosen
+    val firstFocus = remember { FocusRequester() }
+    val keys = LocalInputModeManager.current.inputMode == InputMode.Keyboard
+    LaunchedEffect(shown.currentState) {
+        if (keys && shown.currentState) runCatching { firstFocus.requestFocus() }
+    }
     // let the slide-out finish before the dialog goes, so it doesn't blink away
     LaunchedEffect(closing, shown.isIdle) {
         if (closing && shown.isIdle && !shown.currentState) onDismiss()
@@ -1321,9 +1342,14 @@ internal fun CardSheet(
         Box(Modifier.fillMaxSize()) {
             AnimatedVisibility(shown, enter = fadeIn(tween(200)), exit = fadeOut(tween(160))) {
                 Box(
-                    Modifier.fillMaxSize().background(Color(0xB8000000)).clickable(
-                        interactionSource = remember { MutableInteractionSource() }, indication = null,
-                    ) { close() }
+                    // `clickable` brings its own `focusable`, and this fills the screen —
+                    // on a TV a directional press lands on the scrim and OK then dismisses
+                    // the sheet instead of running the row the viewer was aiming at
+                    Modifier.fillMaxSize().background(Color(0xB8000000))
+                        .focusProperties { canFocus = false }
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() }, indication = null,
+                        ) { close() }
                 )
             }
             AnimatedVisibility(
@@ -1376,10 +1402,11 @@ internal fun CardSheet(
                         }
                     }
                     Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0x14FFFFFF)))
-                    actions.forEach { a ->
+                    actions.forEachIndexed { i, a ->
                         val tint = if (a.destructive) Color(0xFFFF5A5F) else TextC
                         Row(
                             Modifier.fillMaxWidth()
+                                .then(if (i == 0) Modifier.focusRequester(firstFocus) else Modifier)
                                 .clickable { close(); a.onClick() }
                                 .padding(horizontal = 18.dp, vertical = 16.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -3449,7 +3476,7 @@ private fun DetailScreen(
     onEpisodes: () -> Unit,
     onPlayMovie: () -> Unit,
     onResumeEpisode: (ProgressRec) -> Unit,
-    onPlayEpisode: (Episode) -> Unit = { },
+    onPlayEpisode: (Episode, Boolean) -> Unit = { _, _ -> },
 ) {
     val ctx = LocalContext.current
     val ck = item.type + ":" + item.id
@@ -3621,7 +3648,7 @@ private fun DetailScreen(
                             // continue the show from up next rather than restarting it at episode 1
                             val go = seriesUpNext(ctx, item.type, episodes)
                                 ?: episodes.sortedWith(compareBy({ it.season == 0 }, { it.season }, { it.episode ?: 0 })).firstOrNull()
-                            if (go != null) onPlayEpisode(go) else onEpisodes()
+                            if (go != null) onPlayEpisode(go, false) else onEpisodes()
                         }
                         else -> onPlayMovie()
                     }
@@ -3649,7 +3676,7 @@ private fun DetailScreen(
             // Surprise me: a random aired episode for a comfort show (web parity)
             val pool = if (item.type == "series") surprisePool(episodes) else emptyList()
             if (pool.size >= 2) Button(
-                onClick = { surprisePick(pool)?.let { onPlayEpisode(it) } },
+                onClick = { surprisePick(pool)?.let { onPlayEpisode(it, false) } },
                 colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
                 border = BorderStroke(1.dp, Color(0x47FFFFFF)),
                 shape = RoundedCornerShape(12.dp),
@@ -3678,7 +3705,9 @@ private fun DetailScreen(
                 val ep = eps[i]
                 EpisodeRow(
                     itemType = item.type, ep = ep, upNext = ep.id == upNextId, first = i == 0,
-                    onClick = { onPlayEpisode(ep) },
+                    seriesPoster = full?.poster ?: item.poster,
+                    onClick = { onPlayEpisode(ep, false) },
+                    onStartOver = { onPlayEpisode(ep, true) },
                     // a mark moves "Up next"; the season on screen deliberately stays put
                     onMarked = { marks++; upNextId = seriesUpNext(ctx, item.type, episodes)?.id },
                 )
@@ -3698,7 +3727,9 @@ private fun EpisodeRow(
     ep: Episode,
     upNext: Boolean,
     first: Boolean,
+    seriesPoster: String? = null,
     onClick: () -> Unit,
+    onStartOver: () -> Unit = onClick,
     onMarked: () -> Unit = {},
 ) {
     val ctx = LocalContext.current
@@ -3707,8 +3738,9 @@ private fun EpisodeRow(
     var stamp by remember(itemType, ep.id) { mutableIntStateOf(0) }
     var sheet by remember(itemType, ep.id) { mutableStateOf(false) }
     if (sheet) EpisodeSheet(
-        itemType = itemType, ep = ep,
+        itemType = itemType, ep = ep, seriesPoster = seriesPoster,
         onPlay = onClick,
+        onStartOver = onStartOver,
         onChanged = { stamp++; onMarked() },
         onDismiss = { sheet = false },
     )
@@ -3748,12 +3780,7 @@ private fun EpisodeRow(
                 Column(Modifier.weight(1f)) {
                     // "Episode 3 · 23 Jun 2022"; the number is dropped when the
                     // name is only "Episode 3" already
-                    val date = ep.released?.let {
-                        runCatching {
-                            java.time.LocalDate.parse(it.take(10))
-                                .format(java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy"))
-                        }.getOrNull()
-                    }
+                    val date = epAirDate(ep)
                     val generic = Regex("""^episode\s*\d+$""", RegexOption.IGNORE_CASE).matches(ep.name.trim())
                     val kick = listOfNotNull(ep.episode?.takeIf { !generic }?.let { "Episode $it" }, date).joinToString(" · ")
                     if (kick.isNotEmpty()) Eyebrow(kick, Modifier.padding(bottom = 3.dp))
@@ -3789,7 +3816,9 @@ private fun EpisodeRow(
 private fun EpisodeSheet(
     itemType: String,
     ep: Episode,
+    seriesPoster: String?,
     onPlay: () -> Unit,
+    onStartOver: () -> Unit,
     onChanged: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -3800,15 +3829,11 @@ private fun EpisodeSheet(
             pr.dur > 0 && pr.pos <= pr.dur - Progress.END_GAP_MS
     }
     val tag = "S${ep.season}" + (ep.episode?.let { "E$it" } ?: "")
-    val date = ep.released?.let {
-        runCatching {
-            java.time.LocalDate.parse(it.take(10))
-                .format(java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy"))
-        }.getOrNull()
-    }
     val kick = "Season ${ep.season}" + (ep.episode?.let { " · Episode $it" } ?: "")
+    val left = if (resumable && pr != null) fmtTime(pr.dur - pr.pos) + " left" else null
     val actions = buildList {
         add(SheetAction(Icons.Filled.PlayArrow, if (resumable) "Resume" else "Play") { onPlay() })
+        if (resumable) add(SheetAction(Icons.Filled.Replay, "Start over") { onStartOver() })
         if (pr?.done != true) add(SheetAction(Icons.Filled.CheckCircle, "Mark as watched") {
             Progress.markWatched(ctx, itemType, ep.id); onChanged()
             Toasts.show("$tag marked as watched.")
@@ -3821,8 +3846,10 @@ private fun EpisodeSheet(
     }
     CardSheet(
         title = ep.name.ifEmpty { "Episode ${ep.episode ?: ""}".trim() },
-        sub = listOfNotNull(kick, date).joinToString("  ·  "),
-        poster = ep.thumbnail,
+        sub = listOfNotNull(kick, epAirDate(ep), left).joinToString("  ·  "),
+        // a thumbnail-less episode falls back to the show's own poster rather than
+        // the two-letter placeholder box
+        poster = ep.thumbnail ?: seriesPoster,
         shape = if (ep.thumbnail != null) "landscape" else "poster",
         actions = actions,
         onDismiss = onDismiss,
@@ -4004,7 +4031,7 @@ private fun EpisodesScreen(
     addon: Addon,
     item: MetaItem,
     onBack: () -> Unit,
-    onPlayEpisode: (Episode) -> Unit,
+    onPlayEpisode: (Episode, Boolean) -> Unit,
     onFallback: () -> Unit,
 ) {
     val ctx = LocalContext.current
@@ -4074,7 +4101,9 @@ private fun EpisodesScreen(
                 val ep = eps[i]
                 EpisodeRow(
                     itemType = item.type, ep = ep, upNext = ep.id == upNextId, first = i == 0,
-                    onClick = { onPlayEpisode(ep) },
+                    seriesPoster = item.poster,
+                    onClick = { onPlayEpisode(ep, false) },
+                    onStartOver = { onPlayEpisode(ep, true) },
                     // a mark moves "Up next"; the season on screen deliberately stays put
                     onMarked = { upNextId = seriesUpNext(ctx, item.type, episodes)?.id },
                 )
