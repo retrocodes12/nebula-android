@@ -505,43 +505,49 @@ private enum class PlayIntent { TAP, RESUME, START_OVER }
 
 /**
  * Where the viewer is in a series. [upNext] is the episode that wears the Up next
- * ring — null when the show is finished — and [seat] the episode whose SEASON the
+ * ring — null when there is nothing left — and [seat] the episode whose SEASON the
  * page should open on, which still exists when the ring does not.
  *
  * Two kinds of record, read differently on purpose. Something PLAYED is a fact
- * about now, so the newest one wins. A mark made by HAND is a claim about the
- * past — "I already saw that" — so the FURTHEST claim is the informative one, not
- * the most recent; reading it as "just watched" is what used to drag the cursor
- * backwards when you ticked off S1E1 of a show you watch at S2E5, and reading only
- * the newest hand mark let two out-of-order ticks do the same. Mirrors the shared
- * player's seriesCursor().
+ * about now, so the newest one says where the viewer is. A mark made by HAND says
+ * "I saw THIS one" and nothing more — never "I saw everything up to here" — so all
+ * it may do is push the cursor PAST episodes already ticked off, one at a time.
+ * Tick something far ahead and it paints a tick and leaves your place alone; tick
+ * the episode you were about to watch and the cursor steps over it. Reading a mark
+ * as a position is what used to drag the cursor back to season 1, and reading the
+ * furthest mark as a position is what used to teleport it past everything
+ * unwatched in between. Mirrors the shared player's seriesCursor().
  */
 private data class SeriesCursor(val upNext: Episode?, val seat: Episode)
 
 private fun seriesCursor(ctx: Context, type: String, videos: List<Episode>): SeriesCursor? {
     val flat = videos.sortedWith(compareBy({ it.season == 0 }, { it.season }, { it.episode ?: 0 }))
+    if (flat.isEmpty()) return null
     val last = flat.size - 1
     val all = Progress.all(ctx)
     var played: ProgressRec? = null
     var playedIdx = -1
-    var handIdx = -1
+    var anyHand = false
     flat.forEachIndexed { i, e ->
         val r = all[Progress.key(type, e.id)] ?: return@forEachIndexed
         if (r.dismissed) return@forEachIndexed
+        if (r.hand) { if (r.done) anyHand = true; return@forEachIndexed }
         if (!r.done && !(r.pos >= Progress.MIN_POS_MS && r.dur > 0)) return@forEachIndexed
-        if (r.hand) { if (i > handIdx) handIdx = i; return@forEachIndexed }
         val cur = played
         if (cur == null || r.at > cur.at) { played = r; playedIdx = i }
     }
-    if (playedIdx < 0 && handIdx < 0) return null
-    // where each kind says the viewer has got to; past the last episode means finished
-    val a = if (playedIdx < 0) -1 else if (played?.done == true) playedIdx + 1 else playedIdx
-    val b = if (handIdx < 0) -1 else handIdx + 1
-    val upIdx = maxOf(a, b)
-    val seat = flat[if (upIdx == a) playedIdx else handIdx]
-    return if (upIdx > last) SeriesCursor(null, seat) else SeriesCursor(flat[upIdx], flat[upIdx])
+    if (playedIdx < 0 && !anyHand) return null
+    var i = if (playedIdx < 0) 0 else if (played?.done == true) playedIdx + 1 else playedIdx
+    while (i <= last) {
+        val r = all[Progress.key(type, flat[i].id)]
+        if (r == null || !r.hand || !r.done) break
+        i++
+    }
+    // nothing left to watch: no ring, but the season of the last episode is still
+    // where the viewer belongs
+    if (i > last) return SeriesCursor(null, flat[last])
+    return SeriesCursor(flat[i], flat[i])
 }
-
 /** Just the ring target — null when the show is finished or nothing is started. */
 private fun seriesUpNext(ctx: Context, type: String, videos: List<Episode>): Episode? =
     seriesCursor(ctx, type, videos)?.upNext
