@@ -556,24 +556,34 @@ private fun seriesCursor(ctx: Context, type: String, videos: List<Episode>): Ser
     var played: ProgressRec? = null
     var playedIdx = -1
     var anyHand = false
+    var inSpecials = false
     flat.forEachIndexed { i, e ->
         val r = all[Progress.key(type, e.id)] ?: return@forEachIndexed
         if (r.dismissed) return@forEachIndexed
+        if (e.season == 0) inSpecials = true            // this viewer does watch the extras
         if (r.hand) { if (r.done) anyHand = true; return@forEachIndexed }
         if (!r.done && !(r.pos >= Progress.MIN_POS_MS && r.dur > 0)) return@forEachIndexed
         val cur = played
         if (cur == null || r.at > cur.at) { played = r; playedIdx = i }
     }
     if (playedIdx < 0 && !anyHand) return null
+    // Specials sit at the END of flat — the sort puts season 0 last on purpose — so a
+    // viewer who finishes the regular run walks straight into them and gets told a
+    // behind-the-scenes extra is what to watch next.
+    var lastReal = last
+    while (lastReal > 0 && flat[lastReal].season == 0) lastReal--
+    val hasReal = flat[lastReal].season != 0
+    val seat = if (hasReal) lastReal else last
     var i = if (playedIdx < 0) 0 else if (played?.done == true) playedIdx + 1 else playedIdx
     while (i <= last) {
         val r = all[Progress.key(type, flat[i].id)]
         if (r == null || !r.hand || !r.done) break
         i++
     }
-    // nothing left to watch: no ring, but the season of the last episode is still
-    // where the viewer belongs
-    if (i > last) return SeriesCursor(null, flat[last])
+    // nothing left to watch: no ring, but the season of the last real episode is still
+    // where the viewer belongs. A viewer who HAS touched the specials keeps them in the
+    // chain; one who never has is simply finished.
+    if (i > last || (hasReal && !inSpecials && flat[i].season == 0)) return SeriesCursor(null, flat[seat])
     return SeriesCursor(flat[i], flat[i])
 }
 
@@ -1466,8 +1476,20 @@ internal fun CardSheet(
                     // A finger needs no focus, and a pre-lit row on a phone reads as
                     // already chosen, so this is for a remote only.
                     if (keys) LaunchedEffect(Unit) {
-                        withFrameNanos {}
-                        runCatching { firstFocus.requestFocus() }
+                        // requestFocus() RETURNS whether it worked, and runCatching only
+                        // guards a throw — the gate that can legitimately fail here is the
+                        // owner-focus check, which is on the path every time because nothing
+                        // in the dialog is focused yet, and it returns false rather than
+                        // throwing when WindowManager has not granted the dialog window focus.
+                        // That depends on window focus, not on frames, so retry across a few
+                        // rather than guess a longer wait. A silent failure here is the inert
+                        // sheet that has already cost two rounds.
+                        repeat(10) {
+                            withFrameNanos {}
+                            if (runCatching { firstFocus.requestFocus() }.getOrDefault(false)) {
+                                return@LaunchedEffect
+                            }
+                        }
                     }
                     Box(
                         Modifier.align(Alignment.CenterHorizontally).padding(top = 10.dp)
