@@ -49,9 +49,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.67.0.apk
+          cp "$APK" Nebula-1.68.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.67.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.67.0 Nebula-1.67.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.67.0" \
-            --notes "The title page has a proper row of actions now: Play, then round buttons for marking something watched, for My List, and for the rest. Marking a film watched no longer means hunting for it — there is a button. Trailers and a details table sit below the cast."
+          gh release delete v1.68.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.68.0 Nebula-1.68.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.68.0" \
+            --notes "A design pass over the whole app, from an audit of every screen.
+
+Title pages: the backdrop now scrolls away with the header instead of showing through the episode list, Play lines up with the round buttons beside it, the description opens with More, and the details table only tells you what the page has not already said.
+
+Player: Audio and Quality open in the player's own panel rather than a system dialog. When a stream will not play you get a sentence and a way back to the other sources, not an error code. The sleep timer closes with Back. The scrubber is easier to hit.
+
+Subtitles on a phone: the three columns stack and scroll as one page, so the tracks and the style controls are no longer hidden off to the right.
+
+Everywhere: selected rows, buttons and stars show a white ring on a TV, empty screens all look alike, removing an add-on asks first, and searching tells you when your add-ons could not be reached instead of saying there are no matches."
