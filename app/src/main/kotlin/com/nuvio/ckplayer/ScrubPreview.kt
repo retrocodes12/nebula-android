@@ -188,8 +188,18 @@ internal class ScrubPreview(private val url: String, ctx: Context) {
         if (start) io.launch { work() }
     }
 
-    /** Any thread. The player is buffering ([b] true): the sweep stands aside until it is not. */
-    fun busy(b: Boolean) { busy = b }
+    /**
+     * Any thread. The player is buffering ([b] true): the sweep stands aside until it is not — and
+     * when it is not, a sweep that was left waiting picks up again (the worker exits when it has
+     * nothing it may do, so something has to wake it).
+     */
+    fun busy(b: Boolean) {
+        busy = b
+        if (b || dead) return
+        val start: Boolean
+        synchronized(lock) { start = !running && sweep.isNotEmpty(); if (start) running = true }
+        if (start) io.launch { work() }
+    }
 
     /** Main thread. Player dispose: no more fetches; the retriever closes once any fetch in flight ends. */
     fun release() {
