@@ -139,6 +139,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -1392,7 +1393,6 @@ internal fun CardSheet(
     var closing by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { shown.targetState = true }
     val firstFocus = remember { FocusRequester() }
-    val sheetFocus = remember { FocusRequester() }
     val keys = LocalInputModeManager.current.inputMode == InputMode.Keyboard
     // The OK that opened this sheet is usually STILL DOWN — a long-press fires at
     // ~500 ms and the remote goes on sending ACTION_DOWN. A row activates on the
@@ -1400,17 +1400,18 @@ internal fun CardSheet(
     // repeat registers a fresh press on whatever we just focused and the release
     // fires it. Nothing counts until that press has been let go.
     //
-    // Two things make that safe. The sheet takes focus ONTO ITSELF first, so the
-    // release cannot be missed for want of a focused descendant — that is the bug
-    // the first attempt had, and it left a viewer who let go on the haptic with a
-    // sheet that never armed. And the opening state comes from [KeyWatch], which
-    // sees the press in the Activity's own dispatch whatever is focused.
+    // The gate only works if the RELEASE is seen, and a Compose key modifier only
+    // sees keys aimed at a focused descendant — so row 0 is focused immediately
+    // (from inside the composed content, see below) and this Column's preview
+    // handler catches the release as its ancestor. Deliberately NOT gated on
+    // `armed`: if the release were ever missed the viewer loses one press, which is
+    // a bad day, where an unfocused sheet is inert to OK entirely.
+    //
+    // The opening state comes from [KeyWatch], read once here: the Activity's own
+    // dispatch sees the press whatever is focused. It does NOT see the matching UP,
+    // because by then the dialog owns the window — harmless, since nothing reads
+    // `okDown` after this initialiser and it self-clears on the next card press.
     var armed by remember { mutableStateOf(!keys || !KeyWatch.okDown) }
-    LaunchedEffect(Unit) { if (!armed) runCatching { sheetFocus.requestFocus() } }
-    // a finger needs no focus, and a pre-lit row on a phone reads as already chosen
-    LaunchedEffect(armed, shown.currentState) {
-        if (keys && armed && shown.currentState) runCatching { firstFocus.requestFocus() }
-    }
     // let the slide-out finish before the dialog goes, so it doesn't blink away
     LaunchedEffect(closing, shown.isIdle) {
         if (closing && shown.isIdle && !shown.currentState) onDismiss()
@@ -1442,16 +1443,12 @@ internal fun CardSheet(
             ) {
                 Column(
                     Modifier.fillMaxWidth()
-                        // swallow every OK belonging to the press that opened us —
+                        // swallow every OK belonging to the press that opened us;
                         // its release is what arms the sheet (see `armed` above)
-                        .focusRequester(sheetFocus)
-                        .focusable()
                         .onPreviewKeyEvent { ev ->
                             if (armed) return@onPreviewKeyEvent false
                             val ok = ev.key == Key.DirectionCenter || ev.key == Key.Enter || ev.key == Key.NumPadEnter
                             if (!ok) return@onPreviewKeyEvent false
-                            // swallow every OK belonging to the press that opened us;
-                            // its release is what arms the sheet
                             if (ev.type == KeyEventType.KeyUp) armed = true
                             true
                         }
@@ -1461,6 +1458,17 @@ internal fun CardSheet(
                         .navigationBarsPadding()
                         .padding(bottom = 12.dp),
                 ) {
+                    // INSIDE the content on purpose. AnimatedVisibility does not compose
+                    // this Column until the enter transition starts, so an effect declared
+                    // beside `shown.targetState = true` fires against a requester with no
+                    // node attached, fails silently, and with a Unit key never retries —
+                    // which is exactly how the last attempt at this came to do nothing.
+                    // A finger needs no focus, and a pre-lit row on a phone reads as
+                    // already chosen, so this is for a remote only.
+                    if (keys) LaunchedEffect(Unit) {
+                        withFrameNanos {}
+                        runCatching { firstFocus.requestFocus() }
+                    }
                     Box(
                         Modifier.align(Alignment.CenterHorizontally).padding(top = 10.dp)
                             .width(38.dp).height(4.dp).clip(RoundedCornerShape(2.dp))
