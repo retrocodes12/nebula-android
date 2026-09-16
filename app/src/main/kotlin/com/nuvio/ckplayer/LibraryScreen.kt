@@ -110,7 +110,7 @@ internal fun LibraryScreen(
                 SheetAction(Icons.Filled.PlayArrow, "Resume") { onSheetResume(r) },
                 SheetAction(Icons.Filled.Replay, "Start over") { onStartOver(r) },
                 SheetAction(Icons.Filled.Info, "View details") { onDetails(r) },
-                SheetAction(Icons.Filled.Delete, "Remove from Continue Watching", destructive = true) {
+                SheetAction(Icons.Filled.Delete, "Remove from Continue watching", destructive = true) {
                     Progress.clear(ctx, r.type, r.id)
                     continueRows = Progress.continueList(ctx)
                 },

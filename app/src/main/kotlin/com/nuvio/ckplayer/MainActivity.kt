@@ -113,9 +113,6 @@ import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material.icons.filled.Replay
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.FastForward
-import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
@@ -172,13 +169,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.zIndex
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.foundation.selection.toggleable
-import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -224,6 +214,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.TrackSelectionDialogBuilder
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -378,11 +369,6 @@ internal val MutedC = Color(0x99EBEBF5)       // secondary label
 internal val FaintC = Color(0x4DEBEBF5)       // tertiary label
 private val FillC: Color get() = if (Prefs.surface == "pure") Color(0x2E767680) else Color(0x3D767680)   // control fill
 internal val TextC = Color(0xFFFFFFFF)
-// Semantic colours beside the accent, so every "this is bad", every warning and every tick
-// agree with each other and with the shared player (--ok, --red, the HUD's amber).
-internal val OkC = Color(0xFF30D158)
-internal val Danger = Color(0xFFFF453A)
-internal val Warn = Color(0xFFFFB340)
 
 // Three registers and nothing between: a display serif for titles, one
 // grotesque for the interface, a mono for every number and label.
@@ -647,7 +633,6 @@ private class SearchUiState {
     var submitted by mutableStateOf("")
     var sections by mutableStateOf<List<CatRow>>(emptyList())
     var searching by mutableStateOf(false)
-    var failed by mutableStateOf(false)          // no add-on answered the last search at all
     var searchedFor: String? = null
     val listState = LazyListState()
 }
@@ -1310,28 +1295,22 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
 private const val BOOT_MIN_MS = 550L    // below this it reads as a flicker, not a screen
 private const val BOOT_MAX_MS = 3200L   // a stuck add-on must never strand anyone here
 
-/** The brand diamond, one drawing for the splash and for Home — a text glyph on one and a path on the
-    other changed shape the moment the splash went. */
-@Composable
-internal fun NebulaMark(size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
-        val c = this.size.minDimension / 2f
-        drawPath(
-            androidx.compose.ui.graphics.Path().apply {
-                moveTo(c, 0f); lineTo(this@Canvas.size.width, c); lineTo(c, this@Canvas.size.height); lineTo(0f, c); close()
-            },
-            Red,
-        )
-    }
-}
-
 /** What you look at while the first catalogue is on its way. */
 @Composable
 private fun BootScreen() {
     Box(Modifier.fillMaxSize().background(Bg), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                NebulaMark(30.dp)
+                Canvas(Modifier.size(30.dp)) {
+                    // the same diamond the rail wears
+                    val c = size.minDimension / 2f
+                    drawPath(
+                        androidx.compose.ui.graphics.Path().apply {
+                            moveTo(c, 0f); lineTo(size.width, c); lineTo(c, size.height); lineTo(0f, c); close()
+                        },
+                        Red,
+                    )
+                }
                 Text(
                     "Nebula", color = TextC, fontSize = 30.sp, fontFamily = Sans,
                     fontWeight = FontWeight.Bold, letterSpacing = (-0.9).sp,
@@ -1411,20 +1390,14 @@ internal fun FocusCard(
  */
 @Composable
 internal fun RoundAction(icon: ImageVector, label: String, on: Boolean = false, onClick: () -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    val focused by interaction.collectIsFocusedAsState()
-    // the same white ring every other D-pad target wears; a filled ("on") circle shows focus as a
-    // dark ring inside the white so the state and the focus can both be read
-    val ring = when { focused && on -> Bg; focused -> Color.White; on -> Color.Transparent; else -> Color(0x38FFFFFF) }
     Box(
         Modifier.size(48.dp).clip(CircleShape)
             .background(if (on) Color.White else Color(0x1FFFFFFF))
-            .border(if (focused) 2.dp else 1.dp, ring, CircleShape)
-            .semantics { contentDescription = label; role = Role.Button }
-            .clickable(interactionSource = interaction, indication = null) { onClick() },
+            .then(if (on) Modifier else Modifier.border(1.dp, Color(0x38FFFFFF), CircleShape))
+            .clickable(onClickLabel = label) { onClick() },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = null, tint = if (on) Color.Black else TextC, modifier = Modifier.size(21.dp))
+        Icon(icon, contentDescription = label, tint = if (on) Color.Black else TextC, modifier = Modifier.size(21.dp))
     }
 }
 
@@ -1579,11 +1552,8 @@ internal fun CardSheet(
                         }
                     }
                     Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0x14FFFFFF)))
-                    // eight friends in Recommend, or a landscape phone: the rows scroll rather than fall off the screen
-                    val maxActs = (LocalConfiguration.current.screenHeightDp * 0.6f).dp
-                    Column(Modifier.heightIn(max = maxActs).verticalScroll(rememberScrollState())) {
                     actions.forEachIndexed { i, a ->
-                        val tint = if (a.destructive) Danger else TextC
+                        val tint = if (a.destructive) Color(0xFFFF5A5F) else TextC
                         Row(
                             Modifier.fillMaxWidth()
                                 .then(if (i == 0) Modifier.focusRequester(firstFocus) else Modifier)
@@ -1597,7 +1567,6 @@ internal fun CardSheet(
                                 fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 15.dp),
                             )
                         }
-                    }
                     }
                 }
             }
@@ -1645,7 +1614,6 @@ internal fun Chip(text: String, on: Boolean, inSeg: Boolean = false, onClick: ()
             .clip(pill)
             .background(if (on) Color.White else Color.Transparent)
             .border(if (focused) 2.dp else 1.dp, line, pill)
-            .semantics { selected = on; role = Role.Tab }
             .clickable(interactionSource = interaction, indication = null) { onClick() }
             .padding(horizontal = if (inSeg) 14.dp else 15.dp, vertical = if (inSeg) 7.dp else 8.dp)
     ) {
@@ -1857,28 +1825,21 @@ private fun RatingStars(item: MetaItem) {
     // one hairline pill, so the stars read as a control and not a second headline
     Row(
         Modifier.padding(top = 14.dp).border(1.dp, LineC, RoundedCornerShape(50))
-            .padding(start = 2.dp, end = 16.dp, top = 2.dp, bottom = 2.dp),
+            .padding(start = 6.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(0.dp),
     ) {
         for (i in 1..5) {
-            // five adjacent targets: each a full 44dp, and the focused one wears the white ring
-            val inter = remember { MutableInteractionSource() }
-            val focused by inter.collectIsFocusedAsState()
-            Box(
-                Modifier.size(44.dp).clip(RoundedCornerShape(12.dp))
-                    .border(2.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(12.dp))
-                    .clickable(interactionSource = inter, indication = null) {
+            Icon(
+                Icons.Filled.Star, contentDescription = "$i star${if (i > 1) "s" else ""}",
+                tint = if (i <= cur) Red else Color(0x40EBEBF5),
+                modifier = Modifier.size(30.dp).clip(RoundedCornerShape(8.dp))
+                    .clickable {
                         cur = if (i == cur) 0 else i
                         Ratings.set(ctx, item.type, item, cur)
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Filled.Star, contentDescription = "$i star${if (i > 1) "s" else ""}",
-                    tint = if (i <= cur) Red else Color(0x40EBEBF5), modifier = Modifier.size(24.dp),
-                )
-            }
+                    }
+                    .padding(4.dp),
+            )
         }
         Eyebrow(if (cur > 0) "Your rating" else "Rate it", Modifier.padding(start = 10.dp))
     }
@@ -2206,10 +2167,9 @@ internal fun SkeletonRow(leadingWidth: Dp, leadingHeight: Dp, circle: Boolean) {
 
 /** Placeholder shaped like a poster/landscape card. */
 @Composable
-internal fun SkeletonCell(modifier: Modifier = Modifier, wide: Boolean = Prefs.landscapeRows) {
+internal fun SkeletonCell(modifier: Modifier = Modifier) {
     Column(modifier) {
-        // the card it stands for is 2:3 unless rows are landscape — a 16:9 placeholder made every grid jump when it filled
-        SkelBox(Modifier.fillMaxWidth().aspectRatio(if (wide) 16f / 9f else thumbRatio("poster")), RoundedCornerShape(cardRadius().dp))
+        SkelBox(Modifier.fillMaxWidth().aspectRatio(16f / 9f), RoundedCornerShape(12.dp))
         SkelBox(Modifier.padding(top = 8.dp).fillMaxWidth(0.7f).height(12.dp))
     }
 }
@@ -2218,18 +2178,12 @@ internal fun SkeletonCell(modifier: Modifier = Modifier, wide: Boolean = Prefs.l
     where the row comes from (or how big it is), and a See-all chip. */
 @Composable
 internal fun RowHeader(title: String, sub: String?, seeAll: (() -> Unit)?) {
-    // the chip is measured first, the title takes whatever is left after the eyebrow's natural width —
-    // splitting the row in half ellipsised long titles beside an eyebrow using a fraction of its half
-    Row(
-        Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Row(Modifier.weight(1f, fill = false).padding(end = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(title, color = TextC, fontSize = 20.sp, fontFamily = Sans, fontWeight = FontWeight.SemiBold,
-                letterSpacing = (-0.4).sp, maxLines = 1,
-                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-            if (sub != null) Eyebrow(sub, Modifier.padding(start = 12.dp).widthIn(max = 170.dp))
-        }
+    Row(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, color = TextC, fontSize = 20.sp, fontFamily = Sans, fontWeight = FontWeight.SemiBold,
+            letterSpacing = (-0.4).sp, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        if (sub != null) Eyebrow(sub, Modifier.padding(start = 12.dp).weight(1f))
+        else Spacer(Modifier.weight(1f))
         if (seeAll != null) Chip("See all ›", false, onClick = seeAll)
     }
 }
@@ -2361,21 +2315,21 @@ private fun UpdateCard(version: String, notes: String, apkUrl: String = Updates.
     }
 
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp)
-            .background(Red, RoundedCornerShape(12.dp))
+        Modifier.fillMaxWidth()
+            .background(Color(0xFFE50914), RoundedCornerShape(12.dp))
             .padding(start = 14.dp, top = 12.dp, end = 6.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Text("Update available · v$version", color = OnAccent, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            Text("Update available · v$version", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
             Text(
                 message ?: when (phase) {
                     "downloading" -> "Downloading… $progress%"
                     "ready" -> "Ready — tap Install."
                     else -> notes.ifEmpty { "A new version is available." }
                 },
-                color = OnAccent.copy(alpha = 0.82f), fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                color = Color(0xFFFFE0E0), fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 2.dp),
             )
         }
@@ -2391,7 +2345,7 @@ private fun UpdateCard(version: String, notes: String, apkUrl: String = Updates.
                 }
             },
             enabled = phase != "downloading",
-            colors = ButtonDefaults.buttonColors(containerColor = OnAccent, contentColor = Red),
+            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Red),
             shape = RoundedCornerShape(12.dp),
         ) {
             Text(
@@ -2433,21 +2387,14 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit) {
     if (picks.isEmpty()) return
     var idx by remember(picks) { mutableStateOf(0) }
     val every = Prefs.heroInterval
+    LaunchedEffect(picks, every) {
+        if (every <= 0) return@LaunchedEffect                  // Featured changes every · Off
+        while (true) { delay(every * 1000L); idx = (idx + 1) % picks.size }
+    }
     val (from, m) = picks[idx]
     // the board owns the top of the screen edge to edge and dissolves into it
     val heroH = (LocalConfiguration.current.screenHeightDp * 0.58f).dp
-    val ctx = LocalContext.current
-    val tv = remember { Account.isTv(ctx) }
-    val heroInter = remember { MutableInteractionSource() }
-    val heroFocused by heroInter.collectIsFocusedAsState()
-    // the whole board is a tap target on a phone; on a TV the pill is the one stop, or the D-pad met a
-    // 58 %-of-screen focus target with no ring and then a pill that did the same thing
-    // Featured changes every · Off = never; and never under a focused pill, or OK would open a title the viewer did not choose
-    LaunchedEffect(picks, every, heroFocused) {
-        if (every <= 0 || heroFocused) return@LaunchedEffect
-        while (true) { delay(every * 1000L); idx = (idx + 1) % picks.size }
-    }
-    Box(Modifier.fillMaxWidth().height(heroH).then(if (tv) Modifier else Modifier.clickable { onOpen(from, m) })) {
+    Box(Modifier.fillMaxWidth().height(heroH).clickable { onOpen(from, m) }) {
         // a slide change dissolves one picture into the next rather than cutting (a cut under reduced motion)
         Crossfade(targetState = m, animationSpec = tween(if (Prefs.reducedMotion) 0 else 400), label = "heroArt", modifier = Modifier.matchParentSize()) { pick ->
             AsyncImage(
@@ -2494,13 +2441,11 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit) {
             // one white pill; My List lives on the title page
             Button(
                 onClick = { onOpen(from, m) },
-                interactionSource = heroInter,
                 colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
                 shape = RoundedCornerShape(50),
                 contentPadding = PaddingValues(horizontal = 30.dp, vertical = 13.dp),
-                modifier = Modifier.padding(top = 14.dp)
-                    .border(2.dp, if (heroFocused) Color.White else Color.Transparent, RoundedCornerShape(50)),
-            ) { Text("View details", fontSize = 15.sp, fontWeight = FontWeight.SemiBold) }
+                modifier = Modifier.padding(top = 14.dp),
+            ) { Text("View Details", fontSize = 15.sp, fontWeight = FontWeight.SemiBold) }
             Row(
                 Modifier.padding(top = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -2551,7 +2496,7 @@ private fun HomeScreen(
                 SheetAction(Icons.Filled.PlayArrow, "Resume") { onSheetResume(r) },
                 SheetAction(Icons.Filled.Replay, "Start over") { onStartOver(r) },
                 SheetAction(Icons.Filled.Info, "View details") { onDetails(r) },
-                SheetAction(Icons.Filled.Delete, "Remove from Continue Watching", destructive = true) {
+                SheetAction(Icons.Filled.Delete, "Remove from Continue watching", destructive = true) {
                     Progress.clear(ctx, r.type, r.id)
                     st.continueRows = Progress.continueList(ctx)
                 },
@@ -2623,7 +2568,7 @@ private fun HomeScreen(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 8.dp),
         ) {
-            NebulaMark(14.dp, Modifier.padding(end = 8.dp))
+            Text("◆ ", color = Red, fontSize = 18.sp)
             Text("Nebula", color = TextC, fontSize = 22.sp, fontFamily = Sans,
                 fontWeight = FontWeight.Bold, letterSpacing = (-0.6).sp)
         }
@@ -2640,14 +2585,29 @@ private fun HomeScreen(
             )
         }
         when {
-            !st.hasAddons -> Box(Modifier.padding(horizontal = 16.dp)) {
-                EmptyState(Icons.Filled.Extension, "Nothing here yet", "Add an add-on and its catalogs fill this screen.", "Add an add-on", onGoAddons)
+            !st.hasAddons -> Column(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 36.dp)
+                    .background(SurfaceC, RoundedCornerShape(12.dp))
+                    .border(1.dp, LineC, RoundedCornerShape(12.dp)).padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text("Nothing here yet", color = TextC, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "Add an add-on and its catalogs fill this screen.",
+                    color = MutedC, fontSize = 14.sp, textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 6.dp, bottom = 16.dp),
+                )
+                Button(
+                    onClick = onGoAddons,
+                    colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
+                    shape = RoundedCornerShape(12.dp),
+                ) { Text("Add an add-on", fontWeight = FontWeight.SemiBold) }
             }
             st.rows.isEmpty() && st.loading && st.continueRows.isEmpty() -> {
                 // the page's shape before its pictures: the hero's footprint, then two rows of cards
                 val br = shimmerBrush()
                 Column(Modifier.fillMaxWidth()) {
-                    Box(Modifier.fillMaxWidth().height((LocalConfiguration.current.screenHeightDp * 0.58f).dp).background(br))
+                    Box(Modifier.fillMaxWidth().height((LocalConfiguration.current.screenHeightDp * 0.34f).dp).background(br))
                     Column(Modifier.padding(horizontal = 16.dp)) {
                         repeat(2) { i ->
                             Box(Modifier.padding(top = 22.dp, bottom = 10.dp).width(160.dp).height(18.dp)
@@ -2667,7 +2627,7 @@ private fun HomeScreen(
                 if (st.rows.isNotEmpty() && Prefs.showHero) item(key = "hero") { HeroHeader(st.rows, onOpen) }
                 if (st.continueRows.isNotEmpty() && Prefs.showContinue) item(key = "continue") {
                     Column {
-                        Box(Modifier.padding(horizontal = 16.dp)) { RowHeader("Continue Watching", null, null) }
+                        Box(Modifier.padding(horizontal = 16.dp)) { RowHeader("Continue watching", null, null) }
                         LazyRow(
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                             contentPadding = PaddingValues(horizontal = 16.dp),
@@ -2727,11 +2687,13 @@ private fun HomeScreen(
 /** Home with nothing to show: every row switched off by hand is not an outage. */
 @Composable
 private fun HomeNoRows(st: HomeUiState, onCustomise: () -> Unit) {
-    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         if (st.hidden > 0 && st.wanted == 0) {
-            EmptyState(Icons.Filled.ViewAgenda, "Every row is switched off", "Turn a row back on and it fills this screen.", "Customise Home", onCustomise)
+            Text("Every row is switched off.", color = MutedC, fontSize = 14.sp, modifier = Modifier.padding(bottom = 10.dp))
+            Chip("Customise Home", false, onClick = onCustomise)
         } else {
-            EmptyState(Icons.Filled.Extension, "Couldn’t reach your add-ons", "Check the connection, then try again.", "Retry") { st.invalidate() }
+            Text("Couldn’t reach your add-ons right now.", color = MutedC, fontSize = 14.sp, modifier = Modifier.padding(bottom = 10.dp))
+            Chip("Retry", false) { st.invalidate() }
         }
     }
 }
@@ -2754,10 +2716,8 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
         if (q.isEmpty()) { st.sections = emptyList(); st.searchedFor = null; return@LaunchedEffect }
         if (q == st.searchedFor && st.sections.isNotEmpty()) return@LaunchedEffect
         st.searching = true
-        st.failed = false
         val out = mutableListOf<CatRow>()
         st.sections = emptyList()
-        var asked = 0; var failures = 0
         for (a in activeAddons(ctx)) {
             runCatching {
                 // An add-on usually advertises search on several catalogs (Cinemeta
@@ -2765,13 +2725,10 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
                 // search for a show only ever returns films.
                 val cats = manifestFor(a.manifestUrl).catalogs.filter { it.search }.take(4)
                 if (cats.isEmpty()) return@runCatching
-                asked++
                 val merged = mutableListOf<MetaItem>()
                 val seen = HashSet<String>()
-                var answered = false
                 for (sc in cats) {
                     val items = runCatching { Stremio.loadCatalog(a.base, sc, null, q) }
-                        .onSuccess { answered = true }
                         .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
                         .getOrDefault(emptyList())
                     for (m in items) if (seen.add(m.type + ":" + m.id)) merged.add(m)
@@ -2783,11 +2740,8 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
                         st.sections = out.toList()
                     }
                 }
-                if (!answered) failures++
-            }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; asked++; failures++ }
+            }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
         }
-        // every add-on that could search failed to answer: an outage, not "this film does not exist"
-        st.failed = asked > 0 && failures == asked
         st.searchedFor = q
         st.searching = false
     }
@@ -2825,14 +2779,8 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
                     repeat(4) { SkeletonCell(Modifier.width(210.dp)) }
                 }
             }
-            st.submitted.isNotBlank() && st.sections.isEmpty() && st.failed ->
-                EmptyState(Icons.Filled.Extension, "Couldn’t reach your add-ons", "Check the connection, then try again.", "Retry") {
-                    st.searchedFor = null; st.failed = false; val q = st.submitted; st.submitted = ""; st.submitted = q
-                }
             st.submitted.isNotBlank() && st.sections.isEmpty() ->
-                EmptyState(Icons.Filled.Search, "No matches", "Nothing in your add-ons is called “${st.submitted.trim()}”.", "Clear search") {
-                    st.query = ""; st.submitted = ""
-                }
+                Text("No matches for “${st.submitted.trim()}”.", color = MutedC, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
             st.submitted.isBlank() -> DiscoverSection(
                 ctx, st.discover, Modifier.weight(1f),
                 onOpen = onOpen,
@@ -2944,7 +2892,7 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                                     val list = (addons.filterNot { it.manifestUrl == a.manifestUrl } + a)
                                     saveAddons(ctx, list); addons = list; url = ""; onAddonsChanged()
                                     status = "Added ${a.name}"; statusErr = false
-                                }.onFailure { status = friendlyError(it); statusErr = true }
+                                }.onFailure { status = "Could not load: ${it.message}"; statusErr = true }
                             }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
@@ -2952,7 +2900,7 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                     ) { Text("Add add-on", fontWeight = FontWeight.SemiBold) }
                 }
                 if (status.isNotEmpty()) {
-                    Text(status, color = if (statusErr) Danger else MutedC, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+                    Text(status, color = if (statusErr) Color(0xFFFF6B6B) else Color(0xFF7CFC7C), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
                 }
             }
         }
@@ -3097,21 +3045,15 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                                 )
                             }
                         }
-                        // the one control nobody wants easiest to hit: it asks, in the sheet material
-                        var confirmRemove by remember(a.manifestUrl) { mutableStateOf(false) }
-                        IconButton(onClick = { confirmRemove = true }, modifier = Modifier.size(44.dp)) {
-                            Icon(Icons.Filled.Close, contentDescription = "Remove", tint = MutedC, modifier = Modifier.size(18.dp))
-                        }
-                        if (confirmRemove) ConfirmSheet(
-                            "Remove ${a.name.ifEmpty { "this add-on" }}?",
-                            "Its catalogs, streams and subtitles leave every screen. You can add it again later.",
-                            "Remove",
-                            onConfirm = {
+                        IconButton(
+                            onClick = {
                                 val list = addons.filterNot { it.manifestUrl == a.manifestUrl }
                                 saveAddons(ctx, list); addons = list; onAddonsChanged()
                             },
-                            onDismiss = { confirmRemove = false },
-                        )
+                            modifier = Modifier.size(36.dp),
+                        ) {
+                            Icon(Icons.Filled.Close, contentDescription = "Remove", tint = MutedC, modifier = Modifier.size(18.dp))
+                        }
                     }
                 }
                 }
@@ -3157,7 +3099,6 @@ internal fun SettingsRow(
             Modifier.fillMaxWidth()
                 .then(if (onClick != null) Modifier.clickable(interactionSource = interaction, indication = null) { onClick() } else Modifier)
                 .background(if (focused) Color(0x14FFFFFF) else Color.Transparent)
-                .border(2.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(12.dp))
                 .padding(horizontal = 14.dp, vertical = 13.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -3193,7 +3134,7 @@ private fun SettingsScreen(
     val version = remember {
         runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "?"
     }
-    var updSub by remember { mutableStateOf("You’re on v$version · check for a newer one") }
+    var updSub by remember { mutableStateOf("You're on v$version — tap to check now") }
     var checking by remember { mutableStateOf(false) }
     // "3 add-ons · 2 on · 1 off" — the list is read on every entry to this screen
     val addonsSub = remember {
@@ -3235,6 +3176,35 @@ private fun SettingsScreen(
             SettingsRow(Icons.Filled.Extension, "Add-ons", addonsSub, true, onAddons)
             SettingsRow(Icons.Filled.Groups, "Watch party", "Watch in sync with friends using a code", true, onParty)
             SettingsRow(Icons.Filled.Favorite, "Friends", "Rate, share and recommend — experimental", true, onFriends)
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Party name", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text("How you appear to friends in a party", color = MutedC, fontSize = 13.sp)
+                }
+                val ctx2 = LocalContext.current
+                var pname by remember {
+                    mutableStateOf(ctx2.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("party_name", "") ?: "")
+                }
+                OutlinedTextField(
+                    value = pname,
+                    onValueChange = { v ->
+                        pname = v.take(40)
+                        ctx2.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("party_name", pname.trim()).apply()
+                    },
+                    placeholder = { Text(Cloud.profile?.name?.takeIf { it.isNotBlank() } ?: android.os.Build.MODEL.take(24), color = MutedC) },
+                    singleLine = true,
+                    modifier = Modifier.width(150.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color.White, unfocusedBorderColor = Line2, cursorColor = Red,
+                        focusedTextColor = TextC, unfocusedTextColor = TextC,
+                    ),
+                )
+            }
         }
         if (Prefs.everything) {
             SettingsHeader("ADVANCED", "The welcome message, a full reset, caches")
@@ -3263,7 +3233,7 @@ private fun SettingsScreen(
                         updSub = when {
                             r == null -> "Could not reach the release feed — try again later"
                             Updates.isNewer(r.version, version) -> "v${r.version} is available — the update card is waiting on Home"
-                            else -> "You’re up to date (v$version)"
+                            else -> "You're up to date (v$version)"
                         }
                         checking = false
                     }
@@ -3291,14 +3261,8 @@ private fun SettingsSubtitlesScreen(onBack: () -> Unit) {
 /** A titled switch row for the settings pages. */
 @Composable
 internal fun SettingsToggle(title: String, sub: String, checked: Boolean, divider: Boolean = true, onChange: (Boolean) -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    val focused by interaction.collectIsFocusedAsState()
-    // one control, not a row wrapping a second one: the row is the switch, and it says so to a screen reader
     Row(
-        Modifier.fillMaxWidth()
-            .toggleable(value = checked, interactionSource = interaction, indication = null, role = Role.Switch) { onChange(it) }
-            .background(if (focused) Color(0x14FFFFFF) else Color.Transparent)
-            .border(2.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(12.dp))
+        Modifier.fillMaxWidth().clickable { onChange(!checked) }
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -3308,7 +3272,7 @@ internal fun SettingsToggle(title: String, sub: String, checked: Boolean, divide
             Text(sub, color = MutedC, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 2.dp))
         }
         Switch(
-            checked = checked, onCheckedChange = null,
+            checked = checked, onCheckedChange = onChange,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = OnAccent, checkedTrackColor = Red,
                 uncheckedThumbColor = Color(0xFF8E8E93), uncheckedTrackColor = Surface2,
@@ -3376,10 +3340,8 @@ private fun SettingsLayoutScreen(onBack: () -> Unit, onSupport: () -> Unit) {
                                         Icons.Filled.Lock, contentDescription = "Supporter colour",
                                         tint = Color.White, modifier = Modifier.size(20.dp),
                                     )
-                                    else if (on) Icon(
-                                        Icons.Filled.Check, contentDescription = "Chosen",
-                                        tint = if (key == "white") Color.Black else Color.White, modifier = Modifier.size(22.dp),
-                                    )
+                                    else if (on) Text("✓", color = if (key == "white") Color.Black else Color.White,
+                                        fontSize = 20.sp, fontWeight = FontWeight.Bold)
                                 }
                                 Text(
                                     label, color = if (on) TextC else MutedC, fontSize = 12.sp,
@@ -3630,26 +3592,9 @@ private fun PartyPanel(onJoin: (String) -> Unit) {
             ) { Text("Join", fontWeight = FontWeight.SemiBold) }
         }
         Text(
-            "To start one: play a stream, then open the party button in the player. Friends enter your code here and watch in sync.",
+            "To start one: play a stream, then tap the party button in the player. Friends enter your code here and watch in sync.",
             color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp),
         )
-        // the name friends see in a party — it used to be a 150dp field wedged into General
-        val ctx = LocalContext.current
-        var pname by remember {
-            mutableStateOf(ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("party_name", "") ?: "")
-        }
-        Text("YOUR NAME IN A PARTY", color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp,
-            modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
-        PField(
-            value = pname,
-            onChange = { v ->
-                pname = v.take(40)
-                ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("party_name", pname.trim()).apply()
-            },
-            placeholder = Cloud.profile?.name?.takeIf { it.isNotBlank() } ?: android.os.Build.MODEL.take(24),
-            words = true, last = true,
-        )
-        Text("How you appear to friends while watching together.", color = MutedC, fontSize = 13.sp)
     }
 }
 
@@ -3718,6 +3663,21 @@ private fun DetailScreen(
     }
 
     Box(Modifier.fillMaxSize()) {
+        // full-bleed backdrop; the scrim exists only so type stays legible
+        Box(Modifier.fillMaxWidth().height(430.dp)) {
+            val art = full?.background ?: item.background ?: item.poster
+            if (art != null) {
+                AsyncImage(model = art, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
+            }
+            Box(
+                Modifier.matchParentSize().background(
+                    Brush.verticalGradient(
+                        0f to Color(0x52000000), 0.32f to Color(0x1F000000),
+                        0.7f to Color(0xC7000000), 1f to Color(0xFF000000),
+                    )
+                )
+            )
+        }
         // series episodes live inline on this page (one scroll, like the big apps)
         var episodes by remember(ck) { mutableStateOf<List<Episode>>(emptyList()) }
         var selectedSeason by remember(ck) { mutableStateOf<Int?>(null) }
@@ -3760,25 +3720,8 @@ private fun DetailScreen(
         val currentSeason = selectedSeason ?: seasons.firstOrNull()
         val eps = (bySeason[currentSeason] ?: emptyList()).sortedBy { it.episode ?: 0 }
 
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 32.dp)) {
-        item { Box {
-        // full-bleed backdrop INSIDE the header item, so it scrolls away with it — pinned under the
-        // list it showed through every episode row and every table line that scrolled over it
-        Box(Modifier.fillMaxWidth().height(430.dp)) {
-            val art = full?.background ?: item.background ?: item.poster
-            if (art != null) {
-                AsyncImage(model = art, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
-            }
-            Box(
-                Modifier.matchParentSize().background(
-                    Brush.verticalGradient(
-                        0f to Color(0x52000000), 0.32f to Color(0x1F000000),
-                        0.7f to Color(0xC7000000), 1f to Color(0xFF000000),
-                    )
-                )
-            )
-        }
-        Column(Modifier.padding(horizontal = 16.dp).padding(top = 16.dp)) {
+        LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
+        item { Column {
         BackBar("", null, onBack)
         Spacer(Modifier.height(160.dp))
         val logoArt = full?.logo ?: item.logo
@@ -3814,31 +3757,39 @@ private fun DetailScreen(
             }
         }
         (full?.description ?: item.description)?.let {
-            // four lines and a More: past seven lines the rest of a synopsis used to be simply unreachable
-            var open by remember(ck) { mutableStateOf(false) }
-            var clipped by remember(ck) { mutableStateOf(false) }
-            Text(it, color = Color(0xCCFFFFFF), fontSize = 14.sp, lineHeight = 21.sp, maxLines = if (open) Int.MAX_VALUE else 4,
-                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 10.dp),
-                onTextLayout = { r: TextLayoutResult -> if (!open) clipped = r.hasVisualOverflow })
-            if (clipped || open) TextAction(if (open) "Less" else "More") { open = !open }
+            Text(it, color = Color(0xCCFFFFFF), fontSize = 14.sp, lineHeight = 21.sp, maxLines = 7,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 10.dp))
         }
         // Genres and cast on title pages: Settings › Home
-        // genres and cast read as facts: drawn as bordered pills they matched the season chips one
-        // row below and read as controls that did nothing (and sat in the D-pad's way)
         full?.genres?.takeIf { it.isNotEmpty() && Prefs.detailGenres }?.let { gs ->
-            Text(
-                gs.take(6).joinToString("  ·  "), color = MutedC, fontSize = 13.sp, fontWeight = FontWeight.Medium,
-                maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 12.dp),
-            )
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 14.dp),
+            ) {
+                items(gs.take(6).size) { i ->
+                    Text(
+                        gs[i], color = TextC, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                        modifier = Modifier.border(1.dp, Color(0x38FFFFFF), RoundedCornerShape(50))
+                            .padding(horizontal = 14.dp, vertical = 7.dp),
+                    )
+                }
+            }
         }
         full?.cast?.takeIf { it.isNotEmpty() && Prefs.detailCast }?.let { cast ->
-            Eyebrow("Cast", Modifier.padding(top = 16.dp, bottom = 6.dp))
-            Text(cast.take(8).joinToString(", "), color = TextC, fontSize = 14.sp, lineHeight = 20.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            Eyebrow("Cast", Modifier.padding(top = 16.dp, bottom = 8.dp))
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(cast.take(8).size) { i ->
+                    Text(
+                        cast[i], color = MutedC, fontSize = 13.sp,
+                        modifier = Modifier.border(1.dp, LineC, RoundedCornerShape(50))
+                            .padding(horizontal = 14.dp, vertical = 7.dp),
+                    )
+                }
+            }
         }
         Row(
             Modifier.padding(top = 16.dp, bottom = 24.dp).horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
         ) {
             Button(
                 onClick = {
@@ -3860,9 +3811,7 @@ private fun DetailScreen(
                     }
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
-                shape = RoundedCornerShape(50),
-                contentPadding = PaddingValues(horizontal = 24.dp),
-                modifier = Modifier.height(48.dp),
+                shape = RoundedCornerShape(12.dp),
             ) {
                 Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                 Text(
@@ -3939,9 +3888,7 @@ private fun DetailScreen(
                             modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
                                 .clip(RoundedCornerShape(10.dp)).background(SurfaceC),
                         )
-                        // a caption only when it says something: "Trailer" under TRAILERS, or the film's own
-                        // name on its own page, is the row saying things twice
-                        if (t.title.isNotBlank() && !t.title.equals("Trailer", true) && !t.title.equals(item.name, true)) Text(
+                        Text(
                             t.title, color = MutedC, fontSize = 12.sp, maxLines = 1,
                             overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 6.dp),
                         )
@@ -3952,15 +3899,17 @@ private fun DetailScreen(
 
         // Movie Details: the facts that do not fit the line under the title, as a
         // plain two-column table with a hairline between rows.
-        // only what the page has not already said: the year, runtime and genres sit under the title
         val details = listOfNotNull(
+            (full?.releaseInfo ?: item.releaseInfo)?.let { "Release Info" to it },
+            full?.runtime?.let { "Runtime" to it },
+            full?.country?.let { "Origin Country" to it },
             full?.director?.takeIf { it.isNotEmpty() }?.let { "Director" to it.joinToString(", ") },
             full?.writer?.takeIf { it.isNotEmpty() }?.let { "Writer" to it.joinToString(", ") },
-            full?.country?.let { "Country" to it },
+            full?.genres?.takeIf { it.isNotEmpty() }?.let { "Genres" to it.take(4).joinToString(", ") },
         )
         if (details.isNotEmpty()) {
             Text(
-                "Details",
+                if (item.type == "series") "Show Details" else "Movie Details",
                 color = TextC, fontSize = 19.sp, fontWeight = FontWeight.Bold,
                 letterSpacing = (-0.3).sp, modifier = Modifier.padding(top = 24.dp, bottom = 4.dp),
             )
@@ -3978,21 +3927,21 @@ private fun DetailScreen(
                 }
             }
         }
-        } } }   // header item
+        } }   // header item
 
         if (item.type == "series") {
             if (seasons.size > 1) item(key = "seasons") {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 14.dp)) {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 14.dp)) {
                     items(seasons.size) { i ->
                         val sn = seasons[i]
                         Chip(if (sn == 0) "Specials" else "Season $sn", sn == currentSeason) { selectedSeason = sn }
                     }
                 }
             }
-            if (epsLoading) items(4) { Box(Modifier.padding(horizontal = 16.dp)) { SkeletonRow(112.dp, 63.dp, circle = false) } }
+            if (epsLoading) items(4) { SkeletonRow(112.dp, 63.dp, circle = false) }
             items(eps.size, key = { eps[it].id }) { i ->
                 val ep = eps[i]
-                Box(Modifier.padding(horizontal = 16.dp)) { EpisodeRow(
+                EpisodeRow(
                     itemType = item.type, ep = ep, upNext = ep.id == upNextId, first = i == 0,
                     seriesPoster = full?.poster ?: item.poster,
                     onClick = { onPlayEpisode(ep, PlayIntent.TAP) },
@@ -4000,8 +3949,9 @@ private fun DetailScreen(
                     onStartOver = { onPlayEpisode(ep, PlayIntent.START_OVER) },
                     // a mark moves "Up next"; the season on screen deliberately stays put
                     onMarked = { marks++; upNextId = seriesUpNext(ctx, item.type, episodes)?.id },
-                ) }
+                )
             }
+            item { Spacer(Modifier.height(24.dp)) }
         }
         }
     }
@@ -4059,10 +4009,9 @@ private fun EpisodeRow(
                     if (pr?.done == true) {
                         Box(
                             Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp)
-                                .background(Color(0xD10B0B0F), CircleShape)
-                                .semantics { contentDescription = "Watched" },
+                                .background(Color(0xD10B0B0F), CircleShape),
                             contentAlignment = Alignment.Center,
-                        ) { Icon(Icons.Filled.Check, contentDescription = null, tint = OkC, modifier = Modifier.size(12.dp)) }
+                        ) { Text("✓", color = Color(0xFF46D369), fontSize = 11.sp, fontWeight = FontWeight.Black) }
                     } else if (pr != null && pr.pos > 0 && pr.dur > 0) {
                         Box(Modifier.align(Alignment.BottomStart).width(112.dp).height(4.dp).background(Color(0x8C000000))) {
                             Box(Modifier.fillMaxWidth((pr.pos.toFloat() / pr.dur).coerceIn(0f, 1f)).fillMaxSize().background(Red))
@@ -4192,7 +4141,7 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
                 current = initial?.let { i -> it.firstOrNull { c -> c.type == i.type && c.id == i.id } } ?: it.firstOrNull()
                 if (it.isEmpty()) { status = "No catalogs."; loading = false }
             }
-            .onFailure { status = friendlyError(it); loading = false }
+            .onFailure { status = "Failed: ${it.message}"; loading = false }
     }
     LaunchedEffect(current, genre, submitted) {
         val q = submitted.trim()
@@ -4206,7 +4155,7 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
             loading = true; status = "Searching…"; items = emptyList()
             runCatching { Stremio.loadCatalog(addon.base, sc, null, q) }
                 .onSuccess { items = it; status = if (it.isEmpty()) "No matches for “$q”." else "${it.size} result${if (it.size > 1) "s" else ""} for “$q”"; loading = false; st.loadedFor = want }
-                .onFailure { status = friendlyError(it); loading = false; st.loadedFor = null }
+                .onFailure { status = "Failed: ${it.message}"; loading = false; st.loadedFor = null }
         } else {
             val c = current ?: return@LaunchedEffect
             loading = true; status = "Loading…"; items = emptyList()
@@ -4220,7 +4169,7 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
                     status = if (it.isEmpty()) "No items." else "${it.size} items" + (if (st.pageDone) "" else " — scroll for more")
                     loading = false; st.loadedFor = want
                 }
-                .onFailure { status = friendlyError(it); loading = false; st.loadedFor = null; st.pageDone = true }
+                .onFailure { status = "Failed: ${it.message}"; loading = false; st.loadedFor = null; st.pageDone = true }
         }
     }
 
@@ -4300,7 +4249,7 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
             ) {
                 items(12) {
                     Column {
-                        Box(Modifier.fillMaxWidth().aspectRatio(if (Prefs.landscapeRows) 16f / 9f else thumbRatio("poster")).clip(RoundedCornerShape(cardRadius().dp)).background(br))
+                        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)).background(br))
                         Box(Modifier.padding(top = 8.dp).fillMaxWidth(0.7f).height(12.dp).clip(RoundedCornerShape(12.dp)).background(br))
                     }
                 }
@@ -4574,7 +4523,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                     horizontalArrangement = Arrangement.spacedBy(7.dp),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 ) {
-                    item { StreamFilterChip("Reload", false, icon = Icons.Filled.Refresh) { filter = null; reload++ } }
+                    item { StreamFilterChip("↻", false) { filter = null; reload++ } }
                     item { StreamFilterChip("All", filter == null) { filter = null } }
                     items(sections.size) { i ->
                         val nm = sections[i].first.name
@@ -4629,24 +4578,20 @@ internal fun partyDisplayName(ctx: Context): String {
 
 /** Quiet outlined filter — only the active one carries fill. */
 @Composable
-private fun StreamFilterChip(label: String, on: Boolean, icon: ImageVector? = null, onClick: () -> Unit) {
+private fun StreamFilterChip(label: String, on: Boolean, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
-    val ink = if (on) Color.Black else if (focused) TextC else MutedC
-    val mod = Modifier
-        .clip(RoundedCornerShape(50))
-        .background(if (on) Color.White else Color.Transparent)
-        .border(1.dp, if (on) Color.Transparent else if (focused) Color.White else LineC, RoundedCornerShape(50))
-        .clickable(interactionSource = interaction, indication = null) { onClick() }
-    if (icon != null) {
-        // an icon-only chip (reload): the label is what a screen reader hears
-        Box(mod.padding(horizontal = 11.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
-            Icon(icon, contentDescription = label, tint = ink, modifier = Modifier.size(17.dp))
-        }
-    } else Text(
-        label, color = ink,
+    Text(
+        label,
+        color = if (on) Color.Black else if (focused) TextC else MutedC,
         fontSize = 13.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
-        maxLines = 1, modifier = mod.padding(horizontal = 15.dp, vertical = 8.dp),
+        maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (on) Color.White else Color.Transparent)
+            .border(1.dp, if (on) Color.Transparent else if (focused) Color.White else LineC, RoundedCornerShape(50))
+            .clickable(interactionSource = interaction, indication = null) { onClick() }
+            .padding(horizontal = 15.dp, vertical = 8.dp),
     )
 }
 
@@ -4769,85 +4714,26 @@ private fun BoxScope.ReactionFloat(emoji: String, name: String) {
     }
 }
 
-/** The in-player Audio / Quality menu: every supported track of one type, the chosen one ticked;
-    Quality also offers Auto (the engine picks by bandwidth). Picking sets a track override and closes. */
-@Composable
-private fun TrackMenu(exo: ExoPlayer, type: Int, onClose: () -> Unit) {
-    var stamp by remember { mutableIntStateOf(0) }
-    val groups = remember(stamp, type) { exo.currentTracks.groups.filter { it.type == type && it.isSupported } }
-    val auto = remember(stamp, type) { exo.trackSelectionParameters.overrides.keys.none { it.type == type } }
-    val firstFocus = remember { FocusRequester() }
-    val keys = LocalInputModeManager.current.inputMode == InputMode.Keyboard
-    LaunchedEffect(type) { if (keys) { withFrameNanos {}; runCatching { firstFocus.requestFocus() } } }
-    fun pick(g: Tracks.Group, i: Int) {
-        exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
-            .setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, i)).build()
-        stamp++; onClose()
-    }
-    Column(
-        Modifier.padding(end = 20.dp).width(300.dp)
-            .background(SurfaceC, RoundedCornerShape(14.dp))
-            .border(1.dp, Line2, RoundedCornerShape(14.dp))
-            .padding(vertical = 8.dp)
-            .verticalScroll(rememberScrollState()),
-    ) {
-        Text(
-            if (type == C.TRACK_TYPE_AUDIO) "AUDIO" else "QUALITY",
-            color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-        )
-        var first = true
-        if (type == C.TRACK_TYPE_VIDEO) {
-            SubMenuRow("Auto", auto, Modifier.focusRequester(firstFocus)) {
-                exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon().clearOverridesOfType(type).build()
-                stamp++; onClose()
-            }
-            first = false
-        }
-        var n = 0
-        groups.forEach { g ->
-            for (i in 0 until g.length) {
-                if (!g.isTrackSupported(i)) continue
-                n++
-                val f = g.getTrackFormat(i)
-                val label = if (type == C.TRACK_TYPE_AUDIO) audioTrackLabel(f, n) else videoTrackLabel(f)
-                // under Auto every rung of an adaptive ladder counts as "selected" — the tick would land on all of them
-                val on = g.isTrackSelected(i) && (type == C.TRACK_TYPE_AUDIO || !auto)
-                SubMenuRow(label, on, if (first) Modifier.focusRequester(firstFocus) else Modifier) { pick(g, i) }
-                first = false
-            }
-        }
-        if (n == 0) Text(
-            if (type == C.TRACK_TYPE_AUDIO) "This stream has one sound track." else "This stream comes in one quality.",
-            color = MutedC, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-        )
-    }
-}
-
 /** One row of the in-player subtitle picker. */
 @Composable
-private fun SubMenuRow(label: String, active: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun SubMenuRow(label: String, active: Boolean, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     Row(
-        modifier.fillMaxWidth().padding(horizontal = 6.dp)
+        Modifier.fillMaxWidth()
             .clickable(interactionSource = interaction, indication = null) { onClick() }
-            .background(if (focused) Color(0x14FFFFFF) else Color.Transparent, RoundedCornerShape(10.dp))
-            .border(2.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(10.dp))
-            .semantics { selected = active }
-            .padding(horizontal = 10.dp, vertical = 11.dp),
+            .background(if (focused) Color(0x14FFFFFF) else Color.Transparent)
+            .padding(horizontal = 16.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, color = TextC, fontSize = 14.sp, fontWeight = if (active) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.weight(1f))
-        if (active) Icon(Icons.Filled.Check, contentDescription = null, tint = OkC, modifier = Modifier.size(16.dp))
+        if (active) Text("✓", color = Color(0xFF46D369), fontSize = 13.sp, fontWeight = FontWeight.Black)
     }
 }
 
 internal fun langLabel(code: String): String = runCatching {
     val c = code.trim().lowercase()
-    // "" for no language, the way the shared player's knownLang does it — a caller falls back to the
-    // track's own label or a number, never to a column of identical "Unknown" rows
-    if (c.isEmpty() || c == "und") ""
+    if (c.isEmpty() || c == "und") "Unknown"
     else java.util.Locale(c.take(3)).getDisplayLanguage(java.util.Locale.ENGLISH)
         .ifEmpty { c.uppercase() }.replaceFirstChar { it.uppercase() }
 }.getOrDefault(code.uppercase())
@@ -4895,7 +4781,6 @@ private fun PlayerScreen(
     val activity = context as? Activity
     var hostDirty by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var trackMenu by remember { mutableStateOf<Int?>(null) }        // C.TRACK_TYPE_AUDIO / VIDEO while that menu is up
     var videoQualityCount by remember { mutableStateOf(0) }
     var audioTrackCount by remember { mutableStateOf(0) }
     var textTrackCount by remember { mutableStateOf(0) }
@@ -5259,7 +5144,7 @@ private fun PlayerScreen(
                     Toasts.show("Your PC stopped answering — playing direct")
                     return
                 }
-                error = playErrorLine(e)
+                error = "Playback error ${e.errorCodeName} (${e.errorCode})"
             }
             override fun onTracksChanged(tracks: Tracks) {
                 var v = 0
@@ -5678,14 +5563,16 @@ private fun PlayerScreen(
                 chromeTouchedAt = System.currentTimeMillis()
             },
             onAudio = {
-                trackMenu = if (trackMenu == C.TRACK_TYPE_AUDIO) null else C.TRACK_TYPE_AUDIO
-                sleepMenuOpen = false
-                chromeTouchedAt = System.currentTimeMillis()
+                runCatching {
+                    TrackSelectionDialogBuilder(context, "Audio", exo, C.TRACK_TYPE_AUDIO)
+                        .setShowDisableOption(false).build().show()
+                }
             },
             onQuality = {
-                trackMenu = if (trackMenu == C.TRACK_TYPE_VIDEO) null else C.TRACK_TYPE_VIDEO
-                sleepMenuOpen = false
-                chromeTouchedAt = System.currentTimeMillis()
+                runCatching {
+                    TrackSelectionDialogBuilder(context, "Quality", exo, C.TRACK_TYPE_VIDEO)
+                        .setAllowAdaptiveSelections(true).setShowDisableOption(false).build().show()
+                }
             },
             onSpeedCycle = {
                 val rates = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
@@ -5743,24 +5630,8 @@ private fun PlayerScreen(
         partyUi.reactions.forEach { r ->
             key(r.first) { ReactionFloat(r.second, r.third) }
         }
-        // Audio / Quality: the same menu material as the sleep timer, over the still-playing video —
-        // the platform's own track dialog broke the glass chrome and its focus language mid-playback
-        trackMenu?.let { tt ->
-            if (!pip) {
-                BackHandler { trackMenu = null }
-                Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { trackMenu = null } })
-                Box(Modifier.align(Alignment.CenterEnd)) { TrackMenu(exo, tt) { trackMenu = null } }
-            }
-        }
         // Sleep timer menu (the Sleep pill toggles it): by minutes, or at the end of this episode
         if (sleepMenuOpen && !pip) {
-            // Back closes the menu, not the player; a tap off it closes it rather than toggling the chrome
-            // underneath; and the remote is put on its first row so it is not navigable only by trial
-            BackHandler { sleepMenuOpen = false }
-            Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { sleepMenuOpen = false } })
-            val sleepFirst = remember { FocusRequester() }
-            val sleepKeys = LocalInputModeManager.current.inputMode == InputMode.Keyboard
-            LaunchedEffect(Unit) { if (sleepKeys) { withFrameNanos {}; runCatching { sleepFirst.requestFocus() } } }
             Column(
                 Modifier.align(Alignment.CenterEnd).padding(end = 20.dp)
                     .width(280.dp)
@@ -5773,7 +5644,7 @@ private fun PlayerScreen(
                     color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                 )
-                SubMenuRow("Off", sleepMode.isEmpty(), Modifier.focusRequester(sleepFirst)) { sleepSet("") }
+                SubMenuRow("Off", sleepMode.isEmpty()) { sleepSet("") }
                 listOf(15, 30, 45, 60, 90).forEach { m ->
                     SubMenuRow("In ${sleepText(m * 60_000L)}", false) { sleepSet("min", m) }
                 }
@@ -5883,20 +5754,15 @@ private fun PlayerScreen(
             }
         }
         // Hold-to-speed chip: shown for exactly as long as the finger is down.
-        if (heldSpeed != null) Row(
-            Modifier
+        if (heldSpeed != null) Text(
+            "▶▶ ${if (Prefs.holdRate % 1f == 0f) Prefs.holdRate.toInt().toString() else Prefs.holdRate.toString()}×",
+            color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold,
+            modifier = Modifier
                 .align(Alignment.TopCenter)
                 .padding(top = 54.dp)
                 .background(Color(0x8C000000), RoundedCornerShape(50))
-                .padding(horizontal = 14.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Icons.Filled.FastForward, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp).padding(end = 2.dp))
-            Text(
-                "${if (Prefs.holdRate % 1f == 0f) Prefs.holdRate.toInt().toString() else Prefs.holdRate.toString()}×",
-                color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 6.dp),
-            )
-        }
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        )
         // A word after a skip, where the hold-to-speed chip sits.
         skipNote?.let { n ->
             Text(
@@ -5910,20 +5776,15 @@ private fun PlayerScreen(
         }
         // Transient ±10s indicator on the tapped side.
         skipFlash?.let { f ->
-            Row(
-                Modifier
+            Text(
+                (if (f.first > 0) "⏩ " else "⏪ ") + "${f.second}s",
+                color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier
                     .align(if (f.first > 0) Alignment.CenterEnd else Alignment.CenterStart)
                     .padding(horizontal = 44.dp)
                     .background(Color(0x8C000000), RoundedCornerShape(12.dp))
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    if (f.first > 0) Icons.Filled.FastForward else Icons.Filled.FastRewind,
-                    contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp),
-                )
-                Text("${f.second}s", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 6.dp))
-            }
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+            )
         }
         // Live seek preview while swiping: target position + signed delta.
         dragSeek?.let { d ->
@@ -5937,18 +5798,7 @@ private fun PlayerScreen(
             )
         }
         error?.let {
-            // a sentence in the pause board's material, and the one thing to do next — never a Media3 constant
-            // in red at the bottom edge with nothing to press
-            Column(
-                Modifier.align(Alignment.Center).padding(horizontal = 32.dp).widthIn(max = 440.dp)
-                    .background(Color(0xE6141418), RoundedCornerShape(16.dp))
-                    .border(1.dp, Line2, RoundedCornerShape(16.dp)).padding(22.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text("This stream won’t play", color = TextC, fontSize = 17.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
-                Text(it, color = MutedC, fontSize = 14.sp, lineHeight = 20.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp, bottom = 16.dp))
-                GlassPill("Try another stream", onClick = { (context as? ComponentActivity)?.onBackPressedDispatcher?.onBackPressed() })
-            }
+            Text(it, color = Color(0xFFFF6B6B), modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp))
         }
     }
 }

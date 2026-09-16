@@ -325,9 +325,7 @@ internal fun Scrubber(
 
     Box(modifier.fillMaxWidth()) {
         Box(
-            // a 44dp strip is the touch and drag target; the rail is drawn centred inside it — the old
-            // 26dp box minus 12dp of top padding left a 14dp target on the app's primary transport control
-            Modifier.fillMaxWidth().height(44.dp)
+            Modifier.fillMaxWidth().height(26.dp).padding(top = 12.dp)
                 .onSizeChanged { trackWidth = it.width.coerceAtLeast(1) }
                 .focusable(interactionSource = seekInteraction)
                 .onKeyEvent { e ->

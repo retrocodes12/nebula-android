@@ -146,7 +146,7 @@ private fun ToolItem(
     Row(
         modifier.background(if (lit) Color.White else Color.Transparent, Pill)
             .clickable(interactionSource = interaction, indication = null) { onClick() }
-            .padding(horizontal = 12.dp, vertical = 11.dp),
+            .padding(horizontal = 12.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (icon != null) {
@@ -171,7 +171,7 @@ private fun TimePill(text: String, onClick: (() -> Unit)? = null) {
         fontWeight = FontWeight.Medium, maxLines = 1,
         modifier = Modifier.background(if (focused) Color.White else Glass, Pill)
             .then(if (onClick != null) Modifier.clickable(interactionSource = interaction, indication = null) { onClick() } else Modifier)
-            .padding(horizontal = 11.dp, vertical = 8.dp),
+            .padding(horizontal = 11.dp, vertical = 5.dp),
     )
 }
 
@@ -301,7 +301,7 @@ internal fun PlaybackInfoHud(rows: List<InfoRow>, modifier: Modifier = Modifier)
                 Text(r.k, color = DimInk, fontSize = 12.5.sp, modifier = Modifier.weight(1f))
                 // a sentence ("Unavailable — host refused …") wraps instead of running off the card
                 Text(
-                    r.v, color = if (r.warn) Warn else Ink, fontSize = 12.5.sp, lineHeight = 16.sp,
+                    r.v, color = if (r.warn) Color(0xFFFFB340) else Ink, fontSize = 12.5.sp, lineHeight = 16.sp,
                     fontWeight = FontWeight.Medium, maxLines = 3, overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.End, modifier = Modifier.weight(1.5f).padding(start = 8.dp),
                 )

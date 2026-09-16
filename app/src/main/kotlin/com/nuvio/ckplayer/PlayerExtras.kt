@@ -5,7 +5,6 @@ import android.net.Uri
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MimeTypes
-import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
@@ -195,42 +194,3 @@ internal fun shiftedSubFile(ctx: Context, src: Uri, offsetMs: Long): Uri? = runC
     f.writeText(out.toString())
     Uri.fromFile(f)
 }.getOrNull()
-
-/** One sentence for a playback failure, the way the shared player's `playErrorLine` does it — never a
-    Media3 constant. The code stays in brackets for a bug report. */
-internal fun playErrorLine(e: PlaybackException): String {
-    val c = e.errorCode
-    val why = when {
-        c == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "The source did not answer with a stream — it may be down or expired."
-        c == PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND -> "The source has gone."
-        c == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
-            c == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "The source could not be reached."
-        c in 2000..2999 -> "The source stopped answering."
-        c in 3000..3999 -> "The source sent something this player could not read."
-        c in 4000..4999 -> "This format is not supported on this device."
-        c in 6000..6999 -> "This stream's protection could not be unlocked."
-        else -> "Playback stopped."
-    }
-    return "$why ($c)"
-}
-
-/** A sound track's row in the Audio menu: label or language, channels, codec — "Track 2" when it has none. */
-internal fun audioTrackLabel(f: Format, n: Int): String {
-    val parts = mutableListOf<String>()
-    f.label?.takeIf { it.isNotBlank() }?.let { parts += it }
-    val lang = langLabel(f.language ?: "")
-    if (lang.isNotEmpty() && parts.none { it.equals(lang, true) }) parts += lang
-    if (parts.isEmpty()) parts += "Track $n"
-    when (f.channelCount) { 1 -> parts += "Mono"; 2 -> parts += "Stereo"; 6 -> parts += "5.1"; 8 -> parts += "7.1" }
-    codecName(f.codecs, f.sampleMimeType)?.let { parts += it }
-    return parts.joinToString(" · ")
-}
-
-/** A video rung's row in the Quality menu: height, bitrate, codec. */
-internal fun videoTrackLabel(f: Format): String {
-    val parts = mutableListOf<String>()
-    if (f.height > 0) parts += "${f.height}p"
-    if (f.bitrate > 0) parts += String.format(Locale.US, "%.1f Mbps", f.bitrate / 1_000_000f)
-    codecName(f.codecs, f.sampleMimeType)?.let { parts += it }
-    return parts.ifEmpty { listOf("Default") }.joinToString(" · ")
-}

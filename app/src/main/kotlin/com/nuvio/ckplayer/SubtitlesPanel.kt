@@ -25,8 +25,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Icon
@@ -106,11 +104,11 @@ internal fun SubtitlesPanel(
 
     // every choice by language: the stream's own tracks first, then what the add-ons offered
     val byLang = LinkedHashMap<String, MutableList<SubChoice>>()
-    embedded.forEachIndexed { ei, e ->
+    embedded.forEach { e ->
         val f = e.format
         val id = f.id ?: ""
-        if (id == "addon-pick") return@forEachIndexed          // the add-on card below stands for it
-        val lang = langLabel(f.language ?: "und").ifEmpty { f.label?.takeIf { it.isNotBlank() } ?: "Track ${ei + 1}" }
+        if (id == "addon-pick") return@forEach                 // the add-on card below stands for it
+        val lang = langLabel(f.language ?: "und")
         var label = f.label?.takeIf { it.isNotBlank() } ?: lang
         if ((f.roleFlags and C.ROLE_FLAG_DESCRIBES_MUSIC_AND_SOUND) != 0) label += " · SDH"
         if ((f.selectionFlags and C.SELECTION_FLAG_FORCED) != 0) label += " · Forced"
@@ -123,7 +121,7 @@ internal fun SubtitlesPanel(
         }
     }
     addonSubs.forEach { a ->
-        val lang = langLabel(a.track.lang).ifEmpty { "Other" }
+        val lang = langLabel(a.track.lang)
         val list = byLang.getOrPut(lang) { mutableListOf() }
         val nth = list.count { it.badge == a.source } + 1
         list += SubChoice(a.source, if (nth == 1) lang else "$lang · $nth", activeAddonSub == a.track.url) { onPickAddon(a.track) }
@@ -164,30 +162,27 @@ internal fun SubtitlesPanel(
                     Spacer(Modifier.weight(1f))
                     GlassPill("Done", onClick = onClose)
                 }
-                val turnOff = {
-                    player.trackSelectionParameters = textParams().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build()
-                    onOff()
-                    lang = null
-                }
-                val counts = byLang.mapValues { it.value.size }
-                val choices = lang?.let { byLang[it] } ?: emptyList()
-                if (narrow) {
-                    // a portrait phone is narrower than three columns: they stack and the panel scrolls as one —
-                    // three fixed columns sliding sideways hid the tracks and the whole Style block with nothing to say so.
-                    // Each block keeps a bounded height, which is what lets its own scroll sit inside the outer one.
-                    Column(Modifier.fillMaxWidth().weight(1f).padding(top = 10.dp).verticalScroll(rememberScrollState())) {
-                        LanguagesColumn(Modifier.fillMaxWidth().heightIn(max = 260.dp), langs, counts, lang, initial, firstFocus, onSelect = { lang = it }, onOff = turnOff)
-                        HDivider()
-                        TracksColumn(Modifier.fillMaxWidth().heightIn(max = 340.dp), lang, choices, searching, busy, anyOn)
-                        HDivider()
-                        StyleColumn(Modifier.fillMaxWidth().heightIn(max = 720.dp), offsetMs, canShift, onNudge, onResetTiming)
-                    }
-                } else Row(Modifier.fillMaxWidth().weight(1f).padding(top = if (compact) 10.dp else 18.dp)) {
-                    LanguagesColumn(Modifier.weight(0.9f).fillMaxHeight(), langs, counts, lang, initial, firstFocus, onSelect = { lang = it }, onOff = turnOff)
+                Row(
+                    Modifier.fillMaxWidth().weight(1f).padding(top = if (compact) 10.dp else 18.dp)
+                        // a portrait phone is narrower than three columns: they scroll sideways, still three
+                        .then(if (narrow) Modifier.horizontalScroll(rememberScrollState()) else Modifier),
+                ) {
+                    val w1 = if (narrow) Modifier.width(220.dp) else Modifier.weight(0.9f)
+                    val w2 = if (narrow) Modifier.width(300.dp) else Modifier.weight(1.3f)
+                    val w3 = if (narrow) Modifier.width(290.dp) else Modifier.weight(1.1f)
+                    LanguagesColumn(
+                        w1.fillMaxHeight(), langs, byLang.mapValues { it.value.size }, lang, initial, firstFocus,
+                        onSelect = { lang = it },
+                        onOff = {
+                            player.trackSelectionParameters = textParams().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build()
+                            onOff()
+                            lang = null
+                        },
+                    )
                     VDivider()
-                    TracksColumn(Modifier.weight(1.3f).fillMaxHeight(), lang, choices, searching, busy, anyOn)
+                    TracksColumn(w2.fillMaxHeight(), lang, lang?.let { byLang[it] } ?: emptyList(), searching, busy, anyOn)
                     VDivider()
-                    StyleColumn(Modifier.weight(1.1f).fillMaxHeight(), offsetMs, canShift, onNudge, onResetTiming)
+                    StyleColumn(w3.fillMaxHeight(), offsetMs, canShift, onNudge, onResetTiming)
                 }
             }
         }
@@ -197,11 +192,6 @@ internal fun SubtitlesPanel(
 @Composable
 private fun VDivider() {
     Box(Modifier.width(1.dp).fillMaxHeight().background(Hair))
-}
-
-@Composable
-private fun HDivider() {
-    Box(Modifier.fillMaxWidth().padding(vertical = 12.dp).height(1.dp).background(Hair))
 }
 
 @Composable

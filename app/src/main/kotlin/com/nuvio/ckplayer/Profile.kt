@@ -72,7 +72,7 @@ import java.util.Locale
 // signed out (sign in · create · sign in with a code), an old link-code group that
 // has no profile yet ("legacy"), and signed in (name, colour, TV link, devices,
 // password, sign out, delete). Errors stay red while the accent can be anything.
-private val ErrC: Color get() = Danger
+private val ErrC = Color(0xFFFF453A)
 
 /** Settings home: who is signed in here, or the invitation to be. */
 @Composable
