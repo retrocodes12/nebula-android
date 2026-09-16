@@ -3787,9 +3787,14 @@ private fun DetailScreen(
                 }
             }
         }
+        // The Play pill and the round buttons share one height and one geometry
+        // (a full pill beside full circles, as the Home hero's pill is): a 40dp
+        // 12dp-cornered button beside 48dp circles read as a different control
+        // that had wandered in from another screen (the Founder's phone, 09-16).
         Row(
             Modifier.padding(top = 16.dp, bottom = 24.dp).horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Button(
                 onClick = {
@@ -3811,9 +3816,11 @@ private fun DetailScreen(
                     }
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(50),
+                contentPadding = PaddingValues(start = 20.dp, end = 26.dp),
+                modifier = Modifier.height(48.dp),
             ) {
-                Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
                 Text(
                     when {
                         item.type == "series" && resume != null -> resumeLabel(item.id, resume.id)
