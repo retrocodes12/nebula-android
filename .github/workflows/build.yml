@@ -49,9 +49,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.66.0.apk
+          cp "$APK" Nebula-1.67.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.66.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.66.0 Nebula-1.66.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.66.0" \
-            --notes "Marking episodes watched is fixed. Ticking one off no longer moves your place in a show — only the episode you were about to watch does that. Holding the centre button now reaches the sheet instead of starting the film, and the title page no longer offers to resume an episode you have just ticked off."
+          gh release delete v1.67.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.67.0 Nebula-1.67.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.67.0" \
+            --notes "The title page has a proper row of actions now: Play, then round buttons for marking something watched, for My List, and for the rest. Marking a film watched no longer means hunting for it — there is a button. Trailers and a details table sit below the cast."
