@@ -154,7 +154,15 @@ object Progress {
     fun markWatched(ctx: Context, type: String, id: String) {
         if (id.isEmpty()) return
         val m = load(ctx)
-        m[key(type, id)] = ProgressRec(type, id, done = true, hand = true, at = System.currentTimeMillis())
+        val k = key(type, id)
+        // `hand` means "no playback ever happened here" — that is the difference the
+        // series cursor reads. Ticking off the episode you are PART-WAY THROUGH is not
+        // a claim about the past: it is you finishing the thing you were demonstrably
+        // watching, and stamping it `hand` would throw away the only evidence of where
+        // you are, sending Up next back to the first episode you never played.
+        val had = m[k]
+        val real = had != null && !had.dismissed && (had.done || (had.pos > 0 && had.dur > 0))
+        m[k] = ProgressRec(type, id, done = true, hand = !real, at = System.currentTimeMillis())
         persist(ctx, m)
     }
 
