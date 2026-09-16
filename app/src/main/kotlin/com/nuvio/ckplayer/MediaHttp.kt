@@ -140,25 +140,34 @@ private class SharedCookieJar(private val store: CookieManager) : CookieJar {
 
 /**
  * The scrub reader's file, served to `MediaMetadataRetriever` as a [MediaDataSource]: every read is
- * a `Range: bytes=…` request through [MediaHttp.client] wearing the player's identity, the last two
- * 256 KB windows are kept so cue parsing does not fetch the same bytes twice, and the total comes
- * from the first reply's `Content-Range`. A host that ignores ranges, refuses the request or cannot
- * be reached sets [failure] — the playback Info panel prints that sentence.
+ * a `Range: bytes=…` request through [MediaHttp.client] wearing the player's identity, the last four
+ * windows are kept so cue parsing does not fetch the same bytes twice, and the total comes from the
+ * first reply's `Content-Range`. Windows start at 256 KB and double while reads run on in order
+ * (an MP4's moov table is parsed front to back and can run to tens of megabytes — at 256 KB a
+ * request that was a hundred round trips), up to 2 MB; a jump resets them. [bytesFetched] is what
+ * this reader has cost so far, for the sweep's budget. A host that ignores ranges, refuses the
+ * request or cannot be reached sets [failure] — the playback Info panel prints that sentence.
  */
 internal class RangeSource(private val url: String, private val ua: String) : MediaDataSource() {
-    companion object { const val WINDOW = 256L * 1024 }
+    companion object { const val WINDOW = 256L * 1024; const val WINDOW_MAX = 2048L * 1024 }
     private class Win(val start: Long, val bytes: ByteArray)
 
-    private val wins = ArrayDeque<Win>()      // newest last; at most two
+    private val wins = ArrayDeque<Win>()      // newest last; at most four
     private var total = -1L                   // unknown until the first reply
+    private var size = WINDOW                 // the next window's size: grows while reads stay sequential
+    private var lastEnd = -1L                 // where the last fetched window ended
+    /** Bytes fetched from the host so far. */
+    @Volatile var bytesFetched = 0L; private set
     /** Why the file cannot be read, once known — plain words for the Info panel. */
     @Volatile var failure: String? = null; private set
 
     /** The window holding [pos], fetched if need be; null with [failure] set when the host will not serve it. */
     private fun window(pos: Long): Win? {
         wins.firstOrNull { pos >= it.start && pos < it.start + it.bytes.size }?.let { return it }
+        // sequential: the read continues where the last window ended → a bigger window; a jump → back to small
+        size = if (lastEnd >= 0 && pos >= lastEnd && pos < lastEnd + WINDOW) minOf(size * 2, WINDOW_MAX) else WINDOW
         val start = pos - pos % WINDOW
-        val end = if (total > 0) minOf(start + WINDOW - 1, total - 1) else start + WINDOW - 1
+        val end = if (total > 0) minOf(start + size - 1, total - 1) else start + size - 1
         val req = Request.Builder().url(url)
             .header("User-Agent", ua)
             .header("Accept", "*/*")
@@ -187,7 +196,9 @@ internal class RangeSource(private val url: String, private val ua: String) : Me
                 // a body shorter than the range asked for would read as a false end of file at [pos]
                 if (pos >= start + bytes.size) { failure = "host cut the range short"; return null }
                 val w = Win(start, bytes)
-                if (wins.size >= 2) wins.removeFirst()
+                bytesFetched += bytes.size
+                lastEnd = start + bytes.size
+                if (wins.size >= 4) wins.removeFirst()
                 wins.addLast(w)
                 return w
             }

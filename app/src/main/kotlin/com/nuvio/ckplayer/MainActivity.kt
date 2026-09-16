@@ -4834,6 +4834,13 @@ private fun PlayerScreen(
     // rebuilt per URL, released with the player. While a preview is up the chrome stays awake.
     val scrubPreview = remember(url) { if (ScrubPreview.eligible(url)) ScrubPreview(url, context) else null }
     DisposableEffect(scrubPreview) { onDispose { scrubPreview?.release() } }
+    // a few seconds into playback, once the length is known, the reader opens and sweeps frames across
+    // the film in the background — so a phone's one-second drag has a picture at once (ScrubPreview.warm)
+    LaunchedEffect(scrubPreview, durMs > 0, isPlayingState) {
+        if (scrubPreview == null || durMs <= 0 || !isPlayingState || !Prefs.scrubFrames) return@LaunchedEffect
+        delay(4000)
+        scrubPreview.warm(context, durMs)      // eligible() already rules out manifests, and keys ride on .mpd here
+    }
     var scrubbing by remember { mutableStateOf(false) }
     // Our own meter so the HUD can read the estimate; Start high seeds it so the
     // first segments are fetched at the best rendition, Data saver seeds it low.
@@ -5195,6 +5202,7 @@ private fun PlayerScreen(
                 if (reason == Player.DISCONTINUITY_REASON_SEEK && partyUi.active() && partyUi.isHost) hostDirty = true
             }
             override fun onPlaybackStateChanged(state: Int) {
+                scrubPreview?.busy(state == Player.STATE_BUFFERING)   // the frame sweep stands aside while the film buffers
                 // the stall watchdog: a buffering state after playback began counts; three in ninety seconds offer a sibling
                 if (state == Player.STATE_READY && stallWatch.playedAt == 0L) stallWatch.playedAt = System.currentTimeMillis()
                 if (state == Player.STATE_BUFFERING && exo.playWhenReady && stallWatch.note()) offerSwap()
