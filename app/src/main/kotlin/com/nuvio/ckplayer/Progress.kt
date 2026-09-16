@@ -24,12 +24,18 @@ data class ProgressRec(
     /** Removed from Continue watching — a tombstone, not a delete, so a synced
         device still holding the old position cannot push it straight back. */
     val dismissed: Boolean = false,
+    /** Ticked off by hand rather than watched. A claim about the past, so the
+        series cursor may move forwards on it but never backwards. */
+    val hand: Boolean = false,
     val at: Long = 0L,
 )
 
 object Progress {
     private const val KEY = "progress"
-    private const val MAX = 200            // newest N kept
+    // Newest N kept. Raised from 200 on 09-16: a mark costs a record and a season
+    // can be ticked off in seconds, so the old cap was one gesture away from
+    // evicting a live resume point.
+    private const val MAX = 400
     const val MIN_POS_MS = 15_000L         // below this it isn't worth resuming
     const val END_GAP_MS = 60_000L         // within this of the end counts as finished
 
@@ -57,6 +63,7 @@ object Progress {
                     dur = r.optLong("dur"),
                     done = r.optBoolean("done"),
                     dismissed = r.optBoolean("dismissed"),
+                    hand = r.optBoolean("hand"),
                     at = r.optLong("at"),
                 )
             }
@@ -89,7 +96,7 @@ object Progress {
                     .put("type", r.type).put("id", r.id).put("name", r.name)
                     .put("poster", r.poster ?: "").put("shape", r.shape)
                     .put("addonUrl", r.addonUrl).put("pos", r.pos).put("dur", r.dur)
-                    .put("done", r.done).put("dismissed", r.dismissed).put("at", r.at)
+                    .put("done", r.done).put("dismissed", r.dismissed).put("hand", r.hand).put("at", r.at)
             )
         }
         prefs(ctx).edit().putString(KEY, o.toString()).apply()
@@ -132,7 +139,7 @@ object Progress {
     fun markWatched(ctx: Context, type: String, id: String) {
         if (id.isEmpty()) return
         val m = load(ctx)
-        m[key(type, id)] = ProgressRec(type, id, done = true, at = System.currentTimeMillis())
+        m[key(type, id)] = ProgressRec(type, id, done = true, hand = true, at = System.currentTimeMillis())
         persist(ctx, m)
     }
 

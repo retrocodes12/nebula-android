@@ -497,17 +497,39 @@ private fun seriesResumeRec(ctx: Context, seriesId: String): ProgressRec? =
 private fun seriesUpNext(ctx: Context, type: String, videos: List<Episode>): Episode? {
     val flat = videos.sortedWith(compareBy({ it.season == 0 }, { it.season }, { it.episode ?: 0 }))
     val all = Progress.all(ctx)
-    var newest: ProgressRec? = null
-    var newestIdx = -1
-    flat.forEachIndexed { i, e ->
-        val r = all[Progress.key(type, e.id)] ?: return@forEachIndexed
-        if (r.dismissed) return@forEachIndexed
-        if (!r.done && !(r.pos >= Progress.MIN_POS_MS && r.dur > 0)) return@forEachIndexed
-        val cur = newest
-        if (cur == null || r.at > cur.at) { newest = r; newestIdx = i }
+    // newest record wins; handOk false leaves out marks made by hand so the two can be compared
+    fun pick(handOk: Boolean): Pair<ProgressRec, Int>? {
+        var newest: ProgressRec? = null
+        var newestIdx = -1
+        flat.forEachIndexed { i, e ->
+            val r = all[Progress.key(type, e.id)] ?: return@forEachIndexed
+            if (r.dismissed) return@forEachIndexed
+            if (!handOk && r.hand) return@forEachIndexed
+            if (!r.done && !(r.pos >= Progress.MIN_POS_MS && r.dur > 0)) return@forEachIndexed
+            val cur = newest
+            if (cur == null || r.at > cur.at) { newest = r; newestIdx = i }
+        }
+        val n = newest
+        return if (n == null || newestIdx < 0) null else n to newestIdx
     }
-    if (newestIdx < 0) return null
-    return flat[if (newest?.done == true) minOf(newestIdx + 1, flat.size - 1) else newestIdx]
+    fun nextOf(hit: Pair<ProgressRec, Int>) =
+        if (hit.first.done) minOf(hit.second + 1, flat.size - 1) else hit.second
+    val all1 = pick(true) ?: return null
+    var upIdx = nextOf(all1)
+    // A mark made by hand is a claim about the PAST — "I already saw this" — not
+    // "I just watched it", yet it carries the newest `at`. Left alone it drags the
+    // cursor backwards: tick off S1E1 on a show you watch at S2E5 and Up next
+    // becomes S1E2. A hand mark may move the cursor forwards, never back.
+    if (all1.first.hand) {
+        val played = pick(false)
+        if (played != null) {
+            val pIdx = nextOf(played)
+            if (pIdx > upIdx) upIdx = pIdx
+        }
+    }
+    // the finale, watched: nothing is next, so nothing wears the ring
+    if (upIdx == all1.second && all1.first.done && all1.second == flat.size - 1) return null
+    return flat[upIdx]
 }
 
 /** An episode's air date as "23 Jun 2022", or null when it has none or it will not parse.

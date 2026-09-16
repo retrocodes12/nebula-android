@@ -319,7 +319,9 @@ object Cloud {
             Progress.all(ctx).forEach { (k, r) ->
                 val w = JSONObject().put("type", r.type).put("id", r.id).put("at", r.at)
                 when {
-                    r.done -> w.put("done", true)
+                    // `hand` rides along: without it the other device reads a hand mark
+                    // as something just watched and its series cursor walks backwards
+                    r.done -> { w.put("done", true); if (r.hand) w.put("hand", true) }
                     r.dismissed -> w.put("dismissed", true)
                     else -> w.put("name", r.name).put("poster", r.poster ?: "").put("shape", r.shape)
                         .put("addonUrl", r.addonUrl)
@@ -447,6 +449,7 @@ object Cloud {
                     dur = (r.optDouble("dur", 0.0) * 1000).toLong(),
                     done = r.optBoolean("done"),
                     dismissed = r.optBoolean("dismissed"),
+                    hand = r.optBoolean("hand"),
                     at = rAt,
                 )
                 changed = true
