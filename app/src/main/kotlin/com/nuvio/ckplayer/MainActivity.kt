@@ -491,6 +491,15 @@ private fun seriesResumeRec(ctx: Context, seriesId: String): ProgressRec? =
             it.pos >= Progress.MIN_POS_MS && it.dur > 0 && it.pos <= it.dur - Progress.END_GAP_MS
     }.maxByOrNull { it.at }
 
+/** An episode's air date as "23 Jun 2022", or null when it has none or it will not parse.
+    One copy: the row and the sheet must never disagree about a date. */
+private fun epAirDate(ep: Episode): String? = ep.released?.let {
+    runCatching {
+        java.time.LocalDate.parse(it.take(10))
+            .format(java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy"))
+    }.getOrNull()
+}
+
 /** How an episode was asked for: a plain row tap decides nothing, a sheet row does. */
 private enum class PlayIntent { TAP, RESUME, START_OVER }
 
