@@ -102,14 +102,14 @@ internal fun SettingsHomeScreen(onBack: () -> Unit, onRows: () -> Unit) {
         }
         SettingsHeader("CONTINUE WATCHING", "Picking up where you left off")
         SettingsGroup {
-            SettingsToggle("Continue watching", "Pick up where you left off, right on Home", Prefs.showContinue, divider = all) { Prefs.setShowContinue(ctx, it) }
+            SettingsToggle("Continue Watching", "Pick up where you left off, right on Home", Prefs.showContinue, divider = all) { Prefs.setShowContinue(ctx, it) }
             if (all) {
                 SettingsChips(
-                    "Continue watching cards", "Wide art with the episode on it, or posters with the bar",
+                    "Continue Watching cards", "Wide art with the episode on it, or posters with the bar",
                     listOf("art" to "Art", "poster" to "Poster"), Prefs.cwStyle,
                 ) { Prefs.setCwStyle(ctx, it) }
                 SettingsChips(
-                    "Continue watching order", "On Home and in the Library tab",
+                    "Continue Watching order", "On Home and in the Library tab",
                     listOf("recent" to "Most recent", "az" to "A to Z"), Prefs.cwSort,
                 ) { Prefs.setCwSort(ctx, it) }
                 SettingsToggle(

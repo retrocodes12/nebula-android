@@ -25,6 +25,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Icon
@@ -162,27 +164,30 @@ internal fun SubtitlesPanel(
                     Spacer(Modifier.weight(1f))
                     GlassPill("Done", onClick = onClose)
                 }
-                Row(
-                    Modifier.fillMaxWidth().weight(1f).padding(top = if (compact) 10.dp else 18.dp)
-                        // a portrait phone is narrower than three columns: they scroll sideways, still three
-                        .then(if (narrow) Modifier.horizontalScroll(rememberScrollState()) else Modifier),
-                ) {
-                    val w1 = if (narrow) Modifier.width(220.dp) else Modifier.weight(0.9f)
-                    val w2 = if (narrow) Modifier.width(300.dp) else Modifier.weight(1.3f)
-                    val w3 = if (narrow) Modifier.width(290.dp) else Modifier.weight(1.1f)
-                    LanguagesColumn(
-                        w1.fillMaxHeight(), langs, byLang.mapValues { it.value.size }, lang, initial, firstFocus,
-                        onSelect = { lang = it },
-                        onOff = {
-                            player.trackSelectionParameters = textParams().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build()
-                            onOff()
-                            lang = null
-                        },
-                    )
+                val turnOff = {
+                    player.trackSelectionParameters = textParams().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build()
+                    onOff()
+                    lang = null
+                }
+                val counts = byLang.mapValues { it.value.size }
+                val choices = lang?.let { byLang[it] } ?: emptyList()
+                if (narrow) {
+                    // a portrait phone is narrower than three columns: they stack and the panel scrolls as one —
+                    // three fixed columns sliding sideways hid the tracks and the whole Style block with nothing to say so.
+                    // Each block keeps a bounded height, which is what lets its own scroll sit inside the outer one.
+                    Column(Modifier.fillMaxWidth().weight(1f).padding(top = 10.dp).verticalScroll(rememberScrollState())) {
+                        LanguagesColumn(Modifier.fillMaxWidth().heightIn(max = 260.dp), langs, counts, lang, initial, firstFocus, onSelect = { lang = it }, onOff = turnOff)
+                        HDivider()
+                        TracksColumn(Modifier.fillMaxWidth().heightIn(max = 340.dp), lang, choices, searching, busy, anyOn)
+                        HDivider()
+                        StyleColumn(Modifier.fillMaxWidth().heightIn(max = 720.dp), offsetMs, canShift, onNudge, onResetTiming)
+                    }
+                } else Row(Modifier.fillMaxWidth().weight(1f).padding(top = if (compact) 10.dp else 18.dp)) {
+                    LanguagesColumn(Modifier.weight(0.9f).fillMaxHeight(), langs, counts, lang, initial, firstFocus, onSelect = { lang = it }, onOff = turnOff)
                     VDivider()
-                    TracksColumn(w2.fillMaxHeight(), lang, lang?.let { byLang[it] } ?: emptyList(), searching, busy, anyOn)
+                    TracksColumn(Modifier.weight(1.3f).fillMaxHeight(), lang, choices, searching, busy, anyOn)
                     VDivider()
-                    StyleColumn(w3.fillMaxHeight(), offsetMs, canShift, onNudge, onResetTiming)
+                    StyleColumn(Modifier.weight(1.1f).fillMaxHeight(), offsetMs, canShift, onNudge, onResetTiming)
                 }
             }
         }
@@ -192,6 +197,11 @@ internal fun SubtitlesPanel(
 @Composable
 private fun VDivider() {
     Box(Modifier.width(1.dp).fillMaxHeight().background(Hair))
+}
+
+@Composable
+private fun HDivider() {
+    Box(Modifier.fillMaxWidth().padding(vertical = 12.dp).height(1.dp).background(Hair))
 }
 
 @Composable

@@ -110,7 +110,7 @@ internal fun LibraryScreen(
                 SheetAction(Icons.Filled.PlayArrow, "Resume") { onSheetResume(r) },
                 SheetAction(Icons.Filled.Replay, "Start over") { onStartOver(r) },
                 SheetAction(Icons.Filled.Info, "View details") { onDetails(r) },
-                SheetAction(Icons.Filled.Delete, "Remove from Continue watching", destructive = true) {
+                SheetAction(Icons.Filled.Delete, "Remove from Continue Watching", destructive = true) {
                     Progress.clear(ctx, r.type, r.id)
                     continueRows = Progress.continueList(ctx)
                 },
@@ -133,7 +133,7 @@ internal fun LibraryScreen(
         val narrow = LocalConfiguration.current.screenWidthDp < 400
         Segmented {
             Chip("My List", libTab == 0, inSeg = true) { libTab = 0 }
-            Chip(if (narrow) "Continue" else "Continue watching", libTab == 1, inSeg = true) { libTab = 1 }
+            Chip(if (narrow) "Continue" else "Continue Watching", libTab == 1, inSeg = true) { libTab = 1 }
             Chip("Upcoming", libTab == 2, inSeg = true) { libTab = 2 }
         }
         Spacer(Modifier.height(14.dp))

@@ -2551,7 +2551,7 @@ private fun HomeScreen(
                 SheetAction(Icons.Filled.PlayArrow, "Resume") { onSheetResume(r) },
                 SheetAction(Icons.Filled.Replay, "Start over") { onStartOver(r) },
                 SheetAction(Icons.Filled.Info, "View details") { onDetails(r) },
-                SheetAction(Icons.Filled.Delete, "Remove from Continue watching", destructive = true) {
+                SheetAction(Icons.Filled.Delete, "Remove from Continue Watching", destructive = true) {
                     Progress.clear(ctx, r.type, r.id)
                     st.continueRows = Progress.continueList(ctx)
                 },
@@ -2667,7 +2667,7 @@ private fun HomeScreen(
                 if (st.rows.isNotEmpty() && Prefs.showHero) item(key = "hero") { HeroHeader(st.rows, onOpen) }
                 if (st.continueRows.isNotEmpty() && Prefs.showContinue) item(key = "continue") {
                     Column {
-                        Box(Modifier.padding(horizontal = 16.dp)) { RowHeader("Continue watching", null, null) }
+                        Box(Modifier.padding(horizontal = 16.dp)) { RowHeader("Continue Watching", null, null) }
                         LazyRow(
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                             contentPadding = PaddingValues(horizontal = 16.dp),
@@ -3228,7 +3228,7 @@ private fun SettingsScreen(
         SettingsHeader("GENERAL", "How Nebula looks, plays and connects")
         SettingsGroup {
             SettingsRow(Icons.Filled.Palette, "Appearance", "Accent, surface, text, font and cards", true, onLayout)
-            SettingsRow(Icons.Filled.Home, "Home", "Featured, Continue watching, rows and title pages", true, onHome)
+            SettingsRow(Icons.Filled.Home, "Home", "Featured, Continue Watching, rows and title pages", true, onHome)
             SettingsRow(Icons.Filled.PlayArrow, "Playback", "Player, next episode, languages and subtitles", true, onPlayback)
             // the Streams page holds Everything rows only (no E mark in the brief), so Essential does not list it
             if (Prefs.everything) SettingsRow(Icons.Filled.FilterList, "Streams", "Order, quality floor, details and picking by itself", true, onStreams)
