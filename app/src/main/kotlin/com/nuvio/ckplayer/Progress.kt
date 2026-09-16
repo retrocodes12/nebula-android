@@ -1,6 +1,8 @@
 package com.nuvio.ckplayer
 
 import android.content.Context
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import org.json.JSONObject
 
 /**
@@ -40,6 +42,12 @@ object Progress {
     const val END_GAP_MS = 60_000L         // within this of the end counts as finished
 
     private var cache: MutableMap<String, ProgressRec>? = null
+
+    /** Bumped when a sync PULL replaces the store. Screens that paint ticks, the Up
+        next ring or a resume label read it, so an episode marked on the phone does
+        not leave a stale list open on the TV. */
+    var syncVersion by androidx.compose.runtime.mutableIntStateOf(0)
+        private set
 
     fun key(type: String, id: String) = "$type:$id"
 
@@ -176,6 +184,7 @@ object Progress {
         val mm = LinkedHashMap(m)
         cache = mm
         persistRaw(ctx, mm)
+        syncVersion++
     }
 
     /** The twenty most recent things worth resuming — newest first, or A to Z when Settings › Home says so. */
