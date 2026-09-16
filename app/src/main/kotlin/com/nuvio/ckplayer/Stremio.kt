@@ -209,44 +209,36 @@ object Stremio {
             val browsable = type.isNotEmpty() && id.isNotEmpty() && required.all { it in withOptions }
             cats.add(CatalogRef(type, id, c.optString("name", id), genres, supportsSearch, supportsSkip, browsable))
         }
-        // stream resource: either the plain string "stream" (scoped by top-level
-        // types/idPrefixes) or an object with its own types/idPrefixes
-        var hasStreams = false
-        var sTypes: List<String>? = null
-        var sPrefixes: List<String>? = null
-        var hasMeta = false
-        var mTypes: List<String>? = null
-        var mPrefixes: List<String>? = null
-        var hasSubs = false
-        var subTypes: List<String>? = null
-        var subPrefixes: List<String>? = null
+        // A resource is either the plain string "stream" (scoped by the top-level types/idPrefixes)
+        // or an object with its own. A manifest may name the SAME resource more than once with
+        // different scopes — PenguPlay declares stream for movie/series under tt/tmdb/… and again
+        // for tv under pp-live: — so the scopes are UNIONED; keeping the last one made that add-on
+        // look like live TV only and it was never asked for a film (the Founder's phone, 09-17).
+        // A scope with no types or no prefixes matches everything, and stays that way once seen.
+        class Scope { var has = false; var types: MutableList<String>? = mutableListOf(); var prefixes: MutableList<String>? = mutableListOf() }
         val topTypes = strList(j.optJSONArray("types"))
         val topPrefixes = strList(j.optJSONArray("idPrefixes"))
+        val scopes = mapOf("stream" to Scope(), "meta" to Scope(), "subtitles" to Scope())
+        fun Scope.add(types: List<String>?, prefixes: List<String>?) {
+            has = true
+            if (types.isNullOrEmpty()) this.types = null else this.types?.addAll(types.filter { it !in this.types!! })
+            if (prefixes.isNullOrEmpty()) this.prefixes = null else this.prefixes?.addAll(prefixes.filter { it !in this.prefixes!! })
+        }
         val res = j.optJSONArray("resources")
         if (res != null) for (i in 0 until res.length()) {
             when (val r = res.opt(i)) {
-                "stream" -> { hasStreams = true; sTypes = topTypes; sPrefixes = topPrefixes }
-                "meta" -> { hasMeta = true; mTypes = topTypes; mPrefixes = topPrefixes }
-                "subtitles" -> { hasSubs = true; subTypes = topTypes; subPrefixes = topPrefixes }
-                is JSONObject -> when (r.optString("name")) {
-                    "stream" -> {
-                        hasStreams = true
-                        sTypes = strList(r.optJSONArray("types")) ?: topTypes
-                        sPrefixes = strList(r.optJSONArray("idPrefixes")) ?: topPrefixes
-                    }
-                    "meta" -> {
-                        hasMeta = true
-                        mTypes = strList(r.optJSONArray("types")) ?: topTypes
-                        mPrefixes = strList(r.optJSONArray("idPrefixes")) ?: topPrefixes
-                    }
-                    "subtitles" -> {
-                        hasSubs = true
-                        subTypes = strList(r.optJSONArray("types")) ?: topTypes
-                        subPrefixes = strList(r.optJSONArray("idPrefixes")) ?: topPrefixes
-                    }
-                }
+                is String -> scopes[r]?.add(topTypes, topPrefixes)
+                is JSONObject -> scopes[r.optString("name")]?.add(
+                    strList(r.optJSONArray("types")) ?: topTypes,
+                    strList(r.optJSONArray("idPrefixes")) ?: topPrefixes,
+                )
             }
         }
+        fun Scope.out(): Triple<Boolean, List<String>?, List<String>?> =
+            Triple(has, if (has) types?.takeIf { it.isNotEmpty() } else null, if (has) prefixes?.takeIf { it.isNotEmpty() } else null)
+        val (hasStreams, sTypes, sPrefixes) = scopes.getValue("stream").out()
+        val (hasMeta, mTypes, mPrefixes) = scopes.getValue("meta").out()
+        val (hasSubs, subTypes, subPrefixes) = scopes.getValue("subtitles").out()
         return ManifestInfo(addon, cats, hasStreams, sTypes, sPrefixes, hasMeta, mTypes, mPrefixes, hasSubs, subTypes, subPrefixes)
     }
 
