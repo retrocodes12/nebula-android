@@ -32,24 +32,49 @@ object Prefs {
         Triple("ice", "Ice", Color(0xFF64D2FF)),
         Triple("mint", "Mint", Color(0xFF66D4CF)),
     )
+    /** Six more for Supporter Plus (tiers, 2026-09-19) — and any colour at all as a `#RRGGBB` key. */
+    val PLUS_ACCENTS = listOf(
+        Triple("coral", "Coral", Color(0xFFFF7A5C)),
+        Triple("lavender", "Lavender", Color(0xFFB08CFF)),
+        Triple("lime", "Lime", Color(0xFFB4E33D)),
+        Triple("sky", "Sky", Color(0xFF5AC8FA)),
+        Triple("peach", "Peach", Color(0xFFFFB07A)),
+        Triple("slate", "Slate", Color(0xFF8E9AAF)),
+    )
     /** Light accents need dark ink on top of them; every other one carries white. */
-    private val DARK_INK = setOf("white", "gold", "ice", "mint")
+    private val DARK_INK = setOf("white", "gold", "ice", "mint", "lime", "sky", "peach")
+    private val HEX = Regex("^#[0-9A-Fa-f]{6}$")
+
+    /** Which tier a stored accent needs: 0 anyone, 1 the supporter colours, 2 the Plus palette or a colour of one's own. */
+    internal fun accentRank(key: String): Int = when {
+        ACCENTS.any { it.first == key } -> 0
+        SUP_ACCENTS.any { it.first == key } -> 1
+        else -> 2
+    }
 
     /**
-     * The accent actually in force. A supporter colour on a device that is not (yet)
-     * a supporter's falls back to the default WITHOUT the stored pref being rewritten,
-     * so signing back in brings the chosen colour straight back.
+     * The accent actually in force. A colour above the profile's tier (signed out, revoked)
+     * falls back to the default WITHOUT the stored pref being rewritten, so signing back in
+     * brings the chosen colour straight back.
      */
     internal val activeAccent: String
-        get() = if (SUP_ACCENTS.any { it.first == accent } && Cloud.profile?.sup != true) ACCENTS[0].first else accent
+        get() = if (accentRank(accent) > Support.rank()) ACCENTS[0].first else accent
+
+    private fun colorOf(key: String): Color? =
+        (ACCENTS + SUP_ACCENTS + PLUS_ACCENTS).firstOrNull { it.first == key }?.third
+            ?: if (HEX.matches(key)) Color(0xFF000000L or key.substring(1).toLong(16)) else null
 
     // Buttons, chips and badges all draw from this pair.
-    val accentColor: Color
+    val accentColor: Color get() = colorOf(activeAccent) ?: ACCENTS[0].third
+    val onAccent: Color
         get() {
             val key = activeAccent
-            return (ACCENTS + SUP_ACCENTS).firstOrNull { it.first == key }?.third ?: ACCENTS[0].third
+            if (key in DARK_INK) return Color(0xFF111114)
+            val c = colorOf(key) ?: return Color.White
+            // a colour of one's own: dark ink on a light one
+            val lum = 0.2126f * c.red + 0.7152f * c.green + 0.0722f * c.blue
+            return if (!HEX.matches(key) || lum < 0.6f) Color.White else Color(0xFF111114)
         }
-    val onAccent: Color get() = if (activeAccent in DARK_INK) Color(0xFF111114) else Color.White
 
     // ---- the settings console itself ----
     var setMode by mutableStateOf("essential"); private set       // essential (the common rows) / all

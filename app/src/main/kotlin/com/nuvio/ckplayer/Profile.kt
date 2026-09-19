@@ -91,7 +91,7 @@ internal fun ProfileCard(onOpen: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Avatar(p?.avatar ?: "", p?.let { it.name.ifEmpty { it.handle } } ?: "?", 48.dp, dim = p == null)
+        Avatar(p?.avatar ?: "", p?.let { it.name.ifEmpty { it.handle } } ?: "?", 48.dp, dim = p == null, ring = Support.rank() >= 3)
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
@@ -103,7 +103,7 @@ internal fun ProfileCard(onOpen: () -> Unit) {
                     color = TextC, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
                     overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false),
                 )
-                if (p?.sup == true) SupporterMark()
+                if (p?.sup == true) SupporterMark(mark = Support.myMark())
             }
             val n = Cloud.devices.size
             Text(
@@ -347,13 +347,13 @@ private fun RecoveryPanel(me: Profile?, key: String, onDone: () -> Unit) {
 @Composable
 private fun ProfileHead(me: Profile) {
     Row(Modifier.padding(bottom = 18.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        Avatar(me.avatar, me.name.ifEmpty { me.handle }, 72.dp)
+        Avatar(me.avatar, me.name.ifEmpty { me.handle }, 72.dp, ring = Support.rank() >= 3)
         Column {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                 Text(me.name.ifEmpty { "@${me.handle}" }, color = TextC, fontSize = 24.sp, fontFamily = Sans, fontWeight = FontWeight.Bold,
                     letterSpacing = (-0.5).sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false))
-                if (me.sup) SupporterMark(17.dp)
+                if (me.sup) SupporterMark(17.dp, Support.myMark())
             }
             Text("@${me.handle}", color = MutedC, fontFamily = Mono, fontSize = 14.sp, modifier = Modifier.padding(top = 2.dp))
         }

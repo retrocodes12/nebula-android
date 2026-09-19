@@ -88,6 +88,8 @@ object Cloud {
             sup = o.optBoolean("sup") || sup != null,
             supSince = if (sup != null) sup.optLong("since") else o.optLong("supSince"),
             wall = if (sup != null) sup.optBoolean("wall") else o.optBoolean("wall"),
+            tier = Support.cleanTier((if (sup != null) sup.optString("tier") else o.optString("tier"))),
+            mark = Support.cleanMark((if (sup != null) sup.optString("mark") else o.optString("mark"))),
         )
     }
     /** Accepts any server object carrying handle/name/avatar (a creds reply, /me, a PUT reply). */
@@ -106,8 +108,9 @@ object Cloud {
     /** Patch the supporter fields from a `{since, wall}` reply (redeem, wall on/off). */
     internal fun noteSupporter(ctx: Context, s: JSONObject?) {
         val p = profile ?: return
-        val next = if (s == null) p.copy(sup = false, supSince = 0L, wall = false)
-        else p.copy(sup = true, supSince = s.optLong("since", p.supSince), wall = s.optBoolean("wall"))
+        val next = if (s == null) p.copy(sup = false, supSince = 0L, wall = false, tier = "supporter", mark = "star")
+        else p.copy(sup = true, supSince = s.optLong("since", p.supSince), wall = s.optBoolean("wall"),
+            tier = Support.cleanTier(s.optString("tier", p.tier)), mark = Support.cleanMark(s.optString("mark", p.mark)))
         if (next == p) return
         profile = next
         storeProfile(ctx, next)
@@ -116,7 +119,7 @@ object Cloud {
     private fun storeProfile(ctx: Context, p: Profile?) {
         val json = if (p == null) "" else JSONObject()
             .put("handle", p.handle).put("name", p.name).put("avatar", p.avatar)
-            .put("sup", p.sup).put("supSince", p.supSince).put("wall", p.wall)
+            .put("sup", p.sup).put("supSince", p.supSince).put("wall", p.wall).put("tier", p.tier).put("mark", p.mark)
             .toString()
         prefs(ctx).edit().putString("profile", json).apply()
     }

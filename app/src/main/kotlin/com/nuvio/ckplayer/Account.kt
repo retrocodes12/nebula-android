@@ -16,6 +16,9 @@ data class Profile(
     val sup: Boolean = false,
     val supSince: Long = 0L,
     val wall: Boolean = false,
+    /** supporter | plus | founder (tiers, 2026-09-19); star | heart | bolt | crown (plus and up choose). */
+    val tier: String = "supporter",
+    val mark: String = "star",
 )
 data class DeviceRec(val id: String, val name: String, val plat: String, val at: Long, val seen: Long, val me: Boolean)
 class TvCode(val code: String, val poll: String, val until: Long)

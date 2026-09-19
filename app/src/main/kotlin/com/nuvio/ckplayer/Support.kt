@@ -18,12 +18,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -63,8 +64,21 @@ object Support {
 
     /** Where to send someone who wants to chip in; null until the Founder sets one. */
     var url by mutableStateOf<String?>(null); private set
-    /** Names on the wall, in the order the server sent them. */
-    var wall by mutableStateOf<List<String>>(emptyList()); private set
+    /** Names on the wall, in the order the server sent them (founders first), with each one's tier. */
+    var wall by mutableStateOf<List<Pair<String, String>>>(emptyList()); private set
+    val founders: List<String> get() = wall.filter { it.second == "founder" }.map { it.first }
+    val others: List<String> get() = wall.filter { it.second != "founder" }.map { it.first }
+
+    // ---- tiers (2026-09-19): one-time, permanent; a higher code or payment raises the profile ----
+    val TIERS = listOf("supporter" to "Supporter", "plus" to "Supporter Plus", "founder" to "Founder")
+    val MARKS = listOf("star" to "Star", "heart" to "Heart", "bolt" to "Bolt", "crown" to "Crown")
+    fun cleanTier(v: String?): String = if (TIERS.any { it.first == v }) v!! else "supporter"
+    fun cleanMark(v: String?): String = if (MARKS.any { it.first == v }) v!! else "star"
+    /** 0 = not a supporter, 1 supporter, 2 plus, 3 founder. */
+    fun rank(): Int { val p = Cloud.profile ?: return 0; if (!p.sup) return 0; return TIERS.indexOfFirst { it.first == p.tier } + 1 }
+    fun tierName(): String = TIERS.firstOrNull { it.first == Cloud.profile?.tier }?.second ?: "Supporter"
+    /** The mark by THIS profile's name: the chosen one from Supporter Plus up, a star below. */
+    fun myMark(): String = if (rank() >= 2) cleanMark(Cloud.profile?.mark) else "star"
     /** How many supporters there are — including the ones who stayed off the wall. */
     var count by mutableStateOf(0); private set
 
@@ -80,7 +94,7 @@ object Support {
     fun restore(ctx: Context) {
         val o = runCatching { JSONObject(prefs(ctx).getString(KEY, "") ?: "") }.getOrNull() ?: return
         url = cleanUrl(o)
-        wall = names(o.optJSONArray("wall"))
+        wall = rows(o.optJSONArray("wall"))
         count = o.optInt("count")
         at = o.optLong("at")
     }
@@ -93,7 +107,7 @@ object Support {
         try {
             val r = Cloud.api(ctx, "GET", "/v1/support", null, auth = false)
             url = cleanUrl(r)
-            wall = names(r.optJSONArray("wall"))
+            wall = rows(r.optJSONArray("wall"))
             count = r.optInt("count")
             at = System.currentTimeMillis()
             store(ctx)
@@ -127,10 +141,30 @@ object Support {
         null
     }.getOrElse { Account.errorText(it) }
 
+    /** Supporter Plus and up: the mark beside the name. Null on success, else a line to show. */
+    suspend fun setMark(ctx: Context, mark: String): String? = runCatching {
+        val r = Cloud.api(ctx, "PUT", "/v1/support", JSONObject().put("mark", cleanMark(mark)))
+        Cloud.noteSupporter(ctx, r.optJSONObject("supporter"))
+        null
+    }.getOrElse { Account.errorText(it) }
+
+    /**
+     * Open the support page. Signed in: with a 15-minute link token, so what is bought lands on
+     * this profile without a code; the plain link otherwise, or if the token call fails.
+     */
+    suspend fun open(ctx: Context) {
+        val u = url ?: return
+        val withToken = if (Cloud.profile == null) u else runCatching {
+            val t = Cloud.api(ctx, "POST", "/v1/support/link", JSONObject()).optString("token")
+            if (t.isEmpty()) u else u + (if ('?' in u) "&" else "?") + "for=" + t
+        }.getOrDefault(u)
+        runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(withToken))) }
+    }
+
     // ---------- plumbing ----------
     private fun store(ctx: Context) {
         val arr = JSONArray()
-        wall.forEach { arr.put(it) }
+        wall.forEach { arr.put(JSONObject().put("name", it.first).put("tier", it.second)) }
         val o = JSONObject().put("url", url ?: "").put("wall", arr).put("count", count).put("at", at)
         prefs(ctx).edit().putString(KEY, o.toString()).apply()
     }
@@ -142,12 +176,12 @@ object Support {
         return if (u.startsWith("http://") || u.startsWith("https://")) u else null
     }
 
-    private fun names(a: JSONArray?): List<String> {
+    private fun rows(a: JSONArray?): List<Pair<String, String>> {
         if (a == null) return emptyList()
         return (0 until a.length()).mapNotNull { i ->
             val row = a.optJSONObject(i)
             val n = (row?.optString("name") ?: a.optString(i)).trim()
-            n.ifEmpty { null }
+            if (n.isEmpty()) null else n to cleanTier(row?.optString("tier"))
         }
     }
 
@@ -169,11 +203,26 @@ object Support {
         if (ms <= 0L) "" else SimpleDateFormat("d MMM yyyy", Locale.US).format(Date(ms))
 }
 
-/** The supporter mark: a small filled star in the accent colour, beside a name. */
+// the four marks, the same paths the web player draws (24×24)
+private val MARK_PATHS = mapOf(
+    "star" to "M12 2.6l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.5l-5.9 3.1 1.2-6.5L2.5 9.5l6.6-.9z",
+    "heart" to "M12 21s-7.5-4.6-9.5-9.3C1.2 8.4 3.3 5 6.8 5c2 0 3.5 1.1 5.2 3 1.7-1.9 3.2-3 5.2-3 3.5 0 5.6 3.4 4.3 6.7C19.5 16.4 12 21 12 21z",
+    "bolt" to "M13.5 2L4 13.5h6.5L9.5 22 20 9.5h-6.5z",
+    "crown" to "M3 8l4.5 4L12 5l4.5 7L21 8l-1.5 11h-15z",
+)
+private val markVectors = HashMap<String, ImageVector>()
+internal fun markVector(mark: String): ImageVector = markVectors.getOrPut(mark) {
+    val d = MARK_PATHS[mark] ?: MARK_PATHS.getValue("star")
+    ImageVector.Builder(name = "mark_$mark", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)
+        .addPath(PathParser().parsePathString(d).toNodes(), fill = SolidColor(androidx.compose.ui.graphics.Color.White))
+        .build()
+}
+
+/** The supporter mark beside a name: a star, or the shape a Supporter Plus chose, in the accent colour. */
 @Composable
-internal fun SupporterMark(size: Dp = 14.dp) {
+internal fun SupporterMark(size: Dp = 14.dp, mark: String = "star") {
     Icon(
-        Icons.Rounded.Star, contentDescription = "Supporter",
+        markVector(Support.cleanMark(mark)), contentDescription = "Supporter",
         tint = Prefs.accentColor, modifier = Modifier.size(size),
     )
 }
@@ -200,20 +249,26 @@ internal fun SettingsSupportScreen(onBack: () -> Unit, onProfile: () -> Unit) {
             color = MutedC, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(bottom = 16.dp),
         )
 
+        val rank = Support.rank()
         if (me?.sup == true) {
-            SupporterPanel(me) { on ->
-                if (busy) return@SupporterPanel
-                busy = true; status = ""
-                scope.launch {
-                    status = Support.setWall(ctx, on) ?: ""
-                    busy = false
-                }
-            }
+            SupporterPanel(
+                me, rank, tv,
+                onWall = { on ->
+                    if (busy) return@SupporterPanel
+                    busy = true; status = ""
+                    scope.launch { status = Support.setWall(ctx, on) ?: ""; busy = false }
+                },
+                onMark = { m ->
+                    if (busy) return@SupporterPanel
+                    busy = true; status = ""
+                    scope.launch { status = Support.setMark(ctx, m) ?: ""; busy = false }
+                },
+                onOpen = { scope.launch { Support.open(ctx) } },
+            )
         } else {
-            SupportPitch(tv = tv, onOpen = {
-                val u = Support.url ?: return@SupportPitch
-                runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u))) }
-            })
+            SupportPitch(tv = tv, onOpen = { scope.launch { Support.open(ctx) } })
+        }
+        if (rank < 3) {
             Spacer(Modifier.height(12.dp))
             SupportCodePanel(
                 signedIn = me != null,
@@ -227,7 +282,8 @@ internal fun SettingsSupportScreen(onBack: () -> Unit, onProfile: () -> Unit) {
                         busy = false
                         if (err == null) {
                             code = ""; status = ""
-                            Toasts.show("You're a supporter — thank you. Three more accents are yours in Appearance.")
+                            Toasts.show("You're a ${Support.tierName()} — thank you. " +
+                                (if (Support.rank() >= 2) "Any colour is yours in Appearance." else "Three more accents are yours in Appearance."))
                         } else {
                             status = err
                         }
@@ -241,24 +297,32 @@ internal fun SettingsSupportScreen(onBack: () -> Unit, onProfile: () -> Unit) {
             modifier = Modifier.padding(top = 12.dp, start = 4.dp),
         )
 
-        if (Support.wall.isNotEmpty()) {
+        if (Support.founders.isNotEmpty()) {
             Spacer(Modifier.height(26.dp))
+            Eyebrow("Founders")
+            Text(
+                Support.joinNames(Support.founders), color = TextC, fontSize = 15.sp, lineHeight = 23.sp,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        if (Support.others.isNotEmpty()) {
+            Spacer(Modifier.height(if (Support.founders.isNotEmpty()) 16.dp else 26.dp))
             Eyebrow("Thanks to")
             Text(
-                Support.joinNames(Support.wall), color = TextC, fontSize = 15.sp, lineHeight = 23.sp,
+                Support.joinNames(Support.others), color = TextC, fontSize = 15.sp, lineHeight = 23.sp,
                 modifier = Modifier.padding(top = 8.dp),
             )
         }
     }
 }
 
-/** Already a supporter: the mark, the date, and the one choice they still have. */
+/** Already a supporter: the tier, the date, the wall switch, the mark (plus and up), and a way to raise the tier. */
 @Composable
-private fun SupporterPanel(me: Profile, onWall: (Boolean) -> Unit) {
+private fun SupporterPanel(me: Profile, rank: Int, tv: Boolean, onWall: (Boolean) -> Unit, onMark: (String) -> Unit, onOpen: () -> Unit) {
     SupportPanel {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SupporterMark(20.dp)
-            Text("You're a supporter", color = TextC, fontSize = 19.sp, fontFamily = Sans, fontWeight = FontWeight.Bold)
+            SupporterMark(20.dp, Support.myMark())
+            Text("You're a ${Support.tierName()}", color = TextC, fontSize = 19.sp, fontFamily = Sans, fontWeight = FontWeight.Bold)
         }
         val since = Support.sinceText(me.supSince)
         Text(
@@ -284,7 +348,49 @@ private fun SupporterPanel(me: Profile, onWall: (Boolean) -> Unit) {
                 Chip("Hide", !me.wall, inSeg = true) { onWall(false) }
             }
         }
+        if (rank >= 2) {
+            Column(Modifier.fillMaxWidth().padding(top = 16.dp)) {
+                Text("Your mark", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Beside your name, for you and your friends",
+                    color = MutedC, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 2.dp, bottom = 10.dp),
+                )
+                Segmented {
+                    Support.MARKS.forEach { (k, label) -> Chip(label, me.mark == k, inSeg = true) { onMark(k) } }
+                }
+            }
+        }
+        if (rank < 3 && Support.url != null) {
+            Box(Modifier.fillMaxWidth().padding(top = 16.dp).height(1.dp).background(LineC))
+            Text("Raise your tier", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 14.dp))
+            Text(
+                (if (rank < 2) "Supporter Plus: any accent colour, your own mark, early builds. " else "") +
+                    "Founder: the Founders list, a gold ring, Nebula Sports without the sponsor prompt.",
+                color = MutedC, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 2.dp, bottom = 12.dp),
+            )
+            if (tv) TvSupportAddress() else Button(
+                onClick = onOpen,
+                colors = ButtonDefaults.buttonColors(containerColor = Surface2, contentColor = TextC),
+                shape = RoundedCornerShape(12.dp),
+            ) { Text("See the tiers", fontWeight = FontWeight.SemiBold) }
+        }
     }
+}
+
+/** A TV has no browser worth typing a card number into: the short address, large. */
+@Composable
+private fun TvSupportAddress() {
+    Text(
+        "play.rifflehq.in/support", color = TextC, fontFamily = Mono, fontSize = 22.sp,
+        fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp,
+        modifier = Modifier.fillMaxWidth().background(Surface2, RoundedCornerShape(12.dp))
+            .padding(horizontal = 16.dp, vertical = 16.dp),
+    )
+    Text(
+        "Open it on your phone — it takes a minute." +
+            (if (Cloud.profile != null) " Sign in there with the same profile, or type the code it gives you here." else ""),
+        color = MutedC, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 10.dp),
+    )
 }
 
 /** Not a supporter: what it is for, and the way to do it. */
@@ -293,23 +399,13 @@ private fun SupportPitch(tv: Boolean, onOpen: () -> Unit) {
     SupportPanel {
         Text(
             "Every feature stays free for everyone. Supporting keeps the sync server and the site " +
-                "running, and you get a small thank-you: a supporter mark beside your name, three more " +
-                "accent colours, and your name on the wall if you like.",
+                "running, and you get a small thank-you: a mark beside your name, more accent colours, " +
+                "your name on the wall if you like — and more at the higher tiers.",
             color = MutedC, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(bottom = 14.dp),
         )
         if (Support.url == null) return@SupportPanel
         if (tv) {
-            // A TV has no browser worth typing a card number into.
-            Text(
-                "play.rifflehq.in/support", color = TextC, fontFamily = Mono, fontSize = 22.sp,
-                fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp,
-                modifier = Modifier.fillMaxWidth().background(Surface2, RoundedCornerShape(12.dp))
-                    .padding(horizontal = 16.dp, vertical = 16.dp),
-            )
-            Text(
-                "Open it on your phone — it takes a minute.",
-                color = MutedC, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 10.dp),
-            )
+            TvSupportAddress()
         } else {
             Button(
                 onClick = onOpen,

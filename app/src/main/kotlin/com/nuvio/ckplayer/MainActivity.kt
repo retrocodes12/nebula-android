@@ -130,6 +130,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -1877,14 +1878,32 @@ private fun RecommendSheet(type: String, item: MetaItem, onDismiss: () -> Unit) 
 }
 
 /** Profile monogram: one of the eight Nebula colours behind the first letter of the name. */
+/** A colour's hue in degrees, for the Any colour slider (a `#RRGGBB` accent of one's own). */
+internal fun hueOf(hex: String): Float {
+    val v = runCatching { hex.removePrefix("#").toLong(16) }.getOrDefault(0L)
+    val r = ((v shr 16) and 0xFF) / 255f; val g = ((v shr 8) and 0xFF) / 255f; val b = (v and 0xFF) / 255f
+    val max = maxOf(r, g, b); val min = minOf(r, g, b); val d = max - min
+    if (d == 0f) return 0f
+    val h = when (max) {
+        r -> ((g - b) / d) % 6f
+        g -> (b - r) / d + 2f
+        else -> (r - g) / d + 4f
+    } * 60f
+    return if (h < 0f) h + 360f else h
+}
+internal fun hexOf(c: Color): String =
+    "#%02X%02X%02X".format(java.util.Locale.US, (c.red * 255).toInt(), (c.green * 255).toInt(), (c.blue * 255).toInt())
+
 internal fun avatarColor(hex: String): Color =
     if (Regex("^#[0-9A-Fa-f]{6}$").matches(hex)) Color(android.graphics.Color.parseColor(hex)) else Color(0xFF636366)
 
 @Composable
-internal fun Avatar(hex: String, name: String, size: Dp, dim: Boolean = false) {
+internal fun Avatar(hex: String, name: String, size: Dp, dim: Boolean = false, ring: Boolean = false) {
     val bg = if (dim) Surface2 else avatarColor(hex)
     val ink = if (dim) MutedC else if (hex.equals("#F2F2F7", ignoreCase = true)) Bg else Color.White
-    Box(Modifier.size(size).background(bg, CircleShape), contentAlignment = Alignment.Center) {
+    // a Founder wears a gold ring, everywhere the avatar is drawn
+    val ringMod = if (ring) Modifier.border(2.dp, Color(0xFFE0B24A), CircleShape) else Modifier
+    Box(Modifier.size(size).then(ringMod).background(bg, CircleShape), contentAlignment = Alignment.Center) {
         Text(
             name.trim().removePrefix("@").ifEmpty { "?" }.take(1).uppercase(), color = ink,
             fontSize = (size.value * 0.42f).sp, fontWeight = FontWeight.Bold, fontFamily = Sans,
@@ -2056,7 +2075,7 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                                 .padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Avatar(f.optString("avatar"), f.optString("name").ifEmpty { f.optString("handle") }, 40.dp)
+                            Avatar(f.optString("avatar"), f.optString("name").ifEmpty { f.optString("handle") }, 40.dp, ring = Social.friendFounder(f))
                             Column(Modifier.padding(start = 12.dp).weight(1f)) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -2065,7 +2084,7 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                                     Text(Social.friendLabel(f), color = TextC, fontSize = 15.sp,
                                         fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f, fill = false))
-                                    if (Social.friendSup(f)) SupporterMark()
+                                    if (Social.friendSup(f)) SupporterMark(mark = Social.friendMark(f))
                                 }
                                 val handle = f.optString("handle")
                                 Text(
@@ -3302,7 +3321,8 @@ internal fun SettingsChips(title: String, sub: String?, options: List<Pair<Strin
 private fun SettingsLayoutScreen(onBack: () -> Unit, onSupport: () -> Unit) {
     val ctx = LocalContext.current
     val all = Prefs.everything
-    val sup = Cloud.profile?.sup == true
+    val rank = Support.rank()
+    val sup = rank >= 1
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp).padding(top = 20.dp, bottom = 110.dp),
@@ -3313,20 +3333,23 @@ private fun SettingsLayoutScreen(onBack: () -> Unit, onSupport: () -> Unit) {
             // swatch grid: three per row, tick on the current one
             Column(Modifier.fillMaxWidth().padding(14.dp)) {
                 // the three supporter colours ride at the end of the same grid, locked until the mark is there
-                (Prefs.ACCENTS + Prefs.SUP_ACCENTS).chunked(3).forEachIndexed { ri, row ->
+                // Supporter Plus's six more ride behind them once one is a supporter (locked below plus)
+                (Prefs.ACCENTS + Prefs.SUP_ACCENTS + (if (sup) Prefs.PLUS_ACCENTS else emptyList())).chunked(3).forEachIndexed { ri, row ->
                     Row(
                         Modifier.fillMaxWidth().padding(top = if (ri == 0) 0.dp else 18.dp),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                     ) {
                         row.forEach { (key, label, color) ->
-                            val locked = !sup && Prefs.SUP_ACCENTS.any { it.first == key }
+                            val need = Prefs.accentRank(key)
+                            val locked = need > rank
+                            val what = if (need >= 2) "a Supporter Plus colour" else "a supporter colour"
                             // a locked colour still stored as the pref shows the fallback ticked, not itself
                             val on = Prefs.activeAccent == key
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 modifier = Modifier.width(84.dp).clip(RoundedCornerShape(14.dp))
                                     .clickable {
-                                        if (locked) { Toasts.show("$label is a supporter colour."); onSupport() }
+                                        if (locked) { Toasts.show("$label is $what."); onSupport() }
                                         else Prefs.setAccent(ctx, key)
                                     }.padding(vertical = 6.dp),
                             ) {
@@ -3359,6 +3382,23 @@ private fun SettingsLayoutScreen(onBack: () -> Unit, onSupport: () -> Unit) {
                     color = FaintC, fontSize = 12.sp, lineHeight = 17.sp,
                     modifier = Modifier.padding(top = 14.dp),
                 )
+                // any colour at all (Supporter Plus): a hue slider, the swatch beside it shows the pick
+                if (rank >= 2) {
+                    val own = Prefs.accent.startsWith("#")
+                    var hue by remember { mutableStateOf(if (own) hueOf(Prefs.accent) else 0f) }
+                    Text("Any colour", color = TextC, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 18.dp))
+                    Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Box(
+                            Modifier.size(40.dp).clip(CircleShape).background(Color.hsv(hue, 0.82f, 0.96f))
+                                .border(if (own) 3.dp else 0.dp, if (own) Color.White else Color.Transparent, CircleShape),
+                        )
+                        Slider(
+                            value = hue, onValueChange = { hue = it },
+                            onValueChangeFinished = { Prefs.setAccent(ctx, hexOf(Color.hsv(hue, 0.82f, 0.96f))) },
+                            valueRange = 0f..359f, modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
             }
         }
         if (all) {
