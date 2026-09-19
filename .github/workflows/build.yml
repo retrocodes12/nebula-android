@@ -49,9 +49,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.71.0.apk
+          cp "$APK" Nebula-1.72.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.71.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.71.0 Nebula-1.71.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.71.0" \
-            --notes "Streams from add-ons that serve more than one kind of content, such as films and live channels together, now appear where they were missing. The picture you see while dragging the scrubber also arrives sooner and follows your finger more closely."
+          gh release delete v1.72.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.72.0 Nebula-1.72.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.72.0" \
+            --notes "Supporter tiers: Supporter, Supporter Plus and Founder. Settings › Support shows your tier, lets Supporter Plus pick a mark and any accent colour, and gives Founders a gold ring. Every feature stays free."
