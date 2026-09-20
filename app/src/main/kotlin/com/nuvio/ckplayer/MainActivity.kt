@@ -212,6 +212,9 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.DecoderManager
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.DecoderMode
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.PlayerView
@@ -4859,6 +4862,7 @@ private fun PlayerScreen(
     // the stall watchdog (StallWatch.kt): its memory, the sibling on offer and when the offer went up
     val stallWatch = remember { StallWatch() }
     var swapOffer by remember { mutableStateOf<Pair<StreamItem, Addon>?>(null) }
+    var swapWhy by remember { mutableStateOf("Keeps stalling") }         // what the pill says the trouble is
     var swapShownAt by remember { mutableStateOf(0L) }
     val bwTick = remember { IntArray(1) }
     var pauseBoardOn by remember { mutableStateOf(false) }
@@ -4892,9 +4896,14 @@ private fun PlayerScreen(
             }
         }.build()
     }
+    // Which decoder draws the picture (1.73.0): the chip first; a stream it refuses is retried on the processor
+    // (nextlib's FFmpeg renderer) once, per stream — softDecode remembers the retry so a second failure is final.
+    val decoders = remember { DecoderManager() }
+    var softDecode by remember { mutableStateOf(false) }
     val exo = remember {
         ExoPlayer.Builder(context)
             .setBandwidthMeter(bandwidth)
+            .setRenderersFactory(NextRenderersFactory(context).setDecoderManager(decoders))
             // Settings › Buffer ahead: a longer load control when one is chosen; Auto keeps the engine's own (PlayerExtras.kt)
             .let { b -> bufferLoadControl(Prefs.buffer)?.let { b.setLoadControl(it) } ?: b }
             // one HTTP identity (UA, X-Nebula-Client, cookies) shared with the scrub-frame reader — MediaHttp.kt
@@ -4915,6 +4924,7 @@ private fun PlayerScreen(
             .setSeekForwardIncrementMs(Prefs.seekStep * 1000L)
             .build()
             .apply {
+                decoders.attach(this)                       // before any prepare; needs the default track selector
                 playWhenReady = true
                 // languages, the resolution cap and subtitles-at-start, from Settings › Playback
                 trackSelectionParameters = trackParams(trackSelectionParameters)
@@ -5055,7 +5065,8 @@ private fun PlayerScreen(
         onProgressSaved()
     }
     /** Three stalls in ninety seconds: find the row after this one and put it on the pill (a party viewer follows the host instead). */
-    fun offerSwap() {
+    fun offerSwap(why: String = "Keeps stalling") {
+        swapWhy = why
         if (partyUi.active() && !partyUi.isHost) return
         if (P2p.isLocal(url)) return                     // a P2P play: the row behind it is not this address
         val type = contentType ?: return
@@ -5065,13 +5076,14 @@ private fun PlayerScreen(
             val c = runCatching { StallWatch.pick(StallWatch.siblings(context, type, id, addonUrl, null), url, null) }.getOrNull()
             stallWatch.busy = false; stallWatch.offered = true
             if (c != null) { swapOffer = c; swapShownAt = System.currentTimeMillis() }
-            else Toasts.show("This source keeps stalling — another stream from the list may do better.")
+            else Toasts.show(if (why == "Keeps stalling") "This source keeps stalling — another stream from the list may do better." else "This phone cannot decode this source — another stream from the list may.")
         }
     }
 
     LaunchedEffect(url) {
         // a fresh episode starts with the up-next card closed and undismissed, and the stall watchdog at zero
         stallWatch.reset(); swapOffer = null
+        if (softDecode) { softDecode = false; runCatching { decoders.selectVideoDecoder(DecoderMode.AUTO) } }
         upnextOpen = false; upnextCounting = false; upnextDismissed = false; stillAsk = false; subForced = false
         // and without the last one's add-on subtitle: its file and timing must not be re-fed into this item
         activeAddonSub = null; subBaseFile = null; subOffsetMs = 0L; subAppliedMs = 0L
@@ -5198,7 +5210,25 @@ private fun PlayerScreen(
                     Toasts.show("Your PC stopped answering — playing direct")
                     return
                 }
+                // The chip could not decode this picture (a 10-bit H.264 feed, an odd profile): the same item again on the
+                // processor, once. A live stream rejoins at the edge; a film keeps its place. Media3 does not do this by
+                // itself — a decoder that dies mid-stream is a final error to it (nextlib's notes say the same).
+                val decodeFail = e.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED
+                    || e.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED
+                    || e.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED
+                    || e.errorCode == PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED
+                if (decodeFail && !softDecode && item != null) {
+                    softDecode = true
+                    val pos = exo.currentPosition
+                    runCatching { decoders.selectVideoDecoder(DecoderMode.FFMPEG) }
+                    if (!exo.isCurrentMediaItemLive && pos > 0) exo.setMediaItem(item, pos) else exo.setMediaItem(item)
+                    exo.prepare(); exo.play()
+                    Toasts.show("Your phone's video chip could not decode this picture — decoding on the processor instead")
+                    return
+                }
                 error = "Playback error ${e.errorCodeName} (${e.errorCode})"
+                // the processor could not either (or it is not a decoder error): the row after this one, on the pill
+                if (decodeFail) offerSwap("Cannot decode")
             }
             override fun onTracksChanged(tracks: Tracks) {
                 var v = 0
@@ -5268,7 +5298,7 @@ private fun PlayerScreen(
             // last word on the resume point before the player goes away
             runCatching { snapshotProgress() }
             runCatching { Social.publishSoon(context) }   // friends see the freshly watched title
-            exo.removeListener(l); runCatching { session?.release() }; exo.release()
+            exo.removeListener(l); runCatching { session?.release() }; runCatching { decoders.detach() }; exo.release()
             Relay.via = null            // the next play asks again
             P2p.leave(context)          // engine off, download cleared — on its own thread, stopping it blocks
             if (activePipPlayer.value === exo) activePipPlayer.value = null
@@ -5350,6 +5380,7 @@ private fun PlayerScreen(
                     scrubPreview?.status?.value,
                 ),
                 p2pLine = if (P2p.isLocal(url)) P2p.line() else null,
+                decoderLine = if (softDecode) "on the processor (the chip refused this picture)" else null,
                 stalls = stallWatch.total,
                 viaLine = viaRelay?.let { "${it.name} on your network" },
             )
@@ -5759,7 +5790,7 @@ private fun PlayerScreen(
             if (pip) return@let
             val swapFocus = remember { FocusRequester() }
             GlassPill(
-                "Keeps stalling · Try " + StallWatch.name(st, from),
+                swapWhy + " · Try " + StallWatch.name(st, from),
                 modifier = Modifier.align(Alignment.BottomEnd)
                     .padding(end = 20.dp, bottom = aboveChrome + 54.dp)
                     .focusRequester(swapFocus),

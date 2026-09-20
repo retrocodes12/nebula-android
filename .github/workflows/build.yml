@@ -49,9 +49,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.72.0.apk
+          cp "$APK" Nebula-1.73.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.72.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.72.0 Nebula-1.72.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.72.0" \
-            --notes "Supporter tiers: Supporter, Supporter Plus and Founder. Settings › Support shows your tier, lets Supporter Plus pick a mark and any accent colour, and gives Founders a gold ring. Every feature stays free."
+          gh release delete v1.73.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.73.0 Nebula-1.73.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.73.0" \
+            --notes "Plays pictures your phone's chip cannot: when the hardware decoder refuses a stream (10-bit video, an unusual profile), Nebula decodes it on the processor instead, the way other players do. If that cannot keep up either, one tap tries the next source."

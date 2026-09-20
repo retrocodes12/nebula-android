@@ -12,8 +12,8 @@ android {
         applicationId = "com.nuvio.ckplayer"
         minSdk = 26
         targetSdk = 34
-        versionCode = 81
-        versionName = "1.72.0"
+        versionCode = 82
+        versionName = "1.73.0"
         // arm only: every phone and TV box Nebula runs on is arm64 or armv7, and libtorrent's native
         // library is the only thing here with a processor. On anything else the engine reports itself
         // unavailable and P2P streams stay hidden (P2p.available).
@@ -88,6 +88,9 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:$media3")
     implementation("androidx.media3:media3-ui:$media3")
     implementation("androidx.media3:media3-session:$media3")
+    // Software video + audio decoders for Media3 (FFmpeg, built by NextPlayer's nextlib; the version pairs with Media3's).
+    // The phone's chip decodes first; a picture it cannot do (10-bit H.264, an odd profile) falls to the processor — 1.73.0.
+    implementation("io.github.anilbeesetti:nextlib-media3ext:1.11.0-0.15.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
