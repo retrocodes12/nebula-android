@@ -316,12 +316,42 @@ object Prefs {
         load(ctx)
     }
 
-    /** The short list a picker offers; "" means follow the device. */
+    /**
+     * The list a picker offers; "" means follow the device.
+     *
+     * It was seventeen languages and it was asked to be longer (`nebula-android#1`, "can you add
+     * more subtitle languages for autoload") — the first seventeen covered India and the biggest
+     * five of Europe and nothing else, so most of Europe could not name its own language here.
+     * Order is the eye's, not the alphabet's: Device first, then English, then the rest grouped
+     * by region, because a picker you scroll is read in blocks. Codes are ISO 639-1, which is
+     * what an add-on's subtitle `lang` field carries and what [langLabel] matches on.
+     *
+     * The shared player's PREF_LANGS is the SAME list in the same order, on purpose — the
+     * preference syncs between surfaces, so a code one of them cannot name is a setting that
+     * reads as broken on the other.
+     */
     val LANGS = listOf(
-        "" to "Device", "en" to "English", "hi" to "Hindi", "ta" to "Tamil", "te" to "Telugu",
-        "ml" to "Malayalam", "kn" to "Kannada", "bn" to "Bengali", "mr" to "Marathi",
-        "es" to "Spanish", "fr" to "French", "de" to "German", "pt" to "Portuguese",
-        "it" to "Italian", "ar" to "Arabic", "ja" to "Japanese", "ko" to "Korean", "zh" to "Chinese",
+        "" to "Device", "en" to "English",
+        // Europe — west and north
+        "es" to "Spanish", "fr" to "French", "de" to "German", "it" to "Italian",
+        "pt" to "Portuguese", "nl" to "Dutch", "sv" to "Swedish", "da" to "Danish",
+        "no" to "Norwegian", "fi" to "Finnish", "is" to "Icelandic",
+        // Europe — central, east and south
+        "pl" to "Polish", "cs" to "Czech", "sk" to "Slovak", "hu" to "Hungarian",
+        "ro" to "Romanian", "bg" to "Bulgarian", "el" to "Greek", "hr" to "Croatian",
+        "sr" to "Serbian", "sl" to "Slovenian", "et" to "Estonian", "lv" to "Latvian",
+        "lt" to "Lithuanian", "ru" to "Russian", "uk" to "Ukrainian", "tr" to "Turkish",
+        // Middle East
+        "ar" to "Arabic", "he" to "Hebrew", "fa" to "Persian",
+        // South Asia
+        "hi" to "Hindi", "ta" to "Tamil", "te" to "Telugu", "ml" to "Malayalam",
+        "kn" to "Kannada", "bn" to "Bengali", "mr" to "Marathi", "gu" to "Gujarati",
+        "pa" to "Punjabi", "ur" to "Urdu",
+        // East and South-East Asia
+        "zh" to "Chinese", "ja" to "Japanese", "ko" to "Korean", "th" to "Thai",
+        "vi" to "Vietnamese", "id" to "Indonesian", "ms" to "Malay", "tl" to "Filipino",
+        // elsewhere
+        "sw" to "Swahili",
     )
     /** The same list with "None" in front — for a second choice that may be left empty. */
     val LANGS_NONE = listOf("" to "None") + LANGS.drop(1)

@@ -148,6 +148,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusGroup
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.InputMode
@@ -1070,212 +1071,220 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
 
             Box(Modifier.fillMaxSize()) {
                 val current = stack.last()
-                Box(Modifier.fillMaxSize()) {
-                    AnimatedContent(
-                        targetState = current,
-                        modifier = Modifier.fillMaxSize(),
-                        // one 180 ms cross-fade per screen change; the in-place episode hop (Play → Play)
-                        // keeps the same player composition, so it is not a change here
-                        contentKey = { s -> if (s is Screen.Play) "play" else s },
-                        // Motion: Reduced cuts between screens instead of fading
-                        transitionSpec = {
-                            val ms = if (Prefs.reducedMotion) 0 else 180
-                            fadeIn(tween(ms)) togetherWith fadeOut(tween(ms))
-                        },
-                        label = "screen",
-                    ) { s ->
-                        Box(Modifier.fillMaxSize()) {
-                        when (s) {
-                            is Screen.Home -> HomeScreen(
-                                homeState,
-                                onOpen = { a, item -> openMeta(a, item) },
-                                onSeeAll = { a, c -> push(Screen.Catalog(a, c)) },
-                                onGoAddons = { push(Screen.Addons) },
-                                onResume = { r -> openProgress(r) },
-                                onSheetResume = { r -> openProgress(r, decided = true) },
-                                onStartOver = { r -> openProgress(r, fresh = true, decided = true) },
-                                onDetails = { r -> openProgressDetails(r) },
-                                onCustomise = { push(Screen.SettingsHome) },
-                            )
-                            is Screen.Search -> SearchScreen(
-                                searchState,
-                                onOpen = { a, item -> openMeta(a, item) },
-                                onAddon = { a -> push(Screen.Catalog(a)) },
-                            )
-                            is Screen.Addons -> AddonsScreen(
-                                version = addonsVersion,
-                                onBack = { pop() },
-                                onOpen = { push(Screen.Catalog(it)) },
-                                onAddonsChanged = { manifestCache.clear(); homeState.invalidate(); homeState.invalidateContinue() },   // an add-on off takes its titles out of Continue watching
-                            )
-                            is Screen.Settings -> SettingsScreen(
-                                onAddons = { push(Screen.Addons) },
-                                onLayout = { push(Screen.SettingsLayout) },
-                                onSupport = { push(Screen.SettingsSupport) },
-                                onHome = { push(Screen.SettingsHomeOpts) },
-                                onPlayback = { push(Screen.SettingsPlayback) },
-                                onStreams = { push(Screen.SettingsStreams) },
-                                onProfile = { push(Screen.Profile) },
-                                onParty = { push(Screen.SettingsParty) },
-                                onFriends = { push(Screen.Friends) },
-                                onAdvanced = { push(Screen.SettingsAdvanced) },
-                            )
-                            is Screen.SettingsLayout -> SettingsLayoutScreen(
-                                onBack = { pop() },
-                                onSupport = { push(Screen.SettingsSupport) },
-                            )
-                            is Screen.SettingsHomeOpts -> SettingsHomeScreen(onBack = { pop() }, onRows = { push(Screen.SettingsHome) })
-                            is Screen.SettingsStreams -> SettingsStreamsScreen(onBack = { pop() })
-                            is Screen.SettingsAdvanced -> SettingsAdvancedScreen(
-                                onBack = { pop() },
-                                onClearCache = { clearContentCaches(); homeState.invalidate() },
-                                onReset = { homeState.invalidate() },
-                            )
-                            is Screen.SettingsHome -> SettingsHomeRowsScreen(onBack = { pop() })
-                            is Screen.Friends -> FriendsScreen(
-                                onBack = { pop() },
-                                onProfile = { push(Screen.Profile) },
-                                onOpen = { m ->
-                                    val a = activeAddons(ctx).firstOrNull() ?: return@FriendsScreen
-                                    openMeta(a, m)
-                                },
-                            )
-                            is Screen.SettingsPlayback -> SettingsPlaybackScreen(
-                                onBack = { pop() },
-                                onSubtitles = { push(Screen.SettingsSubtitles) },
-                            )
-                            is Screen.SettingsSubtitles -> SettingsSubtitlesScreen(onBack = { pop() })
-                            // reached from the nav's last item as a root, or pushed from Settings
-                            is Screen.Profile -> ProfileScreen(onBack = { if (stack.size > 1) pop() else setTab(Screen.Home) })
-                            is Screen.SettingsParty -> SettingsPartyScreen(onBack = { pop() }, onJoin = { partyJoin(it) })
-                            is Screen.SettingsSupport -> SettingsSupportScreen(
-                                onBack = { pop() },
-                                onProfile = { push(Screen.Profile) },
-                            )
-                            is Screen.Library -> LibraryScreen(
-                                version = libraryVersion,
-                                onResume = { r -> openProgress(r) },
-                                onSheetResume = { r -> openProgress(r, decided = true) },
-                                onStartOver = { r -> openProgress(r, fresh = true, decided = true) },
-                                onDetails = { r -> openProgressDetails(r) },
-                                onGoHome = { setTab(Screen.Home) },
-                                onGoSearch = { setTab(Screen.Search) },
-                                onOpen = { li ->
-                                    val addons = activeAddons(ctx)
-                                    val a = addons.firstOrNull { it.manifestUrl == li.addonUrl } ?: addons.firstOrNull()
-                                    if (a == null) partyUi.status = "Add an add-on first"
-                                    else push(Screen.Detail(a, MetaItem(li.id, li.type, li.name, li.poster, li.shape)))
-                                },
-                                onPlayEpisode = { li, ep ->
-                                    val addons = activeAddons(ctx)
-                                    val a = addons.firstOrNull { it.manifestUrl == li.addonUrl } ?: addons.firstOrNull()
-                                    if (a == null) partyUi.status = "Add an add-on first"
-                                    else {
+                // the five screens the nav belongs to; everything else is full-bleed
+                val onNav = current == Screen.Home || current == Screen.Search ||
+                    current == Screen.Library || current == Screen.Settings || current == Screen.Profile
+                // a television gets the rail laid out BESIDE the content, a phone the pill over it
+                val isTv = remember(ctx) { Account.isTv(ctx) }
+                val rail = onNav && isTv
+                Row(Modifier.fillMaxSize()) {
+                    if (rail) SideRail(current, onTab = { setTab(it) })
+                    Box(Modifier.weight(1f).fillMaxHeight()) {
+                        AnimatedContent(
+                            targetState = current,
+                            modifier = Modifier.fillMaxSize(),
+                            // one 180 ms cross-fade per screen change; the in-place episode hop (Play → Play)
+                            // keeps the same player composition, so it is not a change here
+                            contentKey = { s -> if (s is Screen.Play) "play" else s },
+                            // Motion: Reduced cuts between screens instead of fading
+                            transitionSpec = {
+                                val ms = if (Prefs.reducedMotion) 0 else 180
+                                fadeIn(tween(ms)) togetherWith fadeOut(tween(ms))
+                            },
+                            label = "screen",
+                        ) { s ->
+                            Box(Modifier.fillMaxSize()) {
+                            when (s) {
+                                is Screen.Home -> HomeScreen(
+                                    homeState,
+                                    onOpen = { a, item -> openMeta(a, item) },
+                                    onSeeAll = { a, c -> push(Screen.Catalog(a, c)) },
+                                    onGoAddons = { push(Screen.Addons) },
+                                    onResume = { r -> openProgress(r) },
+                                    onSheetResume = { r -> openProgress(r, decided = true) },
+                                    onStartOver = { r -> openProgress(r, fresh = true, decided = true) },
+                                    onDetails = { r -> openProgressDetails(r) },
+                                    onCustomise = { push(Screen.SettingsHome) },
+                                )
+                                is Screen.Search -> SearchScreen(
+                                    searchState,
+                                    onOpen = { a, item -> openMeta(a, item) },
+                                    onAddon = { a -> push(Screen.Catalog(a)) },
+                                )
+                                is Screen.Addons -> AddonsScreen(
+                                    version = addonsVersion,
+                                    onBack = { pop() },
+                                    onOpen = { push(Screen.Catalog(it)) },
+                                    onAddonsChanged = { manifestCache.clear(); homeState.invalidate(); homeState.invalidateContinue() },   // an add-on off takes its titles out of Continue watching
+                                )
+                                is Screen.Settings -> SettingsScreen(
+                                    onAddons = { push(Screen.Addons) },
+                                    onLayout = { push(Screen.SettingsLayout) },
+                                    onSupport = { push(Screen.SettingsSupport) },
+                                    onHome = { push(Screen.SettingsHomeOpts) },
+                                    onPlayback = { push(Screen.SettingsPlayback) },
+                                    onStreams = { push(Screen.SettingsStreams) },
+                                    onProfile = { push(Screen.Profile) },
+                                    onParty = { push(Screen.SettingsParty) },
+                                    onFriends = { push(Screen.Friends) },
+                                    onAdvanced = { push(Screen.SettingsAdvanced) },
+                                )
+                                is Screen.SettingsLayout -> SettingsLayoutScreen(
+                                    onBack = { pop() },
+                                    onSupport = { push(Screen.SettingsSupport) },
+                                )
+                                is Screen.SettingsHomeOpts -> SettingsHomeScreen(onBack = { pop() }, onRows = { push(Screen.SettingsHome) })
+                                is Screen.SettingsStreams -> SettingsStreamsScreen(onBack = { pop() })
+                                is Screen.SettingsAdvanced -> SettingsAdvancedScreen(
+                                    onBack = { pop() },
+                                    onClearCache = { clearContentCaches(); homeState.invalidate() },
+                                    onReset = { homeState.invalidate() },
+                                )
+                                is Screen.SettingsHome -> SettingsHomeRowsScreen(onBack = { pop() })
+                                is Screen.Friends -> FriendsScreen(
+                                    onBack = { pop() },
+                                    onProfile = { push(Screen.Profile) },
+                                    onOpen = { m ->
+                                        val a = activeAddons(ctx).firstOrNull() ?: return@FriendsScreen
+                                        openMeta(a, m)
+                                    },
+                                )
+                                is Screen.SettingsPlayback -> SettingsPlaybackScreen(
+                                    onBack = { pop() },
+                                    onSubtitles = { push(Screen.SettingsSubtitles) },
+                                )
+                                is Screen.SettingsSubtitles -> SettingsSubtitlesScreen(onBack = { pop() })
+                                // reached from the nav's last item as a root, or pushed from Settings
+                                is Screen.Profile -> ProfileScreen(onBack = { if (stack.size > 1) pop() else setTab(Screen.Home) })
+                                is Screen.SettingsParty -> SettingsPartyScreen(onBack = { pop() }, onJoin = { partyJoin(it) })
+                                is Screen.SettingsSupport -> SettingsSupportScreen(
+                                    onBack = { pop() },
+                                    onProfile = { push(Screen.Profile) },
+                                )
+                                is Screen.Library -> LibraryScreen(
+                                    version = libraryVersion,
+                                    onResume = { r -> openProgress(r) },
+                                    onSheetResume = { r -> openProgress(r, decided = true) },
+                                    onStartOver = { r -> openProgress(r, fresh = true, decided = true) },
+                                    onDetails = { r -> openProgressDetails(r) },
+                                    onGoHome = { setTab(Screen.Home) },
+                                    onGoSearch = { setTab(Screen.Search) },
+                                    onOpen = { li ->
+                                        val addons = activeAddons(ctx)
+                                        val a = addons.firstOrNull { it.manifestUrl == li.addonUrl } ?: addons.firstOrNull()
+                                        if (a == null) partyUi.status = "Add an add-on first"
+                                        else push(Screen.Detail(a, MetaItem(li.id, li.type, li.name, li.poster, li.shape)))
+                                    },
+                                    onPlayEpisode = { li, ep ->
+                                        val addons = activeAddons(ctx)
+                                        val a = addons.firstOrNull { it.manifestUrl == li.addonUrl } ?: addons.firstOrNull()
+                                        if (a == null) partyUi.status = "Add an add-on first"
+                                        else {
+                                            seriesChain.clear()
+                                            val tag = "S${ep.season}" + (ep.episode?.let { "E$it" } ?: "")
+                                            val label = li.name + " · " + tag + (if (ep.name.isNotEmpty()) " · ${ep.name}" else "")
+                                            push(Screen.Streams(a, MetaItem(ep.id, "series", label, li.poster, li.shape)))
+                                            scope.launch { hydrateSeriesChain(ctx, a, "series", ep.id) }
+                                        }
+                                    },
+                                )
+                                is Screen.Detail -> DetailScreen(
+                                    s.addon, s.item,
+                                    onBack = { pop() },
+                                    onEpisodes = { push(Screen.Episodes(s.addon, s.item)) },
+                                    onPlayMovie = {
                                         seriesChain.clear()
-                                        val tag = "S${ep.season}" + (ep.episode?.let { "E$it" } ?: "")
-                                        val label = li.name + " · " + tag + (if (ep.name.isNotEmpty()) " · ${ep.name}" else "")
-                                        push(Screen.Streams(a, MetaItem(ep.id, "series", label, li.poster, li.shape)))
-                                        scope.launch { hydrateSeriesChain(ctx, a, "series", ep.id) }
-                                    }
-                                },
-                            )
-                            is Screen.Detail -> DetailScreen(
-                                s.addon, s.item,
-                                onBack = { pop() },
-                                onEpisodes = { push(Screen.Episodes(s.addon, s.item)) },
-                                onPlayMovie = {
-                                    seriesChain.clear()
-                                    push(Screen.Streams(s.addon, s.item.copy(runtime = metaFullCache[s.item.type + ":" + s.item.id]?.runtime)))
-                                },
-                                onResumeEpisode = { r -> openProgress(r) },
-                                onPlayEpisode = { ep, intent ->
-                                    seriesChain.index = seriesChain.episodes.indexOfFirst { it.id == ep.id }
-                                    val label = seriesChain.label(ep)
-                                    push(Screen.Streams(s.addon, MetaItem(
-                                        ep.id, "series", label, s.item.poster,
-                                        // the streams header is a landscape banner — hand it the
-                                        // backdrop, not a portrait poster to crop
-                                        background = s.item.background ?: ep.thumbnail,
-                                        runtime = metaFullCache[s.item.type + ":" + s.item.id]?.runtime,   // sizes become rates against it
-                                    ),
-                                        startOver = intent == PlayIntent.START_OVER,
-                                        // a sheet row is a deliberate choice, so "When you come back · Ask"
-                                        // must not ask again; a plain row tap has decided nothing
-                                        decided = intent != PlayIntent.TAP))
-                                },
-                            )
-                            is Screen.Catalog -> CatalogScreen(
-                                s.addon, s.initial,
-                                catalogStates.getOrPut(s.addon.manifestUrl) { CatalogUiState() },
-                                onBack = { pop() },
-                                onOpen = { openMeta(s.addon, it) },
-                            )
-                            is Screen.Episodes -> EpisodesScreen(
-                                s.addon, s.item,
-                                onBack = { pop() },
-                                onPlayEpisode = { ep, intent ->
-                                    seriesChain.index = seriesChain.episodes.indexOfFirst { it.id == ep.id }
-                                    val label = seriesChain.label(ep)
-                                    push(Screen.Streams(s.addon, MetaItem(
-                                        ep.id, "series", label, s.item.poster,
-                                        // the streams header is a landscape banner — hand it the
-                                        // backdrop, not a portrait poster to crop
-                                        background = s.item.background ?: ep.thumbnail,
-                                        runtime = metaFullCache[s.item.type + ":" + s.item.id]?.runtime,   // sizes become rates against it
-                                    ),
-                                        startOver = intent == PlayIntent.START_OVER,
-                                        // a sheet row is a deliberate choice, so "When you come back · Ask"
-                                        // must not ask again; a plain row tap has decided nothing
-                                        decided = intent != PlayIntent.TAP))
-                                },
-                                // no episode data anywhere → replace this screen with the flat stream list
-                                onFallback = { stack = stack.dropLast(1) + Screen.Streams(s.addon, s.item) },
-                            )
-                            is Screen.Streams -> StreamsScreen(
-                                s.addon, s.item,
-                                onBack = { pop() },
-                                fresh = s.startOver,
-                                decided = s.decided,
-                                onPlay = { st, from, byHand, fresh ->
-                                    // remembered so the next episode keeps this source and quality
-                                    NextEp.notePick(ctx, st, from, byHand)
-                                    withP2p(st) { address ->
-                                        push(
-                                            Screen.Play(
-                                                address, st.name, st.subtitles,
-                                                s.item.type, s.item.id, s.item.name,
-                                                s.item.poster, s.addon.manifestUrl,
-                                                description = s.item.description,
-                                                startOver = fresh,
-                                                sourceLine = StreamTwin.label(StreamTwin.sig(st, from)).ifEmpty { null },
+                                        push(Screen.Streams(s.addon, s.item.copy(runtime = metaFullCache[s.item.type + ":" + s.item.id]?.runtime)))
+                                    },
+                                    onResumeEpisode = { r -> openProgress(r) },
+                                    onPlayEpisode = { ep, intent ->
+                                        seriesChain.index = seriesChain.episodes.indexOfFirst { it.id == ep.id }
+                                        val label = seriesChain.label(ep)
+                                        push(Screen.Streams(s.addon, MetaItem(
+                                            ep.id, "series", label, s.item.poster,
+                                            // the streams header is a landscape banner — hand it the
+                                            // backdrop, not a portrait poster to crop
+                                            background = s.item.background ?: ep.thumbnail,
+                                            runtime = metaFullCache[s.item.type + ":" + s.item.id]?.runtime,   // sizes become rates against it
+                                        ),
+                                            startOver = intent == PlayIntent.START_OVER,
+                                            // a sheet row is a deliberate choice, so "When you come back · Ask"
+                                            // must not ask again; a plain row tap has decided nothing
+                                            decided = intent != PlayIntent.TAP))
+                                    },
+                                )
+                                is Screen.Catalog -> CatalogScreen(
+                                    s.addon, s.initial,
+                                    catalogStates.getOrPut(s.addon.manifestUrl) { CatalogUiState() },
+                                    onBack = { pop() },
+                                    onOpen = { openMeta(s.addon, it) },
+                                )
+                                is Screen.Episodes -> EpisodesScreen(
+                                    s.addon, s.item,
+                                    onBack = { pop() },
+                                    onPlayEpisode = { ep, intent ->
+                                        seriesChain.index = seriesChain.episodes.indexOfFirst { it.id == ep.id }
+                                        val label = seriesChain.label(ep)
+                                        push(Screen.Streams(s.addon, MetaItem(
+                                            ep.id, "series", label, s.item.poster,
+                                            // the streams header is a landscape banner — hand it the
+                                            // backdrop, not a portrait poster to crop
+                                            background = s.item.background ?: ep.thumbnail,
+                                            runtime = metaFullCache[s.item.type + ":" + s.item.id]?.runtime,   // sizes become rates against it
+                                        ),
+                                            startOver = intent == PlayIntent.START_OVER,
+                                            // a sheet row is a deliberate choice, so "When you come back · Ask"
+                                            // must not ask again; a plain row tap has decided nothing
+                                            decided = intent != PlayIntent.TAP))
+                                    },
+                                    // no episode data anywhere → replace this screen with the flat stream list
+                                    onFallback = { stack = stack.dropLast(1) + Screen.Streams(s.addon, s.item) },
+                                )
+                                is Screen.Streams -> StreamsScreen(
+                                    s.addon, s.item,
+                                    onBack = { pop() },
+                                    fresh = s.startOver,
+                                    decided = s.decided,
+                                    onPlay = { st, from, byHand, fresh ->
+                                        // remembered so the next episode keeps this source and quality
+                                        NextEp.notePick(ctx, st, from, byHand)
+                                        withP2p(st) { address ->
+                                            push(
+                                                Screen.Play(
+                                                    address, st.name, st.subtitles,
+                                                    s.item.type, s.item.id, s.item.name,
+                                                    s.item.poster, s.addon.manifestUrl,
+                                                    description = s.item.description,
+                                                    startOver = fresh,
+                                                    sourceLine = StreamTwin.label(StreamTwin.sig(st, from)).ifEmpty { null },
+                                                )
                                             )
-                                        )
-                                    }
-                                },
-                            )
-                            is Screen.Play -> PlayerScreen(
-                                s.url, s.title, s.subs,
-                                contentType = s.type, contentId = s.id, contentName = s.contentName,
-                                poster = s.poster, addonUrl = s.addonUrl,
-                                description = s.description,
-                                startOver = s.startOver,
-                                sourceLine = s.sourceLine,
-                                startAtMs = s.startAtMs,
-                                currentEpisode = seriesChain.episodes.getOrNull(seriesChain.index),
-                                nextEpisode = seriesChain.next(),
-                                onPlayNext = { ep -> playEpisode(ep) },
-                                onSwapSource = { st, from, at -> swapSource(st, from, at) },
-                                onPrefetchNext = { prefetchNext() },
-                                onProgressSaved = { homeState.invalidateContinue() },
-                                onPartyStart = { partyStart(it) },
-                                onPartyLeave = { partyLeave() },
-                            )
+                                        }
+                                    },
+                                )
+                                is Screen.Play -> PlayerScreen(
+                                    s.url, s.title, s.subs,
+                                    contentType = s.type, contentId = s.id, contentName = s.contentName,
+                                    poster = s.poster, addonUrl = s.addonUrl,
+                                    description = s.description,
+                                    startOver = s.startOver,
+                                    sourceLine = s.sourceLine,
+                                    startAtMs = s.startAtMs,
+                                    currentEpisode = seriesChain.episodes.getOrNull(seriesChain.index),
+                                    nextEpisode = seriesChain.next(),
+                                    onPlayNext = { ep -> playEpisode(ep) },
+                                    onSwapSource = { st, from, at -> swapSource(st, from, at) },
+                                    onPrefetchNext = { prefetchNext() },
+                                    onProgressSaved = { homeState.invalidateContinue() },
+                                    onPartyStart = { partyStart(it) },
+                                    onPartyLeave = { partyLeave() },
+                                )
+                            }
+                            }
                         }
+                        if (onNav && !rail) {
+                            BottomBar(current, onTab = { setTab(it) }, modifier = Modifier.align(Alignment.BottomCenter))
                         }
-                    }
-                    if (current == Screen.Home || current == Screen.Search ||
-                        current == Screen.Library || current == Screen.Settings || current == Screen.Profile) {
-                        BottomBar(current, onTab = { setTab(it) }, modifier = Modifier.align(Alignment.BottomCenter))
                     }
                 }
                 // outside the screen Box so it covers the nav bar too
@@ -1384,6 +1393,49 @@ internal fun FocusCard(
             )
     ) { content() }
 }
+
+/**
+ * Somewhere for the remote to land.
+ *
+ * Compose focuses nothing when a screen opens, so on a television the first D-pad press goes
+ * wherever the default traversal decides — which is why Home, Search and Library read as dead
+ * while Settings and Profile answer (`nebula-android#1`, "i cant scrool thru menus, only
+ * settings, profile"). The shared player has `focusFirst()` for exactly this; this is its
+ * Android half. Attach the requester to the screen's first control, or to a `focusGroup()`
+ * wrapping its list, and it is claimed once [ready] says the content is really composed.
+ *
+ * Nothing happens under a finger: a pre-lit control on a phone reads as already chosen, which
+ * is the same reason [CardSheet] gates its own first focus on the input mode. A remote plugged
+ * into a phone counts, hence the input-mode arm beside the television one.
+ */
+@Composable
+internal fun tvFirstFocus(ready: Boolean = true, key: Any? = Unit): FocusRequester {
+    val req = remember { FocusRequester() }
+    val ctx = LocalContext.current
+    val tv = remember(ctx) { Account.isTv(ctx) }
+    val keys = LocalInputModeManager.current.inputMode == InputMode.Keyboard
+    LaunchedEffect(tv || keys, ready, key) {
+        if (!(tv || keys) || !ready) return@LaunchedEffect
+        // requestFocus() RETURNS whether it took; runCatching only guards the throw from a
+        // requester with no node attached yet. A list's first item is composed a frame after
+        // the list itself and an AnimatedContent screen fades in over ~180 ms, so retry across
+        // a few frames rather than guess one wait — the silent failure here is an inert screen,
+        // which is the whole defect being fixed.
+        repeat(10) {
+            withFrameNanos {}
+            if (runCatching { req.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+        }
+    }
+    return req
+}
+
+/**
+ * The floating pill nav's footprint at the foot of every root list. A television has the rail
+ * beside the content instead, so nothing is parked over it there and the padding would just be
+ * dead screen.
+ */
+@Composable
+internal fun navPadBottom(): Dp = if (Account.isTv(LocalContext.current)) 24.dp else 104.dp
 
 /**
  * A round icon button for the title page's action row. Four of these fit where two
@@ -1627,9 +1679,9 @@ internal fun Chip(text: String, on: Boolean, inSeg: Boolean = false, onClick: ()
 
 /** A row of chips inside one hairline pill — the settings segmented control. */
 @Composable
-internal fun Segmented(content: @Composable RowScope.() -> Unit) {
+internal fun Segmented(modifier: Modifier = Modifier, content: @Composable RowScope.() -> Unit) {
     Row(
-        Modifier.border(1.dp, LineC, RoundedCornerShape(50)).padding(3.dp)
+        modifier.border(1.dp, LineC, RoundedCornerShape(50)).padding(3.dp)
             .horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -2230,6 +2282,37 @@ private fun BottomBar(current: Screen, onTab: (Screen) -> Unit, modifier: Modifi
     }
 }
 
+/**
+ * The television's nav.
+ *
+ * A pill floating at the bottom of the screen is right for a thumb and wrong for a remote: it
+ * sits OVER the content, so the only way back out of it is a blind upward press into whatever
+ * Compose finds there. The rail is the shape the design ruling names and the shared player has
+ * had since the chrome pass, and because it is laid out BESIDE the content rather than on top
+ * of it, Right walks off it into the rows and Left comes back — which is the whole of what
+ * `nebula-android#1` was asking for.
+ */
+@Composable
+private fun SideRail(current: Screen, onTab: (Screen) -> Unit) {
+    Column(
+        Modifier.fillMaxHeight().width(104.dp).background(Color(0xF014141A))
+            .padding(vertical = 20.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("◆", color = Red, fontSize = 20.sp, modifier = Modifier.padding(bottom = 28.dp))
+        TabItem("Home", Icons.Filled.Home, current == Screen.Home) { onTab(Screen.Home) }
+        Spacer(Modifier.height(12.dp))
+        TabItem("Search", Icons.Filled.Search, current == Screen.Search) { onTab(Screen.Search) }
+        Spacer(Modifier.height(12.dp))
+        TabItem("Library", Icons.Filled.Bookmark, current == Screen.Library) { onTab(Screen.Library) }
+        Spacer(Modifier.height(12.dp))
+        TabItem("Settings", Icons.Filled.Settings, current == Screen.Settings) { onTab(Screen.Settings) }
+        Spacer(Modifier.height(12.dp))
+        ProfileTab(current == Screen.Profile) { onTab(Screen.Profile) }
+    }
+}
+
 /** The nav's last item: the signed-in profile's initial on the accent, a "?" when nobody is. */
 @Composable
 private fun ProfileTab(on: Boolean, onClick: () -> Unit) {
@@ -2416,7 +2499,17 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit) {
     val (from, m) = picks[idx]
     // the board owns the top of the screen edge to edge and dissolves into it
     val heroH = (LocalConfiguration.current.screenHeightDp * 0.58f).dp
-    Box(Modifier.fillMaxWidth().height(heroH).clickable { onOpen(from, m) }) {
+    val heroCtx = LocalContext.current
+    val heroTv = remember(heroCtx) { Account.isTv(heroCtx) }
+    Box(
+        Modifier.fillMaxWidth().height(heroH)
+            // 58% of the screen is a poor focus target and it draws NOTHING when it takes
+            // focus, so on a remote the press that lands here reads as a dead one — which is
+            // half of what `nebula-android#1` reported. Let focus fall through to View Details,
+            // which does show it. A finger still taps the artwork.
+            .then(if (heroTv) Modifier.focusProperties { canFocus = false } else Modifier)
+            .clickable { onOpen(from, m) }
+    ) {
         // a slide change dissolves one picture into the next rather than cutting (a cut under reduced motion)
         Crossfade(targetState = m, animationSpec = tween(if (Prefs.reducedMotion) 0 else 400), label = "heroArt", modifier = Modifier.matchParentSize()) { pick ->
             AsyncImage(
@@ -2461,12 +2554,18 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit) {
                 textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
             // one white pill; My List lives on the title page
+            // a white pill cannot wear a white focus ring, so it grows the way a card does —
+            // the remote's landing spot on Home has to be unmistakable from the couch
+            val heroBtn = remember { MutableInteractionSource() }
+            val heroFocused by heroBtn.collectIsFocusedAsState()
             Button(
                 onClick = { onOpen(from, m) },
+                interactionSource = heroBtn,
                 colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
                 shape = RoundedCornerShape(50),
                 contentPadding = PaddingValues(horizontal = 30.dp, vertical = 13.dp),
-                modifier = Modifier.padding(top = 14.dp),
+                modifier = Modifier.padding(top = 14.dp)
+                    .scale(if (heroFocused && !Prefs.reducedMotion) 1.08f else 1f),
             ) { Text("View Details", fontSize = 15.sp, fontWeight = FontWeight.SemiBold) }
             Row(
                 Modifier.padding(top = 16.dp),
@@ -2645,7 +2744,23 @@ private fun HomeScreen(
                 }
             }
             st.rows.isEmpty() && st.continueRows.isEmpty() -> Box(Modifier.padding(top = 30.dp)) { HomeNoRows(st, onCustomise) }
-            else -> LazyColumn(state = st.listState, contentPadding = PaddingValues(bottom = 104.dp)) {
+            // The remote's landing spot: focusGroup makes the list a focus target that hands
+            // focus to its first focusable child — View Details on the hero, else the first card.
+            // Only from the top, and that is deliberate: coming back from a title page the list
+            // is where the viewer left it, and claiming focus there would scroll it home under
+            // them. Never move someone's place to fix a focus bug.
+            else -> LazyColumn(
+                state = st.listState,
+                contentPadding = PaddingValues(bottom = navPadBottom()),
+                modifier = Modifier
+                    .focusRequester(
+                        tvFirstFocus(
+                            ready = st.listState.firstVisibleItemIndex == 0 &&
+                                st.listState.firstVisibleItemScrollOffset == 0,
+                        )
+                    )
+                    .focusGroup(),
+            ) {
                 if (st.rows.isNotEmpty() && Prefs.showHero) item(key = "hero") { HeroHeader(st.rows, onOpen) }
                 if (st.continueRows.isNotEmpty() && Prefs.showContinue) item(key = "continue") {
                     Column {
@@ -2792,7 +2907,9 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
                 focusedBorderColor = Color.White, unfocusedBorderColor = Line2, cursorColor = Red,
                 focusedTextColor = TextC, unfocusedTextColor = TextC,
             ),
-            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            // the remote lands on the box the screen exists for; Down from it reaches Discover
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                .focusRequester(tvFirstFocus()),
         )
         when {
             st.searching && st.sections.isEmpty() -> Column {
@@ -2813,7 +2930,7 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
                     onAddon = onAddon,
                 )
             }
-            else -> LazyColumn(state = st.listState, contentPadding = PaddingValues(bottom = 104.dp)) {
+            else -> LazyColumn(state = st.listState, contentPadding = PaddingValues(bottom = navPadBottom())) {
                 items(st.sections, key = { it.addon.manifestUrl + "/" + it.catalog.id }) { r ->
                     Column {
                         RowHeader(r.addon.name, "${r.items.size} result" + (if (r.items.size > 1) "s" else ""), null)
@@ -3170,7 +3287,11 @@ private fun SettingsScreen(
     }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp),
+            .padding(horizontal = 20.dp)
+            // this screen already answered a remote — the requester only makes the first press
+            // land somewhere chosen rather than wherever the default traversal decides
+            .focusRequester(tvFirstFocus())
+            .focusGroup(),
     ) {
         Text(
             "Settings", color = TextC, fontSize = 34.sp, fontFamily = Sans, fontWeight = FontWeight.Bold,
@@ -3316,6 +3437,54 @@ internal fun SettingsChips(title: String, sub: String?, options: List<Pair<Strin
                 options.forEach { o -> Chip(o.second, selected == o.first, inSeg = true) { onPick(o.first) } }
             }
         }
+    }
+    if (divider) Box(Modifier.fillMaxWidth().padding(start = 14.dp).height(1.dp).background(LineC))
+}
+
+/**
+ * A setting with more answers than a chip strip can hold.
+ *
+ * Seventeen languages fitted in a scrolling row of chips. The real list does not: on a remote a
+ * forty-chip strip is half a minute of pressing Right to reach Vietnamese, which is a worse
+ * answer to "can you add more subtitle languages" than not adding them. This is the Discover
+ * picker — a sheet with a scrolling list and a tick on the current row — so the long lists
+ * behave the same way everywhere, and the row itself says what is chosen without opening it.
+ *
+ * [options] are `value to label`, the shape the prefs already use; PickSheet wants them the
+ * other way round.
+ */
+@Composable
+internal fun SettingsPick(
+    title: String,
+    sub: String?,
+    options: List<Pair<String, String>>,
+    selected: String,
+    divider: Boolean = true,
+    onPick: (String) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val label = options.firstOrNull { it.first == selected }?.second
+        ?: selected.ifEmpty { options.firstOrNull()?.second.orEmpty() }
+    if (open) PickSheet(
+        title = title,
+        options = options.map { it.second to it.first },
+        current = selected,
+        onPick = onPick,
+        onDismiss = { open = false },
+    )
+    Column(
+        Modifier.fillMaxWidth()
+            .clickable(interactionSource = interaction, indication = null) { open = true }
+            .background(if (focused) Color(0x14FFFFFF) else Color.Transparent)
+            .padding(horizontal = 14.dp, vertical = 13.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(title, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Text(label, color = TextC, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+        }
+        if (sub != null) Text(sub, color = MutedC, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 2.dp))
     }
     if (divider) Box(Modifier.fillMaxWidth().padding(start = 14.dp).height(1.dp).background(LineC))
 }
@@ -3568,15 +3737,15 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
         if (all) {
             SettingsHeader("LANGUAGES", "Preferred audio and subtitle tracks")
             SettingsGroup {
-                SettingsChips(
+                SettingsPick(
                     "Audio language", "Preferred track when a stream carries several",
                     Prefs.LANGS, Prefs.audioLang,
                 ) { Prefs.setAudioLang(ctx, it) }
-                SettingsChips(
+                SettingsPick(
                     "Subtitle language", "Preferred captions when a stream carries several",
                     Prefs.LANGS, Prefs.subLang,
                 ) { Prefs.setSubLang(ctx, it) }
-                SettingsChips(
+                SettingsPick(
                     "Second choice", "Used when the first language is missing",
                     Prefs.LANGS_NONE, Prefs.subLang2,
                 ) { Prefs.setSubLang2(ctx, it) }
@@ -3834,6 +4003,8 @@ private fun DetailScreen(
         // (a full pill beside full circles, as the Home hero's pill is): a 40dp
         // 12dp-cornered button beside 48dp circles read as a different control
         // that had wandered in from another screen (the Founder's phone, 09-16).
+        val playPill = remember { MutableInteractionSource() }
+        val playFocused by playPill.collectIsFocusedAsState()
         Row(
             Modifier.padding(top = 16.dp, bottom = 24.dp).horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -3858,10 +4029,15 @@ private fun DetailScreen(
                         else -> onPlayMovie()
                     }
                 },
+                interactionSource = playPill,
                 colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
                 shape = RoundedCornerShape(50),
                 contentPadding = PaddingValues(start = 20.dp, end = 26.dp),
-                modifier = Modifier.height(48.dp),
+                // the remote's landing spot on a title page, and a white pill cannot wear a
+                // white focus ring — it grows the way a card does instead
+                modifier = Modifier.height(48.dp)
+                    .focusRequester(tvFirstFocus())
+                    .scale(if (playFocused && !Prefs.reducedMotion) 1.06f else 1f),
             ) {
                 Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
                 Text(

@@ -262,7 +262,7 @@ internal fun DiscoverSection(
         state = st.gridState,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
-        contentPadding = PaddingValues(bottom = 104.dp),
+        contentPadding = PaddingValues(bottom = navPadBottom()),
         modifier = modifier.fillMaxWidth(),
     ) {
         item(span = { GridItemSpan(maxLineSpan) }) {

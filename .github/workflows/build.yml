@@ -49,9 +49,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.73.0.apk
+          cp "$APK" Nebula-1.74.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.73.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.73.0 Nebula-1.73.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.73.0" \
-            --notes "Plays pictures your phone's chip cannot: when the hardware decoder refuses a stream (10-bit video, an unusual profile), Nebula decodes it on the processor instead, the way other players do. If that cannot keep up either, one tap tries the next source."
+          gh release delete v1.74.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.74.0 Nebula-1.74.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.74.0" \
+            --notes "Android TV: the nav is a rail down the left instead of the floating pill, and every screen now hands the remote somewhere to land when it opens — Home, Search, Library and Settings answer the D-pad instead of swallowing the first press. Fifty-one subtitle and audio languages instead of seventeen, chosen from a list you scroll."

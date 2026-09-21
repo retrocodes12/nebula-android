@@ -40,6 +40,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusGroup
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -131,7 +133,8 @@ internal fun LibraryScreen(
             letterSpacing = (-1).sp, modifier = Modifier.padding(bottom = 12.dp))
         // three chips must sit inside one pill without scrolling; 360dp phones get the short middle label
         val narrow = LocalConfiguration.current.screenWidthDp < 400
-        Segmented {
+        // the remote lands on the tab chips, which is where this screen's choices start
+        Segmented(Modifier.focusRequester(tvFirstFocus()).focusGroup()) {
             Chip("My List", libTab == 0, inSeg = true) { libTab = 0 }
             Chip(if (narrow) "Continue" else "Continue Watching", libTab == 1, inSeg = true) { libTab = 1 }
             Chip("Upcoming", libTab == 2, inSeg = true) { libTab = 2 }
@@ -185,7 +188,7 @@ private fun MyListTab(items: List<LibItem>, onOpen: (LibItem) -> Unit, onLong: (
         columns = GridCells.Adaptive(minSize = 118.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(bottom = 104.dp),
+        contentPadding = PaddingValues(bottom = navPadBottom()),
     ) {
         items(items, key = { it.type + ":" + it.id }) { li ->
             MetaCard(
@@ -212,7 +215,7 @@ private fun ContinueTab(rows: List<ProgressRec>, onResume: (ProgressRec) -> Unit
         columns = GridCells.Adaptive(minSize = if (Prefs.cwStyle == "poster") 118.dp else 300.dp),
         horizontalArrangement = Arrangement.spacedBy(if (Prefs.cwStyle == "poster") 10.dp else 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(bottom = 104.dp),
+        contentPadding = PaddingValues(bottom = navPadBottom()),
     ) {
         items(rows, key = { Progress.key(it.type, it.id) }) { r ->
             ContinueCard(r, Modifier.fillMaxWidth(), onClick = { onResume(r) }, onLongClick = { onLong(r) })
@@ -243,7 +246,7 @@ private fun UpcomingTab(items: List<LibItem>, up: List<Library.UpRow>?, onPlayEp
         return
     }
     val shows = up.map { it.series.id }.distinct().size
-    LazyColumn(contentPadding = PaddingValues(bottom = 104.dp)) {
+    LazyColumn(contentPadding = PaddingValues(bottom = navPadBottom())) {
         item(key = "uphead") { RowHeader("Upcoming", "$shows series", null) }
         var lastDay = ""
         var firstOfDay = false
