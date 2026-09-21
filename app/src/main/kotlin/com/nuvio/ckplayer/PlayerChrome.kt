@@ -128,9 +128,13 @@ private fun GlassCircle(
 internal fun GlassPill(label: String, value: String? = null, on: Boolean = false, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
+    // under a remote a lit pill inverts to white, as the web's .pui-btn:focus and ToolItem do — Skip intro and the
+    // source pill take focus while the chrome sleeps, and a lighter grey did not say so from a sofa. A phone
+    // focuses them too (programmatically), so the inversion waits for keyboard input: a phone is unchanged.
+    val lit = on || (focused && LocalInputModeManager.current.inputMode == InputMode.Keyboard)
     // an "on" pill inverts, the way the web player's round buttons do
-    val bg = if (on) (if (focused) Color.White else Color(0xEBFFFFFF)) else if (focused) GlassHot else Glass
-    val ink = if (on) Color.Black else Ink
+    val bg = if (lit) (if (focused) Color.White else Color(0xEBFFFFFF)) else if (focused) GlassHot else Glass
+    val ink = if (lit) Color.Black else Ink
     Row(
         modifier.background(bg, Pill)
             .clickable(interactionSource = interaction, indication = null) { onClick() }
@@ -139,7 +143,7 @@ internal fun GlassPill(label: String, value: String? = null, on: Boolean = false
     ) {
         Text(label, color = ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
         if (value != null) Text(
-            value, color = if (on) Color(0x99000000) else DimInk, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+            value, color = if (lit) Color(0x99000000) else DimInk, fontSize = 13.sp, fontWeight = FontWeight.Medium,
             modifier = Modifier.padding(start = 6.dp), maxLines = 1,
         )
     }

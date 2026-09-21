@@ -271,6 +271,18 @@ internal object PlayerKeys {
     @Volatile var handler: ((android.view.KeyEvent) -> Boolean)? = null
 }
 
+/** A remote's other buttons: each shows the player's controls (the web wakes them on any key) and still does its own job. */
+private val REMOTE_WAKE_KEYS = setOf(
+    android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, android.view.KeyEvent.KEYCODE_MEDIA_PLAY,
+    android.view.KeyEvent.KEYCODE_MEDIA_PAUSE, android.view.KeyEvent.KEYCODE_MEDIA_STOP,
+    android.view.KeyEvent.KEYCODE_MEDIA_REWIND, android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
+    android.view.KeyEvent.KEYCODE_MEDIA_NEXT, android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS,
+    android.view.KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD, android.view.KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD,
+    android.view.KeyEvent.KEYCODE_MEDIA_STEP_FORWARD, android.view.KeyEvent.KEYCODE_MEDIA_STEP_BACKWARD,
+    android.view.KeyEvent.KEYCODE_MEDIA_AUDIO_TRACK, android.view.KeyEvent.KEYCODE_CAPTIONS,
+    android.view.KeyEvent.KEYCODE_MENU, android.view.KeyEvent.KEYCODE_INFO,
+)
+
 class MainActivity : ComponentActivity() {
     private val pendingPlay = mutableStateOf<PlayReq?>(null)
 
@@ -1300,6 +1312,9 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                     onProgressSaved = { homeState.invalidateContinue() },
                                     onPartyStart = { partyStart(it) },
                                     onPartyLeave = { partyLeave() },
+                                    // the chrome's Back button: what AppRoot's Back does, reached directly, because the
+                                    // player's own Back handler (peeling the controls away on a remote) sits in front of it
+                                    onExit = { if (stack.size > 1) pop() else setTab(Screen.Home) },
                                 )
                             }
                             }
@@ -4647,6 +4662,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             onDismiss = { pending = null },
         )
     }
+    val openedAt = remember(item.id, reload) { android.os.SystemClock.uptimeMillis() }   // "has the remote moved here yet?"
     LaunchedEffect(item, reload) {
         loading = true
         usualUrl = null
@@ -4666,6 +4682,9 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
         var picked = false
         fun decide() {
             if (picked || Prefs.autoPick == "off" || autoPlayedFor == item.id) return
+            // a viewer already walking the list with the remote is choosing by hand (web: autoPickNow's lastKeyAt) —
+            // the list now arrives well inside the wait, so this matters more than it did
+            if (KeyWatch.lastDownAt > openedAt) return
             val secs = sections
             if (secs.isEmpty()) return
             picked = true
@@ -4728,7 +4747,6 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
     // A remote lands on the top row as soon as there is one (web parity) and follows it while a higher-ranked add-on
     // answers above — but only until the viewer presses something here; focus is never pulled out from under a hand.
     val remote = remember(ctx) { Account.isTv(ctx) } || LocalInputModeManager.current.inputMode == InputMode.Keyboard
-    val openedAt = remember(item.id, reload) { android.os.SystemClock.uptimeMillis() }
     val firstRow = remember { FocusRequester() }
     val landOn = shown.firstOrNull()?.let { it.first.manifestUrl + "\n" + it.second.first().url }
     LaunchedEffect(landOn) {
@@ -5058,6 +5076,7 @@ private fun PlayerScreen(
     onProgressSaved: () -> Unit = {},
     onPartyStart: (PartyStreamDesc) -> Unit = {},
     onPartyLeave: () -> Unit = {},
+    onExit: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -5254,6 +5273,7 @@ private fun PlayerScreen(
     // Kept for the sitting only — it rides along into the next episode, and goes
     // with the player when you leave.
     var sleepMode by remember { mutableStateOf("") }         // "" | "min" | "ep"
+    var sleepMins by remember { mutableStateOf(0) }           // the minutes chosen, so the menu can mark that row
     var sleepAt by remember { mutableStateOf(0L) }            // epoch ms the minutes run out
     var sleepFired by remember { mutableStateOf(false) }      // the pause board says why it stopped
     var sleepMenuOpen by remember { mutableStateOf(false) }
@@ -5271,6 +5291,7 @@ private fun PlayerScreen(
     }
     fun sleepSet(mode: String, minutes: Int = 0) {
         sleepMode = mode
+        sleepMins = if (mode == "min") minutes else 0
         sleepAt = if (mode == "min") System.currentTimeMillis() + minutes * 60_000L else 0L
         sleepFired = false
         if (mode == "ep") { upnextOpen = false; upnextCounting = false }
@@ -5747,10 +5768,11 @@ private fun PlayerScreen(
     }
 
     // ---- the remote (Android TV, or any keyboard) — issue #1, and the shared player's #pui key rules ----
-    // With the controls asleep, ANY press wakes them: ←/→ open the preview on the seek bar (OK jumps, Back drops
-    // it), everything else lights Play/Pause — except OK on a floating button (Skip intro, Try another source,
-    // Up next), which is that button. While they are up every press keeps them up, and Back puts them away
-    // before it leaves the player. Nothing here runs for a finger: a phone never sends a D-pad key.
+    // With the controls asleep, a remote's press wakes them (volume aside): ←/→ open the preview on the seek bar (OK
+    // jumps, Back drops it), the other arrows and OK light Play/Pause — except OK on a floating button (Skip intro,
+    // Try another source, Up next), which is that button — and the media buttons show them while doing their own
+    // job. While they are up every press keeps them up, and Back puts them away before it leaves the player. None
+    // of it runs for a finger: a phone never sends a D-pad key, and the other buttons wait for a remote.
     val inputModes = LocalInputModeManager.current
     val tvBox = remember { Account.isTv(context) }
     val remoteNow = tvBox || inputModes.inputMode == InputMode.Keyboard
@@ -5766,7 +5788,8 @@ private fun PlayerScreen(
     /** The controls stay up under the Audio / Quality list (the web keeps them for its menus), so the remote
         comes back to the button it left from rather than to a chrome that faded while the list was open. */
     fun android.app.Dialog.keepChrome(): android.app.Dialog = apply {
-        trackListOpen = true
+        // raised when it is SHOWN: a show() that throws must not leave the chrome held up for the rest of the play
+        setOnShowListener { trackListOpen = true }
         setOnDismissListener { trackListOpen = false; chromeTouchedAt = System.currentTimeMillis() }
     }
     val landing = remember { LongArray(1) }                  // until when a wake's focus is still on its way
@@ -5791,8 +5814,21 @@ private fun PlayerScreen(
         val arrow = side || code == android.view.KeyEvent.KEYCODE_DPAD_UP || code == android.view.KeyEvent.KEYCODE_DPAD_DOWN
         val ok = code == android.view.KeyEvent.KEYCODE_DPAD_CENTER || code == android.view.KeyEvent.KEYCODE_ENTER ||
             code == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER
-        if (!arrow && !ok) return false           // Back goes through the handler below; media keys reach the session
         val now = System.currentTimeMillis()
+        if (!arrow && !ok) {
+            if (!remoteNow) return false          // a phone's headset button and the like: exactly as before
+            // Space is play/pause, as on the web
+            if (code == android.view.KeyEvent.KEYCODE_SPACE && !subPanelOpen && !sleepMenuOpen) {
+                if (exo.isPlaying) exo.pause() else exo.play()
+                chromeVisible = true; chromeTouchedAt = now; swallowUp[0] = code
+                return true
+            }
+            // the remote's other buttons (play/pause, rewind, fast-forward, next, menu, info, captions) show the
+            // controls, so what they did is on screen; the key itself goes on — media keys to the session, as before.
+            // Back has its own handler below, and volume stays the system's.
+            if (code in REMOTE_WAKE_KEYS) { chromeVisible = true; chromeTouchedAt = now }
+            return false
+        }
         // the Subtitles panel and the sleep menu own the keys while they are up; the chrome waits behind them
         if (subPanelOpen || sleepMenuOpen) { chromeTouchedAt = now; return false }
         // a wake's focus has not landed yet: a held key's repeats belong to the wake, or they would land on nothing
@@ -5976,7 +6012,9 @@ private fun PlayerScreen(
             // the panel explains itself when there is nothing to show; one audio track is still worth naming
             showSubtitles = true,
             showAudio = audioTrackCount >= 1,
-            onBack = { (activity as? androidx.activity.ComponentActivity)?.onBackPressedDispatcher?.onBackPressed() },
+            // a press on Back LEAVES: sending it through the dispatcher would reach the peel handler below first, and
+            // since the button only exists while the chrome is up, on a remote it could only ever hide the chrome
+            onBack = { onExit?.invoke() ?: (activity as? androidx.activity.ComponentActivity)?.onBackPressedDispatcher?.onBackPressed() },
             onPlayPause = {
                 if (exo.isPlaying) exo.pause() else exo.play()
                 chromeTouchedAt = System.currentTimeMillis()
@@ -6099,15 +6137,16 @@ private fun PlayerScreen(
                     color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                 )
-                // the remote lands on the chosen row: "When this episode ends" when that is set, else Off
+                // the row that is set is marked, and the remote lands on it — never on Off while a timer runs, where one
+                // reflex OK would cancel it
+                val minRow = if (sleepMode == "min") sleepMins else 0
                 val epRow = sleepMode == "ep" && nextEpisode != null
-                SubMenuRow("Off", sleepMode.isEmpty(), if (!epRow) Modifier.focusRequester(sleepRowFocus) else Modifier) { sleepSet("") }
+                fun land(here: Boolean) = if (here) Modifier.focusRequester(sleepRowFocus) else Modifier
+                SubMenuRow("Off", sleepMode.isEmpty(), land(!epRow && minRow == 0)) { sleepSet("") }
                 listOf(15, 30, 45, 60, 90).forEach { m ->
-                    SubMenuRow("In ${sleepText(m * 60_000L)}", false) { sleepSet("min", m) }
+                    SubMenuRow("In ${sleepText(m * 60_000L)}", minRow == m, land(minRow == m)) { sleepSet("min", m) }
                 }
-                if (nextEpisode != null) SubMenuRow(
-                    "When this episode ends", sleepMode == "ep", if (epRow) Modifier.focusRequester(sleepRowFocus) else Modifier,
-                ) { sleepSet("ep") }
+                if (nextEpisode != null) SubMenuRow("When this episode ends", sleepMode == "ep", land(epRow)) { sleepSet("ep") }
                 Text(
                     if (sleepMode == "min") "Pausing in ${sleepText(sleepAt - System.currentTimeMillis())}."
                     else "Playback pauses when the time is up.",
@@ -6198,19 +6237,35 @@ private fun PlayerScreen(
                     srcLine, color = MutedC, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 0.6.sp,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 14.dp),
                 )
+                // Under a remote the lit button is the white one and the other is glass (tvOS): with Play now always white,
+                // the two read the same whichever was lit. A finger keeps Play now white as the primary.
+                val playNowSrc = remember { MutableInteractionSource() }
+                val dismissSrc = remember { MutableInteractionSource() }
+                val playNowLit by playNowSrc.collectIsFocusedAsState()
+                val dismissLit by dismissSrc.collectIsFocusedAsState()
+                val keysLit = LocalInputModeManager.current.inputMode == InputMode.Keyboard && (playNowLit || dismissLit)
+                val playNowWhite = !keysLit || playNowLit
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         // a hand on Play now ends the autoplay run the Still watching? count is about
                         onClick = { upnextCounting = false; autoRun = 0; onPlayNext(nextEpisode) },
                         modifier = Modifier.focusRequester(upnextFocus),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (playNowWhite) Color.White else Color(0x6B505058),
+                            contentColor = if (playNowWhite) Color.Black else TextC,
+                        ),
                         shape = RoundedCornerShape(50),
+                        interactionSource = playNowSrc,
                     ) { Text(if (upnextCounting) "Play now ($upnextLeft)" else "Play now", fontWeight = FontWeight.SemiBold) }
                     Button(
                         onClick = { upnextCounting = false; upnextOpen = false; upnextDismissed = true },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x6B505058)),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (keysLit && dismissLit) Color.White else Color(0x6B505058),
+                            contentColor = if (keysLit && dismissLit) Color.Black else TextC,
+                        ),
                         shape = RoundedCornerShape(50),
-                    ) { Text("Dismiss", color = TextC) }
+                        interactionSource = dismissSrc,
+                    ) { Text("Dismiss") }
                 }
             }
         }
