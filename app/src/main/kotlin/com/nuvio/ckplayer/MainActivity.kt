@@ -2814,7 +2814,7 @@ private fun HomeScreen(
                 val ci = runCatching {
                     manifestFor(a.manifestUrl).catalogs.filter { it.browsable }
                         .indexOfFirst { it.type == r.catalog.type && it.id == r.catalog.id }
-                }.getOrDefault(-1)
+                }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrDefault(-1)
                 ci < 0 || HomeRows.visible(ctx, HomeRows.key(a, r.catalog), ci)
             }
             if (keep.size != st.rows.size) st.rows = keep
@@ -5869,6 +5869,7 @@ private fun PlayerScreen(
                     drmConf.licenseUri == null && drmAsked.add(drmUri)) {
                     val pos = exo.currentPosition
                     val live = exo.isCurrentMediaItemLive
+                    val wanted = exo.playWhenReady          // a viewer who paused while the key failed stays paused
                     scope.launch {
                         val la = licenceUrlFor(drmUri)
                         if (la == null || exo.currentMediaItem?.localConfiguration?.uri?.toString() != drmUri) {
@@ -5879,7 +5880,7 @@ private fun PlayerScreen(
                             .setDrmConfiguration(MediaItem.DrmConfiguration.Builder(C.CLEARKEY_UUID).setLicenseUri(la).build())
                             .build()
                         if (!live && pos > 0) exo.setMediaItem(next, pos) else exo.setMediaItem(next)
-                        exo.prepare(); exo.play()
+                        exo.prepare(); exo.playWhenReady = wanted
                     }
                     return
                 }
@@ -6092,7 +6093,8 @@ private fun PlayerScreen(
                 exo, bandwidth, subOffsetMs,
                 scrubStatusLine(
                     Prefs.scrubFrames, isLiveState,
-                    exo.currentMediaItem?.localConfiguration?.drmConfiguration != null,
+                    // the tracks' own protection: every DASH item carries a ClearKey configuration, protected or not
+                    exo.videoFormat?.drmInitData != null || exo.audioFormat?.drmInitData != null,
                     scrubPreview?.status?.value,
                 ),
                 p2pLine = if (P2p.isLocal(url)) P2p.line() else null,

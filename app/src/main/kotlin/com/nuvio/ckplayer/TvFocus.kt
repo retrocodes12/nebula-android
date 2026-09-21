@@ -74,7 +74,9 @@ internal object ReturnFocus {
         as before (a second hand-off on a screen whose first one lapsed would otherwise go unheard). */
     var aimSerial by mutableStateOf(0)
         private set
-    fun aim(entry: Any?) { returningTo = entry; since = android.os.SystemClock.uptimeMillis(); aimSerial++ }
+    /** The entry whose hand-back an item actually claimed — "cleared" alone also means another hand gave up on it. */
+    var claimedFor: Any? = null
+    fun aim(entry: Any?) { returningTo = entry; since = android.os.SystemClock.uptimeMillis(); aimSerial++; claimedFor = null }
     fun clear() { returningTo = null }
     /** Is a hand-back to [entry] live? */
     fun pending(entry: Any?): Boolean =
@@ -106,7 +108,10 @@ internal suspend fun yieldToReturn(entry: Any?): Boolean {
     if (!ReturnFocus.returning(entry)) return false
     repeat(20) {
         withFrameNanos {}
-        if (ReturnFocus.returningTo != entry) return true
+        // only a real claim stands the landing down: the hand-back is also cleared by a hand that gave up on it (the
+        // fallback seeing focus re-seeded onto a Back button), and then the screen should still land
+        if (ReturnFocus.claimedFor == entry) return true
+        if (ReturnFocus.returningTo != entry) return false
     }
     ReturnFocus.clear()
     return false
@@ -134,7 +139,9 @@ internal fun Modifier.returnTo(key: String): Modifier = composed {
         // a lazy list composes its items a frame after itself and the screen fades in: retry, as tvFirstFocus does
         repeat(12) {
             withFrameNanos {}
-            if (runCatching { req.requestFocus() }.getOrDefault(false)) { ReturnFocus.clear(); return@LaunchedEffect }
+            if (runCatching { req.requestFocus() }.getOrDefault(false)) {
+                ReturnFocus.claimedFor = entry; ReturnFocus.clear(); return@LaunchedEffect
+            }
         }
     }
     this.onFocusChanged { if (entry != null && it.hasFocus) ReturnFocus.note(entry, key) }.focusRequester(req)
