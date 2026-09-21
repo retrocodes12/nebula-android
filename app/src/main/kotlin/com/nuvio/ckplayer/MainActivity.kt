@@ -246,6 +246,13 @@ internal object KeyWatch {
         Volume and media keys do not count, as on the web (Tab, Enter and the arrows). */
     var lastDownAt = 0L
         private set
+    /** When a finger last went down, on the same clock — the web's lastPointerAt: a hand on the list is choosing too. */
+    var lastTouchAt = 0L
+        private set
+
+    fun noteTouch(event: android.view.MotionEvent) {
+        if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) lastTouchAt = event.eventTime
+    }
 
     fun note(event: android.view.KeyEvent) {
         if (event.action == android.view.KeyEvent.ACTION_DOWN && (event.keyCode == android.view.KeyEvent.KEYCODE_TAB ||
@@ -290,6 +297,11 @@ class MainActivity : ComponentActivity() {
         KeyWatch.note(event)
         if (PlayerKeys.handler?.invoke(event) == true) return true
         return super.dispatchKeyEvent(event)
+    }
+
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        KeyWatch.noteTouch(ev)
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -4682,9 +4694,9 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
         var picked = false
         fun decide() {
             if (picked || Prefs.autoPick == "off" || autoPlayedFor == item.id) return
-            // a viewer already walking the list with the remote is choosing by hand (web: autoPickNow's lastKeyAt) —
-            // the list now arrives well inside the wait, so this matters more than it did
-            if (KeyWatch.lastDownAt > openedAt) return
+            // a viewer already walking the list — remote or finger — is choosing by hand (web: autoPickNow's lastKeyAt
+            // and lastPointerAt); the list now arrives well inside the wait, so this matters more than it did
+            if (KeyWatch.lastDownAt > openedAt || KeyWatch.lastTouchAt > openedAt) return
             val secs = sections
             if (secs.isEmpty()) return
             picked = true
@@ -5809,7 +5821,7 @@ private fun PlayerScreen(
             if (runCatching { playFocus.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
         }
     }
-    fun remoteDown(code: Int): Boolean {
+    fun remoteDown(code: Int, repeat: Int): Boolean {
         val side = code == android.view.KeyEvent.KEYCODE_DPAD_LEFT || code == android.view.KeyEvent.KEYCODE_DPAD_RIGHT
         val arrow = side || code == android.view.KeyEvent.KEYCODE_DPAD_UP || code == android.view.KeyEvent.KEYCODE_DPAD_DOWN
         val ok = code == android.view.KeyEvent.KEYCODE_DPAD_CENTER || code == android.view.KeyEvent.KEYCODE_ENTER ||
@@ -5817,9 +5829,9 @@ private fun PlayerScreen(
         val now = System.currentTimeMillis()
         if (!arrow && !ok) {
             if (!remoteNow) return false          // a phone's headset button and the like: exactly as before
-            // Space is play/pause, as on the web
+            // Space is play/pause, as on the web — once per press: a held key's repeats are eaten, not toggled
             if (code == android.view.KeyEvent.KEYCODE_SPACE && !subPanelOpen && !sleepMenuOpen) {
-                if (exo.isPlaying) exo.pause() else exo.play()
+                if (repeat == 0) { if (exo.isPlaying) exo.pause() else exo.play() }
                 chromeVisible = true; chromeTouchedAt = now; swallowUp[0] = code
                 return true
             }
@@ -5859,7 +5871,7 @@ private fun PlayerScreen(
             ev.action == android.view.KeyEvent.ACTION_UP ->
                 if (ev.keyCode == swallowUp[0]) { swallowUp[0] = -1; true } else false
             ev.action != android.view.KeyEvent.ACTION_DOWN || inPipMode.value -> false
-            else -> remoteDown(ev.keyCode)
+            else -> remoteDown(ev.keyCode, ev.repeatCount)
         }
     })
     DisposableEffect(Unit) {
