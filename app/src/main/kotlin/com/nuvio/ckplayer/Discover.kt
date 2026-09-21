@@ -35,6 +35,8 @@ import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -48,9 +50,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -128,6 +133,12 @@ private fun PickPill(label: String, onClick: () -> Unit) {
 /** A bottom sheet listing choices; the current one carries a check. Same material as CardSheet. */
 @Composable
 internal fun PickSheet(title: String, options: List<Pair<String, String>>, current: String, onPick: (String) -> Unit, onDismiss: () -> Unit) {
+    // A remote opens it ON the current choice, as CardSheet opens on its first row: it opened with nothing lit (the
+    // first press only landed) and at the top of the list — Vietnamese in the subtitle list was fifty presses away.
+    val remote = remoteMode()
+    val here = options.indexOfFirst { it.second == current }.coerceAtLeast(0)
+    val hereFocus = remember { FocusRequester() }
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = (here - 2).coerceAtLeast(0))
     val shown = remember { MutableTransitionState(false) }
     var closing by remember { mutableStateOf(false) }
     var picked by remember { mutableStateOf<String?>(null) }
@@ -155,20 +166,33 @@ internal fun PickSheet(title: String, options: List<Pair<String, String>>, curre
                 ) {
                     Text(title, color = TextC, fontSize = 19.sp, fontFamily = Sans, fontWeight = FontWeight.Bold, letterSpacing = (-0.3).sp,
                         modifier = Modifier.padding(horizontal = 22.dp, vertical = 0.dp).padding(bottom = 10.dp))
-                    LazyColumn(Modifier.heightIn(max = 420.dp)) {
-                        items(options) { (label, value) ->
+                    // inside the composed content, as CardSheet's: AnimatedVisibility composes it only once it enters
+                    if (remote) LaunchedEffect(Unit) {
+                        repeat(10) {
+                            withFrameNanos {}
+                            if (runCatching { hereFocus.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+                        }
+                    }
+                    LazyColumn(Modifier.heightIn(max = 420.dp), state = listState) {
+                        itemsIndexed(options) { i, (label, value) ->
                             val on = value == current
                             val interaction = remember { MutableInteractionSource() }
                             val focused by interaction.collectIsFocusedAsState()
+                            // the lit row is the tvOS lozenge (white, black ink) — an 8 % tint did not read from a sofa
+                            val lit = focused && remote
                             Row(
                                 Modifier.fillMaxWidth()
-                                    .background(if (focused) Color(0x14FFFFFF) else Color.Transparent)
+                                    .then(if (i == here) Modifier.focusRequester(hereFocus) else Modifier)
+                                    .background(if (lit) Color.White else if (focused) Color(0x14FFFFFF) else Color.Transparent)
                                     .clickable(interactionSource = interaction, indication = null) { close(value) }
                                     .padding(horizontal = 22.dp, vertical = 14.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Text(label, color = if (on) TextC else MutedC, fontSize = 15.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium, modifier = Modifier.weight(1f))
-                                if (on) Icon(Icons.Filled.Check, contentDescription = null, tint = Red, modifier = Modifier.size(18.dp))
+                                Text(
+                                    label, color = if (lit) Color.Black else if (on) TextC else MutedC, fontSize = 15.sp,
+                                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium, modifier = Modifier.weight(1f),
+                                )
+                                if (on) Icon(Icons.Filled.Check, contentDescription = null, tint = if (lit) Color.Black else Red, modifier = Modifier.size(18.dp))
                             }
                         }
                     }
@@ -216,7 +240,8 @@ internal fun DiscoverSection(
         st.fetched = 0; st.pageDone = true
         runCatching { Stremio.loadCatalog(c.addon.base, c.catalog, st.genre) }
             .onSuccess {
-                st.items = it
+                // deduped as the paging path is: a catalogue that lists a title twice crashed the keyed grid
+                st.items = it.distinctBy { m -> m.type + ":" + m.id }
                 st.fetched = it.size
                 st.pageDone = it.isEmpty() || !c.catalog.skip
                 st.status = if (it.isEmpty()) "Nothing here." else ""
@@ -288,7 +313,9 @@ internal fun DiscoverSection(
             }
         }
         if (st.loading && st.items.isEmpty()) items(9) { SkeletonCell() }
-        items(st.items, key = { it.type + ":" + it.id }) { m -> MetaCard(m) { current?.let { onOpen(it.addon, m) } } }
+        items(st.items, key = { it.type + ":" + it.id }) { m ->
+            MetaCard(m, Modifier.returnTo("d/${m.type}:${m.id}")) { current?.let { onOpen(it.addon, m) } }
+        }
         if (st.paging) items(6) { SkeletonCell() }
     }
 

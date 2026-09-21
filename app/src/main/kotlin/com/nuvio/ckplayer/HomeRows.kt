@@ -33,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -194,6 +195,8 @@ internal fun SettingsHomeRowsScreen(onBack: () -> Unit) {
     var dragOffset by remember { mutableStateOf(0f) }
     var liftIndex by remember { mutableStateOf(-1) }      // picked up with the D-pad
     var rowSpanPx by remember { mutableStateOf(0f) }
+    // a remote lands on the first row (the page opened with nothing lit)
+    val firstRow = tvFirstFocus(ready = !items.isNullOrEmpty())
     fun move(from: Int, to: Int): Int {
         val list = items ?: return from
         if (from < 0 || from >= list.size || to < 0 || to >= list.size || from == to) return from
@@ -261,13 +264,15 @@ internal fun SettingsHomeRowsScreen(onBack: () -> Unit) {
                         .onSizeChanged { if (rowSpanPx == 0f) rowSpanPx = it.height + with(density) { 10.dp.toPx() } }
                         .then(if (dragging) Modifier else Modifier.animateItem()),
                 ) {
+                    // A container: the grip and the show/hide toggle are SIBLINGS, so the D-pad reaches both. The grip used
+                    // to sit inside the clickable row — a focused node's children are out of the arrows' reach, so a
+                    // remote could toggle rows but never arrange them.
                     Row(
                         Modifier.fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
                             .background(if (raised) Surface2 else SurfaceC)
                             .border(1.dp, if (focused) Color.White else if (raised) Color(0x3DFFFFFF) else LineC, RoundedCornerShape(12.dp))
-                            .clickable(interactionSource = interaction, indication = null) { HomeRows.toggle(ctx, row.key, row.nat) }
-                            .padding(horizontal = 12.dp, vertical = 12.dp),
+                            .padding(start = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
@@ -333,6 +338,14 @@ internal fun SettingsHomeRowsScreen(onBack: () -> Unit) {
                                 )
                             }
                         }
+                        Row(
+                            Modifier.weight(1f)
+                                .then(if (i == 0) Modifier.focusRequester(firstRow) else Modifier)
+                                .clickable(interactionSource = interaction, indication = null) { HomeRows.toggle(ctx, row.key, row.nat) }
+                                .padding(end = 12.dp, top = 12.dp, bottom = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
                         Column(Modifier.weight(1f)) {
                             Text(row.name, color = if (on) TextC else MutedC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(row.sub, color = if (on) MutedC else FaintC, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -344,6 +357,7 @@ internal fun SettingsHomeRowsScreen(onBack: () -> Unit) {
                             contentAlignment = Alignment.Center,
                         ) {
                             if (on) Icon(Icons.Filled.Check, contentDescription = "Shown on Home", tint = OnAccent, modifier = Modifier.size(16.dp))
+                        }
                         }
                     }
                 }

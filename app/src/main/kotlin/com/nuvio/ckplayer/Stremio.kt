@@ -304,10 +304,12 @@ object Stremio {
     private fun parseVideos(vids: JSONArray?): List<Episode> {
         if (vids == null) return emptyList()
         val out = mutableListOf<Episode>()
+        // one entry per id: every episode list is keyed by it, and a catalogue listing an episode twice crashed the list
+        val seen = HashSet<String>()
         for (i in 0 until vids.length()) {
             val v = vids.optJSONObject(i) ?: continue
             val vid = v.optString("id")
-            if (vid.isEmpty()) continue
+            if (vid.isEmpty() || !seen.add(vid)) continue
             val ep = when {
                 v.has("episode") && !v.isNull("episode") -> v.optInt("episode")
                 v.has("number") && !v.isNull("number") -> v.optInt("number")

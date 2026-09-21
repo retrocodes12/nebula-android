@@ -167,25 +167,27 @@ object Updates {
     }
 
     /**
-     * Hand the downloaded APK to the system installer (installs over the current app).
-     * Returns false when the app still needs the "install unknown apps" permission —
-     * in that case the relevant Settings screen is opened so the user can grant it, then retry.
+     * Hand the downloaded APK to the system installer (installs over the current app). Returns null when it was
+     * handed over, or the sentence to show when it could not be: the "install unknown apps" permission is missing
+     * (its Settings screen is opened when this device has one — some TVs hide it), or no installer answered.
      */
-    fun installApk(context: Context, apk: File): Boolean {
+    fun installApk(context: Context, apk: File): String? {
         if (!context.packageManager.canRequestPackageInstalls()) {
-            runCatching {
+            val opened = runCatching {
                 context.startActivity(
                     Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 )
-            }
-            return false
+            }.isSuccess
+            return if (opened) "Allow installs from Nebula, then tap Install"
+            else "Allow Nebula to install apps in this device's Settings (Security or Apps › Special app access), then tap Install"
         }
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.updates", apk)
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, "application/vnd.android.package-archive")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        return runCatching { context.startActivity(intent); true }.getOrDefault(false)
+        return if (runCatching { context.startActivity(intent) }.isSuccess) null
+        else "No installer opened — get the update with Downloader (code 7664693) instead"
     }
 }

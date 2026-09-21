@@ -40,6 +40,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -288,6 +291,9 @@ internal fun ResumeAskSheet(
 /** A destructive confirm in the CardSheet's material: a title, one sentence, Cancel and the action. */
 @Composable
 internal fun ConfirmSheet(title: String, text: String, action: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    // a remote opens it on Cancel — the safe answer — as CardSheet opens on its first row; it opened with nothing lit
+    val remote = remoteMode()
+    val cancelFocus = remember { FocusRequester() }
     val shown = remember { MutableTransitionState(false) }
     var closing by remember { mutableStateOf(false) }
     var confirmed by remember { mutableStateOf(false) }
@@ -313,10 +319,17 @@ internal fun ConfirmSheet(title: String, text: String, action: String, onConfirm
                     Modifier.fillMaxWidth().clip(top).background(Color(0xFF141418)).border(1.dp, Color(0x14FFFFFF), top)
                         .navigationBarsPadding().padding(start = 22.dp, end = 22.dp, top = 22.dp, bottom = 22.dp),
                 ) {
+                    // inside the composed content, as CardSheet's: AnimatedVisibility composes it only once it enters
+                    if (remote) LaunchedEffect(Unit) {
+                        repeat(10) {
+                            withFrameNanos {}
+                            if (runCatching { cancelFocus.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+                        }
+                    }
                     Text(title, color = TextC, fontSize = 19.sp, fontFamily = Sans, fontWeight = FontWeight.Bold, letterSpacing = (-0.3).sp)
                     Text(text, color = MutedC, fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp, bottom = 18.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Chip("Cancel", false) { close(false) }
+                        Chip("Cancel", false, modifier = Modifier.focusRequester(cancelFocus)) { close(false) }
                         TextAction(action, danger = true) { close(true) }
                     }
                 }

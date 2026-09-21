@@ -441,6 +441,7 @@ private fun SupportCodePanel(
                 onClick = onProfile,
                 colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
                 shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.focusRing(RoundedCornerShape(12.dp)),
             ) { Text("Sign in", fontWeight = FontWeight.SemiBold) }
             return@SupportPanel
         }
@@ -452,6 +453,7 @@ private fun SupportCodePanel(
                 disabledContainerColor = Red.copy(alpha = .6f), disabledContentColor = OnAccent.copy(alpha = .8f),
             ),
             shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.focusRing(RoundedCornerShape(12.dp)),
         ) { Text(if (busy) "Checking…" else "Redeem", fontWeight = FontWeight.SemiBold) }
     }
 }

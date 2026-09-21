@@ -76,6 +76,7 @@ internal fun LibraryScreen(
     onGoSearch: () -> Unit = {},
 ) {
     val ctx = LocalContext.current
+    val screenEntry = LocalScreenEntry.current
     var items by remember(version) { mutableStateOf(Library.list(ctx)) }
     var upcoming by remember(version) { mutableStateOf<List<Library.UpRow>?>(null) }
     var continueRows by remember(version) { mutableStateOf(Progress.continueList(ctx)) }
@@ -91,8 +92,12 @@ internal fun LibraryScreen(
             actions = listOf(
                 SheetAction(Icons.Filled.Info, "View details") { onOpen(li) },
                 SheetAction(Icons.Filled.BookmarkRemove, "Remove from My List", destructive = true) {
+                    // the card takes focus with it when it goes: name the neighbour first
+                    val at = items.indexOfFirst { it.type == li.type && it.id == li.id }
+                    val nb = items.getOrNull(at + 1) ?: items.getOrNull(at - 1)
                     Library.toggle(ctx, li.type, MetaItem(li.id, li.type, li.name, li.poster, li.shape), li.addonUrl)
                     items = Library.list(ctx)
+                    if (nb != null) ReturnFocus.handTo(screenEntry, "my/${nb.type}:${nb.id}")
                     upcoming = null      // the date list is rebuilt from the saved series when Upcoming is next opened
                 },
             ),
@@ -113,8 +118,11 @@ internal fun LibraryScreen(
                 SheetAction(Icons.Filled.Replay, "Start over") { onStartOver(r) },
                 SheetAction(Icons.Filled.Info, "View details") { onDetails(r) },
                 SheetAction(Icons.Filled.Delete, "Remove from Continue watching", destructive = true) {
+                    val at = continueRows.indexOfFirst { it.type == r.type && it.id == r.id }
+                    val nb = continueRows.getOrNull(at + 1) ?: continueRows.getOrNull(at - 1)
                     Progress.clear(ctx, r.type, r.id)
                     continueRows = Progress.continueList(ctx)
+                    if (nb != null) ReturnFocus.handTo(screenEntry, "cw/" + Progress.key(nb.type, nb.id))
                 },
             ),
             onDismiss = { cwSheet = null },
@@ -169,7 +177,7 @@ internal fun EmptyState(icon: ImageVector, title: String, text: String, action: 
             colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
             shape = RoundedCornerShape(50),
             contentPadding = PaddingValues(horizontal = 24.dp, vertical = 11.dp),
-            modifier = Modifier.padding(top = 18.dp),
+            modifier = Modifier.padding(top = 18.dp).focusRing(RoundedCornerShape(50)),
         ) { Text(action, fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
     }
 }
@@ -186,6 +194,8 @@ private fun MyListTab(items: List<LibItem>, onOpen: (LibItem) -> Unit, onLong: (
     }
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 118.dp),
+        // kept across Back, so the card the viewer opened is still composed to take focus again (TvFocus.kt)
+        state = rememberKeptGrid("mylist"),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(bottom = navPadBottom()),
@@ -193,7 +203,7 @@ private fun MyListTab(items: List<LibItem>, onOpen: (LibItem) -> Unit, onLong: (
         items(items, key = { it.type + ":" + it.id }) { li ->
             MetaCard(
                 MetaItem(li.id, li.type, li.name, li.poster, li.shape),
-                Modifier.fillMaxWidth(),
+                Modifier.returnTo("my/${li.type}:${li.id}").fillMaxWidth(),
                 onLongClick = { onLong(li) },
             ) { onOpen(li) }
         }
@@ -213,12 +223,13 @@ private fun ContinueTab(rows: List<ProgressRec>, onResume: (ProgressRec) -> Unit
     LazyVerticalGrid(
         // 16:9 art cards, or poster columns like My List when Settings › Home says Poster
         columns = GridCells.Adaptive(minSize = if (Prefs.cwStyle == "poster") 118.dp else 300.dp),
+        state = rememberKeptGrid("cw"),
         horizontalArrangement = Arrangement.spacedBy(if (Prefs.cwStyle == "poster") 10.dp else 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(bottom = navPadBottom()),
     ) {
         items(rows, key = { Progress.key(it.type, it.id) }) { r ->
-            ContinueCard(r, Modifier.fillMaxWidth(), onClick = { onResume(r) }, onLongClick = { onLong(r) })
+            ContinueCard(r, Modifier.returnTo("cw/" + Progress.key(r.type, r.id)).fillMaxWidth(), onClick = { onResume(r) }, onLongClick = { onLong(r) })
         }
     }
 }
@@ -246,11 +257,12 @@ private fun UpcomingTab(items: List<LibItem>, up: List<Library.UpRow>?, onPlayEp
         return
     }
     val shows = up.map { it.series.id }.distinct().size
-    LazyColumn(contentPadding = PaddingValues(bottom = navPadBottom())) {
+    LazyColumn(state = rememberKeptList("up"), contentPadding = PaddingValues(bottom = navPadBottom())) {
         item(key = "uphead") { RowHeader("Upcoming", "$shows series", null) }
         var lastDay = ""
         var firstOfDay = false
-        up.forEach { row ->
+        // one row per episode: a series listing an episode twice gave two items the same key, which crashes the list
+        up.distinctBy { it.series.id + "/" + it.ep.id }.forEach { row ->
             val day = Library.dayLabel(row.time)
             if (day != lastDay) {
                 lastDay = day
@@ -263,7 +275,8 @@ private fun UpcomingTab(items: List<LibItem>, up: List<Library.UpRow>?, onPlayEp
                 // a list, like the episodes: hairlines between rows, no tiles
                 Column {
                     if (!first) Box(Modifier.fillMaxWidth().height(1.dp).background(LineC))
-                    FocusCard(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth(),
+                    FocusCard(shape = RoundedCornerShape(12.dp), zoom = false,
+                        modifier = Modifier.returnTo("up/" + row.series.id + "/" + row.ep.id).fillMaxWidth(),
                         onClick = { onPlayEpisode(row.series, row.ep) }) {
                         Row(
                             Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 10.dp),

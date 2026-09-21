@@ -91,6 +91,8 @@ internal fun SubStyleRows(ctx: Context, style: Map<String, String>, modifier: Mo
                     // focus must be visible from the couch: same border language
                     // as every other focusable in the app
                     .border(2.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(8.dp))
+                    // the Subtitle style page's landing when it opens (TvFocus.kt), and Back's place to return to
+                    .landingSlot().returnTo("style/$k")
                     // the row reads "‹ value ›", so ←/→ step it back and forth as the arrows promise (OK still steps on);
                     // ↑/↓ and Back leave it as before
                     .onKeyEvent { e ->

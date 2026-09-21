@@ -387,7 +387,7 @@ private fun SignedIn(me: Profile, tv: Boolean, say: (String) -> Unit, fail: (Str
             Account.AVATARS.forEach { a ->
                 val on = me.avatar.equals(a, ignoreCase = true)
                 Box(
-                    Modifier.size(32.dp).clip(CircleShape).background(avatarColor(a))
+                    Modifier.focusRing(CircleShape).size(32.dp).clip(CircleShape).background(avatarColor(a))
                         .border(if (on) 3.dp else 1.dp, if (on) Color.White else Color(0x33FFFFFF), CircleShape)
                         .clickable { scope.launch { Account.updateProfile(ctx, avatar = a)?.let(fail) } },
                 )
@@ -575,8 +575,11 @@ internal fun PField(
     password: Boolean = false, caps: Boolean = false, words: Boolean = false, last: Boolean = false,
     onDone: () -> Unit = {}, modifier: Modifier = Modifier, fill: Boolean = true,
 ) {
+    // a TV types after OK (tvTyping): walking past a field no longer throws the keyboard up
+    val typing = tvTyping()
     OutlinedTextField(
         value = value, onValueChange = onChange, singleLine = true,
+        readOnly = typing.readOnly,
         placeholder = { Text(placeholder, color = FaintC, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
         keyboardOptions = KeyboardOptions(
@@ -586,7 +589,7 @@ internal fun PField(
             imeAction = if (last) ImeAction.Done else ImeAction.Next,
         ),
         keyboardActions = KeyboardActions(onDone = { onDone() }),
-        modifier = (if (fill) modifier.fillMaxWidth() else modifier).padding(bottom = 10.dp),
+        modifier = typing.modifier.then(if (fill) modifier.fillMaxWidth() else modifier).padding(bottom = 10.dp),
         shape = RoundedCornerShape(12.dp),
         colors = OutlinedTextFieldDefaults.colors(
             focusedBorderColor = Color.White, unfocusedBorderColor = Line2, cursorColor = Red,
@@ -599,6 +602,8 @@ internal fun PField(
 private fun PButton(text: String, busy: Boolean, danger: Boolean = false, onClick: () -> Unit) {
     Button(
         onClick = onClick, enabled = !busy,
+        // Material's focus tint does not read on the accent from a sofa
+        modifier = Modifier.focusRing(RoundedCornerShape(12.dp)),
         colors = ButtonDefaults.buttonColors(
             containerColor = if (danger) ErrC else Red, contentColor = if (danger) Color.White else OnAccent,
             disabledContainerColor = if (danger) ErrC.copy(alpha = .6f) else Red.copy(alpha = .6f),
@@ -626,7 +631,8 @@ internal fun TextAction(text: String, danger: Boolean = false, onClick: () -> Un
     val focused by interaction.collectIsFocusedAsState()
     Text(
         text, color = if (danger) ErrC else if (focused) TextC else MutedC, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
-        modifier = Modifier.clip(RoundedCornerShape(10.dp))
+        // under a remote the lit link wears a ring (an 8 % tint did not read from a sofa)
+        modifier = Modifier.focusRing(RoundedCornerShape(10.dp), landing = false).clip(RoundedCornerShape(10.dp))
             .background(if (focused) Color(0x14FFFFFF) else Color.Transparent)
             .clickable(interactionSource = interaction, indication = null) { onClick() }
             .padding(horizontal = 12.dp, vertical = 10.dp),

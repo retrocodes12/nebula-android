@@ -37,6 +37,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.border
@@ -53,6 +54,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -78,6 +81,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -190,6 +194,7 @@ import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
@@ -552,6 +557,10 @@ internal fun cardShape() = RoundedCornerShape(cardRadius().dp)
 // which item auto stream selection already fired for (survives the screen)
 private var autoPlayedFor: String? = null
 
+/** A streams page's answers, kept for Back (StreamsScreen). */
+private class StreamsMemo(val at: Long, val sections: List<Pair<Addon, List<StreamItem>>>, val status: String, val usual: String?)
+private val streamsMemo = HashMap<String, StreamsMemo>()
+
 /** One catalog's worth of content, tagged with where it came from and, on
     Home, where it sits (see [HomeRows.orderIndex]). */
 private class CatRow(val addon: Addon, val catalog: CatalogRef, val items: List<MetaItem>, val oi: Int = 0)
@@ -561,6 +570,10 @@ private class CatRow(val addon: Addon, val catalog: CatalogRef, val items: List<
 internal val manifestCache = java.util.concurrent.ConcurrentHashMap<String, ManifestInfo>()
 internal suspend fun manifestFor(url: String): ManifestInfo =
     manifestCache[url] ?: Stremio.loadManifest(url).also { manifestCache[url] = it }
+
+/** A title page's chosen season and list place per stack entry, for Back (the page leaves composition). */
+private val keptSeasons = HashMap<Any, Int>()
+private val keptDetailPlaces = HashMap<Any, Pair<Int, Int>>()
 
 /** Session cache of full metas (the detail page enhances from these). */
 private val metaFullCache = mutableMapOf<String, FullMeta>()
@@ -671,6 +684,8 @@ private class HomeUiState {
     var sig: String? = null
     var builtAt = 0L
     val listState = LazyListState()
+    // each row's sideways place, kept like the column's: a card opened from the seventh place is still there on Back
+    val rowStates = HashMap<String, LazyListState>()
     // Continue watching is read straight from local storage, so it paints
     // instantly and survives every add-on being unreachable.
     var continueRows by mutableStateOf<List<ProgressRec>>(emptyList())
@@ -687,6 +702,7 @@ private class SearchUiState {
     var sections by mutableStateOf<List<CatRow>>(emptyList())
     var searching by mutableStateOf(false)
     var searchedFor: String? = null
+    val rowStates = HashMap<String, LazyListState>()          // each result row's sideways place, for Back
     val listState = LazyListState()
 }
 
@@ -843,9 +859,11 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
             val searchState = remember { SearchUiState() }
             val ctx = LocalContext.current
             val scope = rememberCoroutineScope()
-            fun push(s: Screen) { stack = stack + s }
+            fun push(s: Screen) { ReturnFocus.returningTo = null; stack = stack + s }
             fun pop() {
                 if (stack.size > 1) {
+                    // the screen beneath gets the remote back where it left it (TvFocus.kt)
+                    ReturnFocus.returningTo = stack[stack.size - 2]
                     // a viewer backing out of playback leaves the party (the host keeps it alive)
                     if (stack.last() is Screen.Play && partyUi.active() && !partyUi.isHost) {
                         partyUi.reset(); partyUi.status = "Left the party"
@@ -853,7 +871,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                     stack = stack.dropLast(1)
                 }
             }
-            fun setTab(s: Screen) { stack = listOf(s) }
+            fun setTab(s: Screen) { ReturnFocus.returningTo = null; stack = listOf(s) }
 
             // ---- watch party wiring ----
             fun partyEvent(ev: PartyEvent) {
@@ -1141,7 +1159,11 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                             },
                             label = "screen",
                         ) { s ->
-                            Box(Modifier.fillMaxSize()) {
+                            // per screen: its entry (Back's return, TvFocus.kt) and its landing slot (the fallback landing)
+                            val landing = remember { LandingSlot() }
+                            LandingFallback(landing, s)
+                            CompositionLocalProvider(LocalScreenEntry provides s, LocalLandingSlot provides landing) {
+                            Box(Modifier.fillMaxSize().onFocusChanged { landing.hasFocus = it.hasFocus }) {
                             when (s) {
                                 is Screen.Home -> HomeScreen(
                                     homeState,
@@ -1332,6 +1354,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 )
                             }
                             }
+                            }
                         }
                         if (onNav && !rail) {
                             BottomBar(current, onTab = { setTab(it) }, modifier = Modifier.align(Alignment.BottomCenter))
@@ -1411,18 +1434,27 @@ internal fun FocusCard(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
+    // a full-width row does not grow: at 1.09 it gained ~40 dp a side and was cut at the screen's edges (its plate,
+    // its thumbnail) — it wears the ring instead
+    zoom: Boolean = true,
+    // the caller's own source, when the content restyles itself on focus (a stream row's plate)
+    interactionSource: MutableInteractionSource? = null,
+    // may this card be the screen's fallback landing (TvFocus.kt)? Never a Back button
+    landing: Boolean = true,
     content: @Composable () -> Unit,
 ) {
-    val interaction = remember { MutableInteractionSource() }
+    val own = remember { MutableInteractionSource() }
+    val interaction = interactionSource ?: own
     val focused by interaction.collectIsFocusedAsState()
     val haptics = LocalHapticFeedback.current
     // Focus zoom (Settings › Appearance) sets how much a card grows; Motion: Reduced grows nothing
     // and draws the white ring instead, so focus stays visible from the couch
-    val reduced = Prefs.reducedMotion
+    val reduced = Prefs.reducedMotion || !zoom
     val zoom by animateFloatAsState(if (focused && !reduced) Prefs.focusScale else 1f, tween(if (reduced) 0 else 300), label = "zoom")
     val lift by animateFloatAsState(if (focused && !reduced) 22f else 0f, tween(if (reduced) 0 else 300), label = "lift")
     Box(
         modifier
+            .then(if (landing) Modifier.landingSlot() else Modifier)
             .scale(zoom)
             .shadow(lift.dp, shape, clip = false)
             .then(if (reduced) Modifier.border(2.dp, if (focused) Color.White else Color.Transparent, shape) else Modifier)
@@ -1465,8 +1497,12 @@ internal fun tvFirstFocus(ready: Boolean = true, key: Any? = Unit): FocusRequest
     val ctx = LocalContext.current
     val tv = remember(ctx) { Account.isTv(ctx) }
     val keys = LocalInputModeManager.current.inputMode == InputMode.Keyboard
+    val entry = LocalScreenEntry.current
     LaunchedEffect(tv || keys, ready, key) {
         if (!(tv || keys) || !ready) return@LaunchedEffect
+        // Back returned here: the item the viewer left takes focus instead (Modifier.returnTo); this lands only if
+        // that never happens
+        if (yieldToReturn(entry)) return@LaunchedEffect
         // requestFocus() RETURNS whether it took; runCatching only guards the throw from a
         // requester with no node attached yet. A list's first item is composed a frame after
         // the list itself and an AnimatedContent screen fades in over ~180 ms, so retry across
@@ -1498,7 +1534,8 @@ internal fun navPadBottom(): Dp = if (Account.isTv(LocalContext.current)) 24.dp 
 @Composable
 internal fun RoundAction(icon: ImageVector, label: String, on: Boolean = false, onClick: () -> Unit) {
     Box(
-        Modifier.size(48.dp).clip(CircleShape)
+        // Material's focus tint is 10 % of the content colour — invisible on the white "on" state (My List, Watched)
+        Modifier.focusRing(CircleShape).size(48.dp).clip(CircleShape)
             .background(if (on) Color.White else Color(0x1FFFFFFF))
             .then(if (on) Modifier else Modifier.border(1.dp, Color(0x38FFFFFF), CircleShape))
             .clickable(onClickLabel = label) { onClick() },
@@ -1661,10 +1698,14 @@ internal fun CardSheet(
                     Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0x14FFFFFF)))
                     actions.forEachIndexed { i, a ->
                         val tint = if (a.destructive) Color(0xFFFF5A5F) else TextC
+                        // the lit row reads from a sofa (Material's focus tint did not); a finger keeps its ripple
+                        val rowSrc = remember { MutableInteractionSource() }
+                        val rowFocused by rowSrc.collectIsFocusedAsState()
                         Row(
                             Modifier.fillMaxWidth()
                                 .then(if (i == 0) Modifier.focusRequester(firstFocus) else Modifier)
-                                .clickable { close(); a.onClick() }
+                                .clickable(interactionSource = rowSrc, indication = LocalIndication.current) { close(); a.onClick() }
+                                .then(rowLit(rowFocused))
                                 .padding(horizontal = 18.dp, vertical = 16.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -1688,7 +1729,7 @@ internal fun BackBar(title: String, sub: String?, onBack: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        FocusCard(shape = RoundedCornerShape(50), onClick = onBack) {
+        FocusCard(shape = RoundedCornerShape(50), onClick = onBack, landing = false) {
             Box(
                 Modifier.size(42.dp).background(Surface2, CircleShape),
                 contentAlignment = Alignment.Center,
@@ -1706,7 +1747,7 @@ internal fun BackBar(title: String, sub: String?, onBack: () -> Unit) {
 /** Outlined choice chip: a hairline at rest, white when chosen. Inside a
     [Segmented] control the rest state drops its own outline. */
 @Composable
-internal fun Chip(text: String, on: Boolean, inSeg: Boolean = false, onClick: () -> Unit) {
+internal fun Chip(text: String, on: Boolean, inSeg: Boolean = false, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val pill = RoundedCornerShape(50)
@@ -1717,7 +1758,10 @@ internal fun Chip(text: String, on: Boolean, inSeg: Boolean = false, onClick: ()
         else -> LineC
     }
     Box(
-        Modifier
+        modifier
+            // chosen AND lit was a 2 dp black line inside a white pill on a black screen — nothing a sofa could see,
+            // and exactly where Settings and Library land (their first chip is the chosen one): a white ring outside
+            .outerRing(focused && on, pill)
             .clip(pill)
             .background(if (on) Color.White else Color.Transparent)
             .border(if (focused) 2.dp else 1.dp, line, pill)
@@ -1940,7 +1984,7 @@ private fun RatingStars(item: MetaItem) {
             Icon(
                 Icons.Filled.Star, contentDescription = "$i star${if (i > 1) "s" else ""}",
                 tint = if (i <= cur) Red else Color(0x40EBEBF5),
-                modifier = Modifier.size(30.dp).clip(RoundedCornerShape(8.dp))
+                modifier = Modifier.focusRing(RoundedCornerShape(8.dp)).size(30.dp).clip(RoundedCornerShape(8.dp))
                     .clickable {
                         cur = if (i == cur) 0 else i
                         Ratings.set(ctx, item.type, item, cur)
@@ -2083,6 +2127,7 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
                         shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.focusRing(RoundedCornerShape(12.dp)),
                     ) { Text(if (hasProfile) "Turn on Friends" else "Sign in to use Friends", fontWeight = FontWeight.SemiBold) }
                     if (!hasProfile) Text(
                         "Friends find each other by @handle, so Friends needs a Nebula Profile.",
@@ -2093,11 +2138,22 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
             return@LazyColumn
         }
         item(key = "add") {
+            val typing = tvTyping()
+            fun addFriend() {
+                scope.launch {
+                    val (name, err) = Social.addFriend(ctx, codeIn)
+                    status = err ?: "You and $name are now friends."
+                    if (err == null) { codeIn = ""; reload++ }
+                }
+            }
             Row(Modifier.padding(bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(
                     value = codeIn, onValueChange = { codeIn = it.take(24) },
                     placeholder = { Text("Friend’s @handle", color = MutedC) },
-                    singleLine = true, modifier = Modifier.weight(1f),
+                    singleLine = true, readOnly = typing.readOnly, modifier = typing.modifier.weight(1f),
+                    // Done adds, as the button does (it did nothing)
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, autoCorrectEnabled = false),
+                    keyboardActions = KeyboardActions(onDone = { addFriend() }),
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = Color.White, unfocusedBorderColor = Line2, cursorColor = Red,
@@ -2105,16 +2161,10 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                     ),
                 )
                 Button(
-                    onClick = {
-                        scope.launch {
-                            val (name, err) = Social.addFriend(ctx, codeIn)
-                            status = err ?: "You and $name are now friends."
-                            if (err == null) { codeIn = ""; reload++ }
-                        }
-                    },
+                    onClick = { addFriend() },
                     colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.padding(start = 10.dp),
+                    modifier = Modifier.padding(start = 10.dp).focusRing(RoundedCornerShape(12.dp)),
                 ) { Text("Add", fontWeight = FontWeight.SemiBold) }
             }
         }
@@ -2123,7 +2173,7 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
                     Text("Recommended to you", color = TextC, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                     Text("Clear", color = MutedC, fontSize = 13.sp,
-                        modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                        modifier = Modifier.focusRing(RoundedCornerShape(8.dp), landing = false).clip(RoundedCornerShape(8.dp))
                             .clickable { scope.launch { Social.inboxClear(ctx); reload++ } }
                             .padding(6.dp))
                 }
@@ -2132,6 +2182,7 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                 val it2 = rec.optJSONObject("i") ?: return@items
                 Row(
                     Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                        .focusRing(RoundedCornerShape(12.dp))
                         .background(SurfaceC, RoundedCornerShape(12.dp))
                         .border(1.dp, LineC, RoundedCornerShape(12.dp))
                         .clip(RoundedCornerShape(12.dp))
@@ -2174,6 +2225,7 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                     Column(Modifier.padding(bottom = 10.dp)) {
                         Row(
                             Modifier.fillMaxWidth()
+                                .focusRing(RoundedCornerShape(14.dp))
                                 .background(SurfaceC, RoundedCornerShape(14.dp))
                                 .border(1.dp, if (openCode == fCode) Line2 else LineC, RoundedCornerShape(14.dp))
                                 .clip(RoundedCornerShape(14.dp))
@@ -2213,7 +2265,7 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                 }
                 item(key = "froff") {
                     Text("Turn off Friends", color = MutedC, fontSize = 13.sp,
-                        modifier = Modifier.padding(top = 12.dp).clip(RoundedCornerShape(8.dp))
+                        modifier = Modifier.padding(top = 12.dp).focusRing(RoundedCornerShape(8.dp), landing = false).clip(RoundedCornerShape(8.dp))
                             .clickable { scope.launch { Social.disable(ctx); reload++ } }
                             .padding(6.dp))
                 }
@@ -2233,6 +2285,7 @@ private fun FriendRow(title: String, items: List<JSONObject>, onOpen: (MetaItem)
             Column(Modifier.width(96.dp)) {
                 Box(
                     Modifier.fillMaxWidth().aspectRatio(2f / 3f)
+                        .focusRing(RoundedCornerShape(10.dp))
                         .clip(RoundedCornerShape(10.dp)).background(SurfaceC)
                         .clickable {
                             onOpen(MetaItem(r.optString("id"), if (r.optString("type") == "series") "series" else "movie",
@@ -2495,7 +2548,7 @@ private fun UpdateCard(version: String, notes: String, apkUrl: String = Updates.
                     "downloading" -> {}
                     "ready" -> {
                         val f = apk
-                        if (f != null && !Updates.installApk(ctx, f)) message = "Allow installs, then tap Install"
+                        if (f != null) Updates.installApk(ctx, f)?.let { message = it }
                     }
                     else -> scope.launch { download() }
                 }
@@ -2503,13 +2556,14 @@ private fun UpdateCard(version: String, notes: String, apkUrl: String = Updates.
             enabled = phase != "downloading",
             colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Red),
             shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.focusRing(RoundedCornerShape(12.dp), landing = false),
         ) {
             Text(
                 when (phase) { "ready" -> "Install"; "downloading" -> "···"; "failed" -> "Retry"; else -> "Update" },
                 fontWeight = FontWeight.Bold,
             )
         }
-        IconButton(onClick = onDismiss) {
+        IconButton(onClick = onDismiss, modifier = Modifier.focusRing(CircleShape, landing = false)) {
             Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = Color(0xFFFFD9D9))
         }
     }
@@ -2519,7 +2573,7 @@ private fun UpdateCard(version: String, notes: String, apkUrl: String = Updates.
     through the top five of the first catalogue. The scrim exists only so the
     type stays legible over the artwork. */
 @Composable
-private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit) {
+private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit, detailsModifier: Modifier = Modifier) {
     // Featured from (Settings › Home): the first row, every row taking turns, or one chosen row
     val source = Prefs.heroSource
     val feed: List<CatRow> = remember(rows, source) {
@@ -2616,6 +2670,7 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit) {
                 shape = RoundedCornerShape(50),
                 contentPadding = PaddingValues(horizontal = 30.dp, vertical = 13.dp),
                 modifier = Modifier.padding(top = 14.dp)
+                    .returnTo("hero").then(detailsModifier)
                     .scale(if (heroFocused && !Prefs.reducedMotion) 1.08f else 1f),
             ) { Text("View Details", fontSize = 15.sp, fontWeight = FontWeight.SemiBold) }
             Row(
@@ -2650,6 +2705,7 @@ private fun HomeScreen(
     onCustomise: () -> Unit = {},
 ) {
     val ctx = LocalContext.current
+    val screenEntry = LocalScreenEntry.current
     var update by remember { mutableStateOf<Updates.Release?>(null) }
     // the card held down, if any — Home's only long-press surface is Continue watching
     var sheetFor by remember { mutableStateOf<ProgressRec?>(null) }
@@ -2669,8 +2725,12 @@ private fun HomeScreen(
                 SheetAction(Icons.Filled.Replay, "Start over") { onStartOver(r) },
                 SheetAction(Icons.Filled.Info, "View details") { onDetails(r) },
                 SheetAction(Icons.Filled.Delete, "Remove from Continue watching", destructive = true) {
+                    // the card takes focus with it when it goes: name the neighbour first (the hero if it was the last)
+                    val i = st.continueRows.indexOfFirst { it.type == r.type && it.id == r.id }
+                    val nb = st.continueRows.getOrNull(i + 1) ?: st.continueRows.getOrNull(i - 1)
                     Progress.clear(ctx, r.type, r.id)
                     st.continueRows = Progress.continueList(ctx)
+                    ReturnFocus.handTo(screenEntry, if (nb != null) "cw/" + Progress.key(nb.type, nb.id) else "hero")
                 },
             ),
             onDismiss = { sheetFor = null },
@@ -2795,35 +2855,43 @@ private fun HomeScreen(
                 }
             }
             st.rows.isEmpty() && st.continueRows.isEmpty() -> Box(Modifier.padding(top = 30.dp)) { HomeNoRows(st, onCustomise) }
-            // The remote's landing spot: focusGroup makes the list a focus target that hands
-            // focus to its first focusable child — View Details on the hero, else the first card.
-            // Only from the top, and that is deliberate: coming back from a title page the list
-            // is where the viewer left it, and claiming focus there would scroll it home under
-            // them. Never move someone's place to fix a focus bug.
-            else -> LazyColumn(
+            // The remote's landing spot, on a real control: View Details on the hero, else the first Continue watching
+            // card, else the first card — once the rows have settled. (A focusGroup's own Enter search started from
+            // the list's top-left and picked the first card UNDER the hero; the pivot scroll then cropped two thirds
+            // of the hero off.) Only from the top, and that is deliberate: coming back from a title page the list is
+            // where the viewer left it, and the card they left takes focus instead (Modifier.returnTo).
+            else -> {
+            val heroOn = st.rows.isNotEmpty() && Prefs.showHero
+            val cwOn = st.continueRows.isNotEmpty() && Prefs.showContinue
+            val land = tvFirstFocus(
+                ready = st.listState.firstVisibleItemIndex == 0 && st.listState.firstVisibleItemScrollOffset == 0 &&
+                    (st.rows.isNotEmpty() || !st.loading),
+            )
+            LazyColumn(
                 state = st.listState,
                 contentPadding = PaddingValues(bottom = navPadBottom()),
-                modifier = Modifier
-                    .focusRequester(
-                        tvFirstFocus(
-                            ready = st.listState.firstVisibleItemIndex == 0 &&
-                                st.listState.firstVisibleItemScrollOffset == 0,
-                        )
-                    )
-                    .focusGroup(),
+                modifier = Modifier.focusGroup(),
             ) {
-                if (st.rows.isNotEmpty() && Prefs.showHero) item(key = "hero") { HeroHeader(st.rows, onOpen) }
-                if (st.continueRows.isNotEmpty() && Prefs.showContinue) item(key = "continue") {
+                // the hero's slot is ALWAYS the first item, empty until the rows arrive: Continue watching paints
+                // first, and a hero inserted above it later left the list anchored on Continue watching — the hero
+                // sat off-screen above, for anyone with something in progress
+                item(key = "hero") {
+                    if (heroOn) HeroHeader(st.rows, onOpen, detailsModifier = Modifier.focusRequester(land))
+                }
+                if (cwOn) item(key = "continue") {
                     Column {
                         Box(Modifier.padding(horizontal = 16.dp)) { RowHeader("Continue watching", null, null) }
                         LazyRow(
+                            state = st.rowStates.getOrPut("continue") { LazyListState() },
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                             contentPadding = PaddingValues(horizontal = 16.dp),
                         ) {
-                            items(st.continueRows, key = { Progress.key(it.type, it.id) }) { r ->
+                            itemsIndexed(st.continueRows, key = { _, rec -> Progress.key(rec.type, rec.id) }) { ci, r ->
                                 ContinueCard(
                                     r,
-                                    Modifier.width(continueCardWidth()),
+                                    Modifier.returnTo("cw/" + Progress.key(r.type, r.id))
+                                        .then(if (!heroOn && ci == 0) Modifier.focusRequester(land) else Modifier)
+                                        .width(continueCardWidth()),
                                     onClick = { onResume(r) },
                                     onLongClick = { sheetFor = r },
                                 )
@@ -2831,7 +2899,8 @@ private fun HomeScreen(
                         }
                     }
                 }
-                items(st.rows, key = { it.addon.manifestUrl + "/" + it.catalog.type + "/" + it.catalog.id }) { r ->
+                itemsIndexed(st.rows, key = { _, row -> row.addon.manifestUrl + "/" + row.catalog.type + "/" + row.catalog.id }) { ri, r ->
+                    val rowKey = r.addon.manifestUrl + "/" + r.catalog.type + "/" + r.catalog.id
                     val mine = st.rows.filter { it.addon.manifestUrl == r.addon.manifestUrl }
                     val multi = mine.size > 1
                     Column {
@@ -2848,11 +2917,17 @@ private fun HomeScreen(
                             }
                         }
                         LazyRow(
+                            state = st.rowStates.getOrPut(rowKey) { LazyListState() },
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             contentPadding = PaddingValues(horizontal = 16.dp),
                         ) {
-                            items(r.items) { m ->
-                                MetaCard(m, Modifier.width(rowCardWidth(m))) { onOpen(r.addon, m) }
+                            itemsIndexed(r.items) { mi, m ->
+                                MetaCard(
+                                    m,
+                                    Modifier.returnTo("row/$rowKey/${m.type}:${m.id}")
+                                        .then(if (!heroOn && !cwOn && ri == 0 && mi == 0) Modifier.focusRequester(land) else Modifier)
+                                        .width(rowCardWidth(m)),
+                                ) { onOpen(r.addon, m) }
                             }
                         }
                     }
@@ -2867,6 +2942,7 @@ private fun HomeScreen(
                         TextAction("Customise Home", onClick = onCustomise)
                     }
                 }
+            }
             }
         }
     }
@@ -2933,16 +3009,23 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
         st.searchedFor = q
         st.searching = false
     }
+    val typing = tvTyping()
+    val tvBox = remember(ctx) { Account.isTv(ctx) }
+    val clearable = st.query.isNotEmpty() || st.submitted.isNotEmpty()
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
         Text("Search", color = TextC, fontSize = 34.sp, fontFamily = Sans, fontWeight = FontWeight.Bold, letterSpacing = (-1).sp, modifier = Modifier.padding(bottom = 12.dp))
+        Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(
             value = st.query,
             onValueChange = { st.query = it },
             placeholder = { Text("Search across your add-ons", color = MutedC) },
             singleLine = true,
+            // a TV types after OK (tvTyping): the remote landing here no longer throws the keyboard over the screen
+            readOnly = typing.readOnly,
             leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = MutedC) },
+            // inside the field the D-pad can never reach it (a child of the focused field), so a TV gets it beside
             trailingIcon = {
-                if (st.query.isNotEmpty() || st.submitted.isNotEmpty()) {
+                if (clearable && !tvBox) {
                     IconButton(onClick = { st.query = ""; st.submitted = "" }) {
                         Icon(Icons.Filled.Close, contentDescription = "Clear search", tint = MutedC)
                     }
@@ -2959,9 +3042,15 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
                 focusedTextColor = TextC, unfocusedTextColor = TextC,
             ),
             // the remote lands on the box the screen exists for; Down from it reaches Discover
-            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+            modifier = typing.modifier.weight(1f)
+                .returnTo("search-field")
                 .focusRequester(tvFirstFocus()),
         )
+        if (clearable && tvBox) IconButton(
+            onClick = { st.query = ""; st.submitted = "" },
+            modifier = Modifier.padding(start = 8.dp).focusRing(CircleShape, landing = false),
+        ) { Icon(Icons.Filled.Close, contentDescription = "Clear search", tint = TextC) }
+        }
         when {
             st.searching && st.sections.isEmpty() -> Column {
                 SkelBox(Modifier.padding(top = 18.dp, bottom = 10.dp).width(170.dp).height(15.dp))
@@ -2985,9 +3074,12 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
                 items(st.sections, key = { it.addon.manifestUrl + "/" + it.catalog.id }) { r ->
                     Column {
                         RowHeader(r.addon.name, "${r.items.size} result" + (if (r.items.size > 1) "s" else ""), null)
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        LazyRow(
+                            state = st.rowStates.getOrPut(r.addon.manifestUrl + "/" + r.catalog.id) { LazyListState() },
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
                             items(r.items) { m ->
-                                MetaCard(m, Modifier.width(rowCardWidth(m))) {
+                                MetaCard(m, Modifier.returnTo("s/${r.addon.manifestUrl}/${m.type}:${m.id}").width(rowCardWidth(m))) {
                                     // a result opened straight from the as-you-type list counts as a search worth keeping
                                     RecentSearches.note(ctx, st.submitted)
                                     onOpen(r.addon, m)
@@ -3020,6 +3112,26 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
     var dragOffset by remember { mutableStateOf(0f) }
     var liftIndex by remember { mutableStateOf(-1) }      // picked up with the D-pad
     var rowSpanPx by remember { mutableStateOf(0f) }
+    val screenEntry = LocalScreenEntry.current
+    val urlTyping = tvTyping()
+    // a remote lands on the first add-on (the page opened with nothing lit, and the first press was spent)
+    val firstRow = tvFirstFocus(ready = addons.isNotEmpty())
+    /** Add the add-on in the field — the button, or Done on the keyboard (Enter did nothing). */
+    fun addNow() {
+        // a stremio:// install link is the manifest address behind a scheme only Stremio registers
+        val u = url.trim().replace(Regex("^stremio://", RegexOption.IGNORE_CASE), "https://")
+        if (!Regex("manifest\\.json").containsMatchIn(u)) {
+            status = "Enter a manifest URL (…/manifest.json)"; statusErr = true; return
+        }
+        status = "Adding…"; statusErr = false
+        scope.launch {
+            runCatching { Stremio.loadManifest(u).addon }.onSuccess { a ->
+                val list = (addons.filterNot { it.manifestUrl == a.manifestUrl } + a)
+                saveAddons(ctx, list); addons = list; url = ""; onAddonsChanged()
+                status = "Added ${a.name}"; statusErr = false
+            }.onFailure { status = "Could not load: ${it.message}"; statusErr = true }
+        }
+    }
     /** Move an add-on and persist the new ranking. Returns where it landed. */
     fun rankMove(from: Int, to: Int): Int {
         if (from < 0 || from >= addons.size || to < 0 || to >= addons.size || from == to) return from
@@ -3058,7 +3170,10 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                     value = url, onValueChange = { url = it },
                     placeholder = { Text("https://your-addon/…/manifest.json", color = MutedC) },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    readOnly = urlTyping.readOnly,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done, autoCorrectEnabled = false),
+                    keyboardActions = KeyboardActions(onDone = { addNow() }),
+                    modifier = urlTyping.modifier.fillMaxWidth().padding(top = 8.dp),
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = Color.White,
@@ -3070,23 +3185,10 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                 )
                 Row(Modifier.padding(top = 12.dp)) {
                     Button(
-                        onClick = {
-                            // a stremio:// install link is the manifest address behind a scheme only Stremio registers
-                            val u = url.trim().replace(Regex("^stremio://", RegexOption.IGNORE_CASE), "https://")
-                            if (!Regex("manifest\\.json").containsMatchIn(u)) {
-                                status = "Enter a manifest URL (…/manifest.json)"; statusErr = true; return@Button
-                            }
-                            status = "Adding…"; statusErr = false
-                            scope.launch {
-                                runCatching { Stremio.loadManifest(u).addon }.onSuccess { a ->
-                                    val list = (addons.filterNot { it.manifestUrl == a.manifestUrl } + a)
-                                    saveAddons(ctx, list); addons = list; url = ""; onAddonsChanged()
-                                    status = "Added ${a.name}"; statusErr = false
-                                }.onFailure { status = "Could not load: ${it.message}"; statusErr = true }
-                            }
-                        },
+                        onClick = { addNow() },
                         colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
                         shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.focusRing(RoundedCornerShape(12.dp)),
                     ) { Text("Add add-on", fontWeight = FontWeight.SemiBold) }
                 }
                 if (status.isNotEmpty()) {
@@ -3128,12 +3230,26 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                         }
                         .then(if (dragging) Modifier else Modifier.animateItem()),
                 ) {
-                FocusCard(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth(), onClick = { onOpen(a) }) {
+                // A container, not one big button: the part that opens the add-on, On/Off, the grip and Remove are
+                // SIBLINGS, so the D-pad walks between them. Inside one clickable card they were its children, and a
+                // focused node's children are out of the arrows' reach — on a TV only "open" ever worked.
+                Row(
+                    Modifier.fillMaxWidth()
+                        .background(if (raised) Surface2 else SurfaceC, RoundedCornerShape(12.dp))
+                        .border(1.dp, if (raised) Color(0x3DFFFFFF) else LineC, RoundedCornerShape(12.dp))
+                        .padding(start = 4.dp, end = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    FocusCard(
+                        shape = RoundedCornerShape(10.dp), zoom = false,
+                        modifier = Modifier.weight(1f).padding(vertical = 4.dp)
+                            .returnTo("addon/" + a.manifestUrl)
+                            .then(if (i == 0) Modifier.focusRequester(firstRow) else Modifier),
+                        onClick = { onOpen(a) },
+                    ) {
                     Row(
-                        Modifier.fillMaxWidth()
-                            .background(if (raised) Surface2 else SurfaceC, RoundedCornerShape(12.dp))
-                            .border(1.dp, if (raised) Color(0x3DFFFFFF) else LineC, RoundedCornerShape(12.dp))
-                            .padding(horizontal = 12.dp, vertical = 14.dp),
+                        Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
@@ -3160,6 +3276,8 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                                 color = MutedC, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                             )
                         }
+                    }
+                    }
                         // On/Off without removing: a switched-off add-on stays installed and ranked but
                         // feeds no rows, search results, streams or subtitles
                         Chip(if (a.enabled) "On" else "Off", a.enabled, inSeg = true) {
@@ -3237,14 +3355,17 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                         }
                         IconButton(
                             onClick = {
+                                // the row takes focus with it: hand it to the next add-on (or the one before)
+                                val at = addons.indexOfFirst { it.manifestUrl == a.manifestUrl }
+                                val nb = addons.getOrNull(at + 1) ?: addons.getOrNull(at - 1)
                                 val list = addons.filterNot { it.manifestUrl == a.manifestUrl }
                                 saveAddons(ctx, list); addons = list; onAddonsChanged()
+                                if (nb != null) ReturnFocus.handTo(screenEntry, "addon/" + nb.manifestUrl)
                             },
-                            modifier = Modifier.size(36.dp),
+                            modifier = Modifier.size(36.dp).focusRing(CircleShape, landing = false),
                         ) {
                             Icon(Icons.Filled.Close, contentDescription = "Remove", tint = MutedC, modifier = Modifier.size(18.dp))
                         }
-                    }
                 }
                 }
             }
@@ -3287,8 +3408,9 @@ internal fun SettingsRow(
     Column {
         Row(
             Modifier.fillMaxWidth()
+                .then(if (onClick != null) Modifier.returnTo("row/$title").landingSlot() else Modifier)
                 .then(if (onClick != null) Modifier.clickable(interactionSource = interaction, indication = null) { onClick() } else Modifier)
-                .background(if (focused) Color(0x14FFFFFF) else Color.Transparent)
+                .then(rowLit(focused))
                 .padding(horizontal = 14.dp, vertical = 13.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -3383,6 +3505,7 @@ private fun SettingsScreen(
                 var pname by remember {
                     mutableStateOf(ctx2.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("party_name", "") ?: "")
                 }
+                val pnameTyping = tvTyping()
                 OutlinedTextField(
                     value = pname,
                     onValueChange = { v ->
@@ -3391,7 +3514,9 @@ private fun SettingsScreen(
                     },
                     placeholder = { Text(Cloud.profile?.name?.takeIf { it.isNotBlank() } ?: android.os.Build.MODEL.take(24), color = MutedC) },
                     singleLine = true,
-                    modifier = Modifier.width(150.dp),
+                    // walking past this row on the way to Advanced threw the keyboard up on a TV (tvTyping)
+                    readOnly = pnameTyping.readOnly,
+                    modifier = pnameTyping.modifier.width(150.dp).returnTo("party-name"),
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = Color.White, unfocusedBorderColor = Line2, cursorColor = Red,
@@ -3434,7 +3559,9 @@ private fun SettingsScreen(
                 }
             }
             SettingsRow(Icons.Filled.Shield, "Privacy Policy", "No email, no tracking — how Nebula handles data", true) {
+                // many TVs have no browser: say where to read it rather than do nothing
                 runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.rifflehq.in/privacy.html"))) }
+                    .onFailure { Toasts.show("No web browser on this device — read it at play.rifflehq.in/privacy.html") }
             }
             SettingsRow(Icons.Filled.Info, "Nebula for Android", "v$version · plays every add-on format, on-device", false, null)
         }
@@ -3455,8 +3582,13 @@ private fun SettingsSubtitlesScreen(onBack: () -> Unit) {
 /** A titled switch row for the settings pages. */
 @Composable
 internal fun SettingsToggle(title: String, sub: String, checked: Boolean, divider: Boolean = true, onChange: (Boolean) -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
     Row(
-        Modifier.fillMaxWidth().clickable { onChange(!checked) }
+        Modifier.fillMaxWidth()
+            .returnTo("toggle/$title").landingSlot()
+            .clickable(interactionSource = interaction, indication = null) { onChange(!checked) }
+            .then(rowLit(focused))
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -3483,7 +3615,8 @@ internal fun SettingsChips(title: String, sub: String?, options: List<Pair<Strin
     Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
         Text(title, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         if (sub != null) Text(sub, color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(top = 2.dp))
-        Box(Modifier.padding(top = 10.dp)) {
+        // the requester sits on the strip, and a strip hands focus to its first chip (return and landing alike)
+        Box(Modifier.padding(top = 10.dp).returnTo("chips/$title").landingSlot()) {
             Segmented {
                 options.forEach { o -> Chip(o.second, selected == o.first, inSeg = true) { onPick(o.first) } }
             }
@@ -3527,8 +3660,9 @@ internal fun SettingsPick(
     )
     Column(
         Modifier.fillMaxWidth()
+            .returnTo("pick/$title").landingSlot()
             .clickable(interactionSource = interaction, indication = null) { open = true }
-            .background(if (focused) Color(0x14FFFFFF) else Color.Transparent)
+            .then(rowLit(focused))
             .padding(horizontal = 14.dp, vertical = 13.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -3570,7 +3704,7 @@ private fun SettingsLayoutScreen(onBack: () -> Unit, onSupport: () -> Unit) {
                             val on = Prefs.activeAccent == key
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier.width(84.dp).clip(RoundedCornerShape(14.dp))
+                                modifier = Modifier.width(84.dp).focusRing(RoundedCornerShape(14.dp)).clip(RoundedCornerShape(14.dp))
                                     .clickable {
                                         if (locked) { Toasts.show("$label is $what."); onSupport() }
                                         else Prefs.setAccent(ctx, key)
@@ -3618,7 +3752,17 @@ private fun SettingsLayoutScreen(onBack: () -> Unit, onSupport: () -> Unit) {
                         Slider(
                             value = hue, onValueChange = { hue = it },
                             onValueChangeFinished = { Prefs.setAccent(ctx, hexOf(Color.hsv(hue, 0.82f, 0.96f))) },
-                            valueRange = 0f..359f, modifier = Modifier.weight(1f),
+                            valueRange = 0f..359f,
+                            // this Material version's slider takes focus but no keys: left and right walk the hue here
+                            // (round the wheel), each step taken at once, since a remote has no "finger lifted"
+                            modifier = Modifier.weight(1f).focusRing(RoundedCornerShape(50)).onKeyEvent { e ->
+                                if (e.type != KeyEventType.KeyDown) return@onKeyEvent false
+                                val d = when (e.key) { Key.DirectionLeft -> -12f; Key.DirectionRight -> 12f; else -> return@onKeyEvent false }
+                                hue = ((hue + d) % 360f + 360f) % 360f
+                                if (hue > 359f) hue = 359f
+                                Prefs.setAccent(ctx, hexOf(Color.hsv(hue, 0.82f, 0.96f)))
+                                true
+                            },
                         )
                     }
                 }
@@ -3826,6 +3970,7 @@ private fun SettingsPartyScreen(onBack: () -> Unit, onJoin: (String) -> Unit) {
 @Composable
 private fun PartyPanel(onJoin: (String) -> Unit) {
     var partyCode by remember { mutableStateOf("") }
+    val typing = tvTyping()
     Column(
         Modifier.fillMaxWidth()
             .background(SurfaceC, RoundedCornerShape(12.dp))
@@ -3838,7 +3983,14 @@ private fun PartyPanel(onJoin: (String) -> Unit) {
                 value = partyCode, onValueChange = { partyCode = it },
                 placeholder = { Text("Party code", color = MutedC) },
                 singleLine = true,
-                modifier = Modifier.weight(1f),
+                readOnly = typing.readOnly,
+                // Done joins, as the button does (it did nothing)
+                keyboardOptions = KeyboardOptions(
+                    imeAction = ImeAction.Done, autoCorrectEnabled = false,
+                    capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Characters,
+                ),
+                keyboardActions = KeyboardActions(onDone = { onJoin(partyCode) }),
+                modifier = typing.modifier.weight(1f),
                 shape = RoundedCornerShape(12.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Color.White,
@@ -3852,6 +4004,7 @@ private fun PartyPanel(onJoin: (String) -> Unit) {
                 onClick = { onJoin(partyCode) },
                 colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
                 shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.focusRing(RoundedCornerShape(12.dp)),
             ) { Text("Join", fontWeight = FontWeight.SemiBold) }
         }
         Text(
@@ -3893,6 +4046,11 @@ private fun DetailScreen(
 ) {
     val ctx = LocalContext.current
     val ck = item.type + ":" + item.id
+    val detailTv = remember(ctx) { Account.isTv(ctx) }
+    val screenEntry = LocalScreenEntry.current
+    // Back from Streams or the player comes back to the season the viewer was on (not the cursor's) and the list where
+    // it was — the page leaves composition, and it used to rebuild at the top of the cursor's season every time
+    val backHere = remember { ReturnFocus.backTo(screenEntry) }
     var full by remember(ck) { mutableStateOf(metaFullCache[ck]) }
     var metaTried by remember(ck) { mutableStateOf(metaFullCache[ck] != null) }
     var inList by remember(ck) { mutableStateOf(Library.inList(ctx, item.type, item.id)) }
@@ -3971,9 +4129,11 @@ private fun DetailScreen(
             // its last season, not back on season 1
             val cur = seriesCursor(ctx, item.type, found)
             upNextId = cur?.upNext?.id
-            selectedSeason = cur?.seat?.season
+            val kept = if (backHere) screenEntry?.let { keptSeasons[it] }?.takeIf { k -> found.any { it.season == k } } else null
+            selectedSeason = kept ?: cur?.seat?.season
                 ?: found.map { it.season }.distinct().sortedWith(compareBy({ it == 0 }, { it })).firstOrNull()
         }
+        LaunchedEffect(selectedSeason) { val sn = selectedSeason; if (sn != null && screenEntry != null) keptSeasons[screenEntry] = sn }
         // a pull that applies progress while this page is open must move the ring too
         LaunchedEffect(Progress.syncVersion) {
             if (episodes.isNotEmpty()) upNextId = seriesUpNext(ctx, item.type, episodes)?.id
@@ -3983,7 +4143,20 @@ private fun DetailScreen(
         val currentSeason = selectedSeason ?: seasons.firstOrNull()
         val eps = (bySeason[currentSeason] ?: emptyList()).sortedBy { it.episode ?: 0 }
 
-        LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
+        // the list's place, put back once the episodes are there to scroll to (the page rebuilds with only its header)
+        val detailList = rememberLazyListState()
+        val keptPlace = remember { if (backHere) screenEntry?.let { keptDetailPlaces[it] } else null }
+        var placed by remember { mutableStateOf(keptPlace == null) }
+        LaunchedEffect(eps.size, epsLoading) {
+            if (placed || keptPlace == null) return@LaunchedEffect
+            if (item.type == "series" && eps.isEmpty() && epsLoading) return@LaunchedEffect
+            runCatching { detailList.scrollToItem(keptPlace.first, keptPlace.second) }
+            placed = true
+        }
+        DisposableEffect(Unit) {
+            onDispose { if (screenEntry != null) keptDetailPlaces[screenEntry] = detailList.firstVisibleItemIndex to detailList.firstVisibleItemScrollOffset }
+        }
+        LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp), state = detailList) {
         item { Column {
         BackBar("", null, onBack)
         Spacer(Modifier.height(160.dp))
@@ -4025,30 +4198,11 @@ private fun DetailScreen(
         }
         // Genres and cast on title pages: Settings › Home
         full?.genres?.takeIf { it.isNotEmpty() && Prefs.detailGenres }?.let { gs ->
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(top = 14.dp),
-            ) {
-                items(gs.take(6).size) { i ->
-                    Text(
-                        gs[i], color = TextC, fontSize = 13.sp, fontWeight = FontWeight.Medium,
-                        modifier = Modifier.border(1.dp, Color(0x38FFFFFF), RoundedCornerShape(50))
-                            .padding(horizontal = 14.dp, vertical = 7.dp),
-                    )
-                }
-            }
+            NamePills(gs.take(6), TextC, Color(0x38FFFFFF), detailTv, Modifier.padding(top = 14.dp), FontWeight.Medium)
         }
         full?.cast?.takeIf { it.isNotEmpty() && Prefs.detailCast }?.let { cast ->
             Eyebrow("Cast", Modifier.padding(top = 16.dp, bottom = 8.dp))
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(cast.take(8).size) { i ->
-                    Text(
-                        cast[i], color = MutedC, fontSize = 13.sp,
-                        modifier = Modifier.border(1.dp, LineC, RoundedCornerShape(50))
-                            .padding(horizontal = 14.dp, vertical = 7.dp),
-                    )
-                }
-            }
+            NamePills(cast.take(8), MutedC, LineC, detailTv)
         }
         // The Play pill and the round buttons share one height and one geometry
         // (a full pill beside full circles, as the Home hero's pill is): a 40dp
@@ -4087,6 +4241,7 @@ private fun DetailScreen(
                 // the remote's landing spot on a title page, and a white pill cannot wear a
                 // white focus ring — it grows the way a card does instead
                 modifier = Modifier.height(48.dp)
+                    .returnTo("play")
                     .focusRequester(tvFirstFocus())
                     .scale(if (playFocused && !Prefs.reducedMotion) 1.06f else 1f),
             ) {
@@ -4151,13 +4306,13 @@ private fun DetailScreen(
             LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(trailers.size) { i ->
                     val t = trailers[i]
-                    Column(Modifier.width(174.dp).clickable {
+                    Column(Modifier.width(174.dp).focusRing(RoundedCornerShape(10.dp)).clickable {
                         runCatching {
                             ctx.startActivity(
                                 Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=" + t.key))
                                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             )
-                        }.onFailure { Toasts.show("Nothing here opens that.") }
+                        }.onFailure { Toasts.show("Nothing on this device opens video links.") }
                     }) {
                         AsyncImage(
                             model = "https://img.youtube.com/vi/" + t.key + "/hqdefault.jpg",
@@ -4184,7 +4339,11 @@ private fun DetailScreen(
             full?.writer?.takeIf { it.isNotEmpty() }?.let { "Writer" to it.joinToString(", ") },
             full?.genres?.takeIf { it.isNotEmpty() }?.let { "Genres" to it.take(4).joinToString(", ") },
         )
-        if (details.isNotEmpty()) {
+        // On a TV the table is one focusable block: with trailers above it, its last rows sat below the last thing
+        // the remote could reach, and a list only scrolls as far as focus goes
+        if (details.isNotEmpty()) Column(
+            Modifier.fillMaxWidth().then(if (detailTv) Modifier.focusRing(RoundedCornerShape(12.dp)).focusable() else Modifier),
+        ) {
             Text(
                 if (item.type == "series") "Show Details" else "Movie Details",
                 color = TextC, fontSize = 19.sp, fontWeight = FontWeight.Bold,
@@ -4211,7 +4370,7 @@ private fun DetailScreen(
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 14.dp)) {
                     items(seasons.size) { i ->
                         val sn = seasons[i]
-                        Chip(if (sn == 0) "Specials" else "Season $sn", sn == currentSeason) { selectedSeason = sn }
+                        Chip(if (sn == 0) "Specials" else "Season $sn", sn == currentSeason, modifier = Modifier.returnTo("season/$sn")) { selectedSeason = sn }
                     }
                 }
             }
@@ -4220,6 +4379,7 @@ private fun DetailScreen(
                 val ep = eps[i]
                 EpisodeRow(
                     itemType = item.type, ep = ep, upNext = ep.id == upNextId, first = i == 0,
+                    modifier = Modifier.returnTo("ep/" + ep.id),
                     seriesPoster = full?.poster ?: item.poster,
                     onClick = { onPlayEpisode(ep, PlayIntent.TAP) },
                     onResume = { onPlayEpisode(ep, PlayIntent.RESUME) },
@@ -4234,6 +4394,23 @@ private fun DetailScreen(
     }
 }
 
+/** Genre and cast names as outlined pills: a sideways row under a finger, wrapped lines on a TV — plain text in a lazy
+    row can never be scrolled to by a remote, so the names past the edge were out of reach there. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun NamePills(names: List<String>, ink: Color, line: Color, wrap: Boolean, modifier: Modifier = Modifier, weight: FontWeight? = null) {
+    val pill: @Composable (String) -> Unit = { n ->
+        Text(
+            n, color = ink, fontSize = 13.sp, fontWeight = weight,
+            modifier = Modifier.border(1.dp, line, RoundedCornerShape(50)).padding(horizontal = 14.dp, vertical = 7.dp),
+        )
+    }
+    if (wrap) FlowRow(
+        modifier, horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) { names.forEach { pill(it) } }
+    else LazyRow(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) { items(names.size) { i -> pill(names[i]) } }
+}
+
 /** One episode in a list: thumb, a mono eyebrow (number · air date), the name,
     the overview beneath. Rows are transparent and divided by hairlines — a
     list, not a stack of tiles — and only the target row wears a mark. */
@@ -4243,6 +4420,7 @@ private fun EpisodeRow(
     ep: Episode,
     upNext: Boolean,
     first: Boolean,
+    modifier: Modifier = Modifier,
     seriesPoster: String? = null,
     onClick: () -> Unit,
     onResume: () -> Unit = onClick,
@@ -4264,8 +4442,10 @@ private fun EpisodeRow(
     )
     Column {
         if (!first) Box(Modifier.fillMaxWidth().height(1.dp).background(LineC))
+        // a full-width row wears the ring rather than growing past the screen's edges
+        // (both screens that list episodes land on their own row, so this is never the fallback landing)
         FocusCard(
-            shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp), modifier = modifier.fillMaxWidth(), zoom = false, landing = false,
             onClick = onClick, onLongClick = { sheet = true },
         ) {
             Row(
@@ -4480,66 +4660,80 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
         st.paging = false
     }
 
+    val typing = tvTyping()
+    val ctx = LocalContext.current
+    val tvBox = remember(ctx) { Account.isTv(ctx) }
+    val clearable = query.isNotEmpty() || submitted.isNotEmpty()
+    // the skeleton's shimmer, only while there is a skeleton (the grid's builder is not a composable)
+    val br = if (loading && items.isEmpty()) shimmerBrush() else null
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
         BackBar(addon.name, status, onBack)
-        if (catalogs.any { it.search }) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = { Text("Search ${addon.name}", color = MutedC) },
-                singleLine = true,
-                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = MutedC) },
-                trailingIcon = {
-                    if (query.isNotEmpty() || submitted.isNotEmpty()) {
-                        IconButton(onClick = { query = ""; submitted = "" }) {
-                            Icon(Icons.Filled.Close, contentDescription = "Clear search", tint = MutedC)
+        // Search and the chip rows ride at the top of the grid and scroll away with it: fixed above it they took
+        // ~226 dp of a TV's 540, leaving one row of posters with the focused one cut off
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(minSize = 140.dp * Prefs.posterScale),
+            state = st.gridState,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(if (loading && items.isEmpty()) 12.dp else 14.dp),
+            contentPadding = PaddingValues(bottom = 20.dp),
+        ) {
+            item(key = "head", span = { GridItemSpan(maxLineSpan) }) {
+                Column {
+                    if (catalogs.any { it.search }) Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = query,
+                            onValueChange = { query = it },
+                            placeholder = { Text("Search ${addon.name}", color = MutedC) },
+                            singleLine = true,
+                            readOnly = typing.readOnly,
+                            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = MutedC) },
+                            trailingIcon = {
+                                if (clearable && !tvBox) {
+                                    IconButton(onClick = { query = ""; submitted = "" }) {
+                                        Icon(Icons.Filled.Close, contentDescription = "Clear search", tint = MutedC)
+                                    }
+                                }
+                            },
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(onSearch = { submitted = query.trim() }),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Color.White, unfocusedBorderColor = Line2, cursorColor = Red,
+                                focusedTextColor = TextC, unfocusedTextColor = TextC,
+                            ),
+                            modifier = typing.modifier.weight(1f).returnTo("catalog-search"),
+                        )
+                        // inside the field the D-pad can never reach it, so a TV gets it beside
+                        if (clearable && tvBox) IconButton(
+                            onClick = { query = ""; submitted = "" },
+                            modifier = Modifier.padding(start = 8.dp).focusRing(CircleShape, landing = false),
+                        ) { Icon(Icons.Filled.Close, contentDescription = "Clear search", tint = TextC) }
+                    }
+                    if (catalogs.size > 1) {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
+                            items(catalogs) { c ->
+                                Chip(c.name, c == current && submitted.isEmpty(), modifier = Modifier.returnTo("cat/${c.type}/${c.id}")) {
+                                    current = c; genre = null; query = ""; submitted = ""
+                                }
+                            }
                         }
                     }
-                },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { submitted = query.trim() }),
-                shape = RoundedCornerShape(12.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color.White, unfocusedBorderColor = Line2, cursorColor = Red,
-                    focusedTextColor = TextC, unfocusedTextColor = TextC,
-                ),
-                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
-            )
-        }
-        if (catalogs.size > 1) {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
-                items(catalogs) { c -> Chip(c.name, c == current && submitted.isEmpty()) { current = c; genre = null; query = ""; submitted = "" } }
+                    if (submitted.isEmpty()) current?.genres?.take(20)?.let { gs ->
+                        if (gs.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 10.dp)) {
+                            items(gs) { g -> Chip(g, genre == g, modifier = Modifier.returnTo("genre/$g")) { genre = if (genre == g) null else g } }
+                        }
+                    }
+                }
             }
-        }
-        if (submitted.isEmpty()) current?.genres?.take(20)?.let { gs ->
-            if (gs.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 10.dp)) {
-                items(gs) { g -> Chip(g, genre == g) { genre = if (genre == g) null else g } }
-            }
-        }
-        if (loading && items.isEmpty()) {
-            val br = shimmerBrush()
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 140.dp * Prefs.posterScale),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(bottom = 20.dp),
-            ) {
+            if (br != null) {
                 items(12) {
                     Column {
                         Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)).background(br))
                         Box(Modifier.padding(top = 8.dp).fillMaxWidth(0.7f).height(12.dp).clip(RoundedCornerShape(12.dp)).background(br))
                     }
                 }
-            }
-        } else {
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 140.dp * Prefs.posterScale),
-                state = st.gridState,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                contentPadding = PaddingValues(bottom = 20.dp),
-            ) {
-                items(items) { m -> MetaCard(m) { onOpen(m) } }
+            } else {
+                items(items) { m -> MetaCard(m, Modifier.returnTo("c/${m.type}:${m.id}")) { onOpen(m) } }
                 // a further page is in flight — tail the grid with placeholders
                 if (st.paging) items(6) { SkeletonCell() }
             }
@@ -4625,12 +4819,16 @@ private fun EpisodesScreen(
             val i = eps.indexOfFirst { it.id == upNextId }
             listState.scrollToItem(if (i >= 0) maxOf(0, i - 1) else 0)
         }
+        // a remote lands on Up next (else the first episode) once the list is there — the screen opened with nothing lit
+        val land = tvFirstFocus(ready = eps.isNotEmpty())
+        val landAt = eps.indexOfFirst { it.id == upNextId }.coerceAtLeast(0)
         LazyColumn(Modifier.fillMaxWidth(), state = listState, contentPadding = PaddingValues(bottom = 20.dp)) {
             if (episodes.isEmpty()) items(6) { SkeletonRow(112.dp, 63.dp, circle = false) }
             items(eps.size, key = { eps[it].id }) { i ->
                 val ep = eps[i]
                 EpisodeRow(
                     itemType = item.type, ep = ep, upNext = ep.id == upNextId, first = i == 0,
+                    modifier = Modifier.returnTo("ep/" + ep.id).then(if (i == landAt) Modifier.focusRequester(land) else Modifier),
                     seriesPoster = item.poster,
                     onClick = { onPlayEpisode(ep, PlayIntent.TAP) },
                     onResume = { onPlayEpisode(ep, PlayIntent.RESUME) },
@@ -4716,6 +4914,18 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                 else (list.firstOrNull { !StreamBadges.slow(it, item.runtime) } ?: list.first())
             play(pick, a, false)
         }
+        // The answers are kept ten minutes per title (the window NextEp already trusts a pick for): Back from the
+        // player used to ask every add-on again and wait for all of them — issue #1's "slow" a second time, for a
+        // viewer who only wanted the row below the one that failed. ↻ always asks afresh.
+        val memoKey = listOf(item.type, item.id, order.joinToString("|") { it.manifestUrl },
+            Prefs.minRes, Prefs.streamSort, Prefs.slowMark, Prefs.p2p.toString()).joinToString("\n")
+        val memo = if (reload == 0) streamsMemo[memoKey]?.takeIf { System.currentTimeMillis() - it.at < 600_000 } else null
+        if (memo != null) {
+            sections = memo.sections; status = memo.status; usualUrl = memo.usual
+            decide()
+            loading = false
+            return@LaunchedEffect
+        }
         val timer = if (Prefs.autoPick != "off" && autoPlayedFor != item.id) launch { delay(Prefs.pickWait * 1000L); decide() } else null
         // Every add-on at once (web parity). They were asked one after another, so the page waited for the SUM of
         // every add-on's answer time and one slow add-on held up all the ones after it — the "very slow" on issue #1.
@@ -4760,6 +4970,10 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                 else -> "No playable streams right now."
             }
         }
+        if (sections.isNotEmpty()) {
+            streamsMemo[memoKey] = StreamsMemo(System.currentTimeMillis(), sections, status, usualUrl)
+            while (streamsMemo.size > 24) streamsMemo.remove(streamsMemo.minByOrNull { it.value.at }!!.key)
+        }
         loading = false
     }
     val shown = sections.filter { filter == null || it.first.name == filter }
@@ -4768,15 +4982,22 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
     val remote = remember(ctx) { Account.isTv(ctx) } || LocalInputModeManager.current.inputMode == InputMode.Keyboard
     val firstRow = remember { FocusRequester() }
     val landOn = shown.firstOrNull()?.let { it.first.manifestUrl + "\n" + it.second.first().url }
+    val screenEntry = LocalScreenEntry.current
     LaunchedEffect(landOn) {
         if (!remote || landOn == null || KeyWatch.lastDownAt > openedAt) return@LaunchedEffect
+        // back from the player: the row that was played takes focus (Modifier.returnTo), not the top one
+        if (yieldToReturn(screenEntry)) return@LaunchedEffect
         repeat(10) {
             withFrameNanos {}
             if (runCatching { firstRow.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
         }
     }
     Column(Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
+        // kept across the player, so the row played is still composed to take focus again
+        LazyColumn(
+            Modifier.fillMaxWidth(), state = rememberKeptList("streams"),
+            verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 20.dp),
+        ) {
             item(key = "hero") {
                 // episode context header — art, S/E kicker, episode title, series name
                 val art = item.background ?: item.poster
@@ -4792,7 +5013,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                         0.62f to Color(0x8A000000), 0.86f to Color(0xE6000000), 1f to Color(0xFF000000))))
                     IconButton(
                         onClick = onBack,
-                        modifier = Modifier.align(Alignment.TopStart).padding(12.dp).size(40.dp)
+                        modifier = Modifier.align(Alignment.TopStart).padding(12.dp).focusRing(CircleShape, landing = false).size(40.dp)
                             .background(Color(0x8A000000), CircleShape),
                     ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White, modifier = Modifier.size(21.dp))
@@ -4858,7 +5079,8 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                 Box(Modifier.padding(horizontal = 16.dp)) {
                     StreamRow(
                         s, from.name, item.name, usual = s.url == usualUrl, slow = StreamBadges.slow(s, item.runtime),
-                        modifier = if (sectionIndex == 0 && i == 0) Modifier.focusRequester(firstRow) else Modifier,
+                        modifier = Modifier.returnTo("stream/" + from.manifestUrl + "/" + s.url)
+                            .then(if (sectionIndex == 0 && i == 0) Modifier.focusRequester(firstRow) else Modifier),
                         onPlay = { play(it, from, true) },
                     )
                 }
@@ -4906,6 +5128,8 @@ private fun StreamFilterChip(label: String, on: Boolean, onClick: () -> Unit) {
         fontSize = 13.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
         maxLines = 1,
         modifier = Modifier
+            // the active chip changed NOTHING when lit ("All", "Start over"): a ring outside it
+            .outerRing(focused && on, RoundedCornerShape(50))
             .clip(RoundedCornerShape(50))
             .background(if (on) Color.White else Color.Transparent)
             .border(1.dp, if (on) Color.Transparent else if (focused) Color.White else LineC, RoundedCornerShape(50))
@@ -4934,7 +5158,12 @@ private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual
     }
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
-    FocusCard(shape = RoundedCornerShape(14.dp), modifier = modifier.fillMaxWidth(), onClick = { onPlay(s) }) {
+    // the card's own source is this one, so the plate below does light on focus (the source was never passed, so it
+    // never did); a full-width row wears the ring instead of growing past the screen's edges
+    FocusCard(
+        shape = RoundedCornerShape(14.dp), modifier = modifier.fillMaxWidth(), onClick = { onPlay(s) },
+        zoom = false, interactionSource = interaction, landing = false,
+    ) {
         Row(
             Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(14.dp))
                 .border(1.dp, if (usual) Line2 else LineC, RoundedCornerShape(14.dp)).padding(12.dp),

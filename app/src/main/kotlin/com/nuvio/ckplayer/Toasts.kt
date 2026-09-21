@@ -25,6 +25,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -58,6 +59,9 @@ internal fun ToastHost(modifier: Modifier = Modifier) {
         delay(if (cur.second.length > 60) 3600L else 2200L)
         if (shown == cur) shown = null
     }
+    // a TV draws inside its overscan on older sets: keep clear of the title-safe edge (5 % of 540 dp)
+    val ctx = LocalContext.current
+    val top = if (remember(ctx) { Account.isTv(ctx) }) 32.dp else 10.dp
     AnimatedVisibility(
         visible = shown != null,
         enter = fadeIn(tween(160)) + slideInVertically(tween(160)) { -it / 2 },
@@ -65,7 +69,7 @@ internal fun ToastHost(modifier: Modifier = Modifier) {
         modifier = modifier,
     ) {
         Row(
-            Modifier.statusBarsPadding().padding(top = 10.dp).widthIn(max = 420.dp)
+            Modifier.statusBarsPadding().padding(top = top).widthIn(max = 420.dp)
                 .background(BarGlass, Pill).border(1.dp, Hairline, Pill)
                 .padding(horizontal = 16.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
