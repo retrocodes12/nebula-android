@@ -35,6 +35,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -135,7 +136,13 @@ internal fun SubtitlesPanel(
     // opening lands on the language that is showing (or Off) — for a remote; a finger needs no focus
     val firstFocus = remember { FocusRequester() }
     val keys = LocalInputModeManager.current.inputMode == InputMode.Keyboard
-    LaunchedEffect(Unit) { if (keys) runCatching { firstFocus.requestFocus() } }
+    // retried across a few frames (requestFocus says whether it took): one silent miss would leave nothing lit
+    LaunchedEffect(Unit) {
+        if (keys) repeat(10) {
+            withFrameNanos {}
+            if (runCatching { firstFocus.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+        }
+    }
 
     Box(
         Modifier.fillMaxSize().background(Scrim)

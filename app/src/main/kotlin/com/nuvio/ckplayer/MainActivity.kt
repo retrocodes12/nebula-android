@@ -145,12 +145,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.Modifier
@@ -240,8 +242,15 @@ import org.json.JSONObject
 internal object KeyWatch {
     var okDown by mutableStateOf(false)
         private set
+    /** When a navigation key last went down, on the uptime clock — "has the viewer moved on this page yet?"
+        Volume and media keys do not count, as on the web (Tab, Enter and the arrows). */
+    var lastDownAt = 0L
+        private set
 
     fun note(event: android.view.KeyEvent) {
+        if (event.action == android.view.KeyEvent.ACTION_DOWN && (event.keyCode == android.view.KeyEvent.KEYCODE_TAB ||
+                event.keyCode == android.view.KeyEvent.KEYCODE_ENTER || event.keyCode == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER ||
+                event.keyCode in android.view.KeyEvent.KEYCODE_DPAD_UP..android.view.KeyEvent.KEYCODE_DPAD_CENTER)) lastDownAt = event.eventTime
         val ok = event.keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
             event.keyCode == android.view.KeyEvent.KEYCODE_ENTER ||
             event.keyCode == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER
@@ -251,11 +260,23 @@ internal object KeyWatch {
     }
 }
 
+/**
+ * The player's remote (issue #1: "options only show at the beginning, then press up, down, left and right,
+ * nothing"). The controls fade after a few seconds, and the button that had focus goes with them — so nothing is
+ * focused, and a Compose key modifier only ever hears keys aimed at a focused node. Nothing heard the press
+ * that should have brought them back. The Activity's own dispatch hears every key whatever is focused, which
+ * is what the web player's document listener does; PlayerScreen installs its handler here while it is up.
+ */
+internal object PlayerKeys {
+    @Volatile var handler: ((android.view.KeyEvent) -> Boolean)? = null
+}
+
 class MainActivity : ComponentActivity() {
     private val pendingPlay = mutableStateOf<PlayReq?>(null)
 
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         KeyWatch.note(event)
+        if (PlayerKeys.handler?.invoke(event) == true) return true
         return super.dispatchKeyEvent(event)
     }
 
@@ -509,8 +530,9 @@ private var autoPlayedFor: String? = null
     Home, where it sits (see [HomeRows.orderIndex]). */
 private class CatRow(val addon: Addon, val catalog: CatalogRef, val items: List<MetaItem>, val oi: Int = 0)
 
-/** Session cache of addon manifests (Home and Search both need them). */
-internal val manifestCache = mutableMapOf<String, ManifestInfo>()
+/** Session cache of addon manifests (Home and Search both need them). Concurrent: the streams page,
+    the subtitle search and the stall watchdog each ask every add-on at once. */
+internal val manifestCache = java.util.concurrent.ConcurrentHashMap<String, ManifestInfo>()
 internal suspend fun manifestFor(url: String): ManifestInfo =
     manifestCache[url] ?: Stremio.loadManifest(url).also { manifestCache[url] = it }
 
@@ -4628,9 +4650,12 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
     LaunchedEffect(item, reload) {
         loading = true
         usualUrl = null
-        // the origin add-on and every enabled add-on that serves streams for this id — a switched-off origin feeds nothing either
-        val order = (listOf(addon) + activeAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }).filter { it.enabled }
-        val out = mutableListOf<Pair<Addon, List<StreamItem>>>()
+        // the origin add-on and every enabled add-on that serves streams for this id — a switched-off origin feeds nothing either;
+        // one entry per address, because the rows below are keyed by it
+        val order = (listOf(addon) + activeAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl })
+            .filter { it.enabled }.distinctBy { it.manifestUrl }
+        // one slot per add-on, in that order, filled as each answers — the list never reorders under the remote
+        val slots = arrayOfNulls<List<StreamItem>>(order.size)
         var failures = 0
         var floored = false        // an add-on answered, and Minimum quality hid every row of it
         val pf = NextEp.picked(ctx)
@@ -4654,29 +4679,39 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             play(pick, a, false)
         }
         val timer = if (Prefs.autoPick != "off" && autoPlayedFor != item.id) launch { delay(Prefs.pickWait * 1000L); decide() } else null
-        for (a in order) {
-            runCatching {
-                // origin is always asked; others only if their manifest matches
-                if (a.manifestUrl != addon.manifestUrl &&
-                    !manifestFor(a.manifestUrl).canStream(item.type, item.id)) return@runCatching
-                val raw = Stremio.loadStreams(a.base, item.type, item.id)
-                val streams = arrangeStreams(raw, item.runtime)
-                if (raw.isNotEmpty() && streams.isEmpty()) floored = true
-                if (streams.isNotEmpty()) {
-                    // the row that matches what was picked last time heads its
-                    // section — buried at row 30 of 40 it would help nobody
-                    var list = streams
-                    if (pf != null && pf.addonUrl == a.manifestUrl) {
-                        val twin = StreamTwin.match(streams, pf, a)?.takeIf { StreamTwin.isTwin(it, pf, a) }
-                        if (twin != null) { usualUrl = twin.url; list = listOf(twin) + streams.filter { it !== twin } }
+        // Every add-on at once (web parity). They were asked one after another, so the page waited for the SUM of
+        // every add-on's answer time and one slow add-on held up all the ones after it — the "very slow" on issue #1.
+        // Each answer is still handled here on the main thread, so the counters and slots need no locking.
+        order.mapIndexed { i, a ->
+            launch {
+                try {
+                    // origin is always asked; others only if their manifest matches
+                    if (a.manifestUrl != addon.manifestUrl &&
+                        !manifestFor(a.manifestUrl).canStream(item.type, item.id)) return@launch
+                    val raw = Stremio.loadStreams(a.base, item.type, item.id)
+                    val streams = arrangeStreams(raw, item.runtime)
+                    if (raw.isNotEmpty() && streams.isEmpty()) floored = true
+                    if (streams.isNotEmpty()) {
+                        // the row that matches what was picked last time heads its
+                        // section — buried at row 30 of 40 it would help nobody
+                        var list = streams
+                        if (pf != null && pf.addonUrl == a.manifestUrl) {
+                            val twin = StreamTwin.match(streams, pf, a)?.takeIf { StreamTwin.isTwin(it, pf, a) }
+                            if (twin != null) { usualUrl = twin.url; list = listOf(twin) + streams.filter { it !== twin } }
+                        }
+                        slots[i] = list
+                        val now = order.indices.mapNotNull { k -> slots[k]?.let { order[k] to it } }
+                        sections = now
+                        val n = now.sumOf { it.second.size }
+                        status = "$n stream${if (n > 1) "s" else ""}" + (if (now.size > 1) " from ${now.size} add-ons" else "")
                     }
-                    out.add(a to list)
-                    sections = out.toList()
-                    val n = out.sumOf { it.second.size }
-                    status = "$n stream${if (n > 1) "s" else ""}" + (if (out.size > 1) " from ${out.size} add-ons" else "")
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    failures++
                 }
-            }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; failures++ }
-        }
+            }
+        }.forEach { it.join() }
         timer?.cancel()
         decide()
         if (sections.isEmpty()) {
@@ -4688,6 +4723,20 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             }
         }
         loading = false
+    }
+    val shown = sections.filter { filter == null || it.first.name == filter }
+    // A remote lands on the top row as soon as there is one (web parity) and follows it while a higher-ranked add-on
+    // answers above — but only until the viewer presses something here; focus is never pulled out from under a hand.
+    val remote = remember(ctx) { Account.isTv(ctx) } || LocalInputModeManager.current.inputMode == InputMode.Keyboard
+    val openedAt = remember(item.id, reload) { android.os.SystemClock.uptimeMillis() }
+    val firstRow = remember { FocusRequester() }
+    val landOn = shown.firstOrNull()?.let { it.first.manifestUrl + "\n" + it.second.first().url }
+    LaunchedEffect(landOn) {
+        if (!remote || landOn == null || KeyWatch.lastDownAt > openedAt) return@LaunchedEffect
+        repeat(10) {
+            withFrameNanos {}
+            if (runCatching { firstRow.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+        }
     }
     Column(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
@@ -4758,16 +4807,23 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                 }
             }
             if (loading && sections.isEmpty()) items(4) { Box(Modifier.padding(horizontal = 16.dp)) { SkeletonRow(42.dp, 42.dp, circle = true) } }
-            sections.filter { filter == null || it.first.name == filter }.forEachIndexed { sectionIndex, (from, streams) ->
-                if (sections.size > 1) item(key = "head/$sectionIndex") {
+            // keyed by add-on and place, not by position: add-ons answer in any order and a slower one lands ABOVE a
+            // faster one, so position keys would slide a different stream under the row the remote is on
+            shown.forEachIndexed { sectionIndex, (from, streams) ->
+                if (sections.size > 1) item(key = "head/${from.manifestUrl}") {
                     Text(
                         from.name, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold,
                         modifier = Modifier.padding(horizontal = 16.dp).padding(top = 6.dp),
                     )
                 }
-            items(streams) { s ->
+            items(streams.size, key = { "row/${from.manifestUrl}/$it" }) { i ->
+                val s = streams[i]
                 Box(Modifier.padding(horizontal = 16.dp)) {
-                    StreamRow(s, from.name, item.name, usual = s.url == usualUrl, slow = StreamBadges.slow(s, item.runtime), onPlay = { play(it, from, true) })
+                    StreamRow(
+                        s, from.name, item.name, usual = s.url == usualUrl, slow = StreamBadges.slow(s, item.runtime),
+                        modifier = if (sectionIndex == 0 && i == 0) Modifier.focusRequester(firstRow) else Modifier,
+                        onPlay = { play(it, from, true) },
+                    )
                 }
             }
             }
@@ -4824,7 +4880,7 @@ private fun StreamFilterChip(label: String, on: Boolean, onClick: () -> Unit) {
 /** A stream row: resolution plate, release name, badges, and a right-hand
     spec column — the parts you actually choose by, nothing said twice. */
 @Composable
-private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual: Boolean = false, slow: Boolean = false, onPlay: (StreamItem) -> Unit) {
+private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual: Boolean = false, slow: Boolean = false, modifier: Modifier = Modifier, onPlay: (StreamItem) -> Unit) {
     val raw = remember(s.url) { s.name + "\n" + s.title }
     val plate = remember(s.url) { StreamBadges.plate(raw) }
     val m = remember(s.url) { StreamBadges.match(raw, if (plate != null) "resolution" else null) }
@@ -4841,7 +4897,7 @@ private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual
     }
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
-    FocusCard(shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth(), onClick = { onPlay(s) }) {
+    FocusCard(shape = RoundedCornerShape(14.dp), modifier = modifier.fillMaxWidth(), onClick = { onPlay(s) }) {
         Row(
             Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(14.dp))
                 .border(1.dp, if (usual) Line2 else LineC, RoundedCornerShape(14.dp)).padding(12.dp),
@@ -4942,11 +4998,11 @@ private fun BoxScope.ReactionFloat(emoji: String, name: String) {
 
 /** One row of the in-player subtitle picker. */
 @Composable
-private fun SubMenuRow(label: String, active: Boolean, onClick: () -> Unit) {
+private fun SubMenuRow(label: String, active: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     Row(
-        Modifier.fillMaxWidth()
+        modifier.fillMaxWidth()
             .clickable(interactionSource = interaction, indication = null) { onClick() }
             .background(if (focused) Color(0x14FFFFFF) else Color.Transparent)
             .padding(horizontal = 16.dp, vertical = 11.dp),
@@ -5021,6 +5077,7 @@ private fun PlayerScreen(
     // the Title Card chrome replaces Media3's controller entirely
     var chromeVisible by remember { mutableStateOf(true) }
     var chromeTouchedAt by remember { mutableStateOf(System.currentTimeMillis()) }
+    var trackListOpen by remember { mutableStateOf(false) }   // the Audio or Quality list is up over the video
     var isPlayingState by remember { mutableStateOf(false) }
     var isLiveState by remember { mutableStateOf(false) }
     var posMs by remember { mutableStateOf(0L) }
@@ -5318,17 +5375,25 @@ private fun PlayerScreen(
         addonSubs = emptyList()                      // the last title's offers are not this one's
         if (contentType == null || contentId == null) return@LaunchedEffect
         subSearching = true
-        val found = mutableListOf<AddonSub>()
+        // every add-on at once, one slot each so the panel's order is the add-on order whoever answers first
+        val addons = activeAddons(context)
+        val slots = arrayOfNulls<List<AddonSub>>(addons.size)
         try {
-            for (a in activeAddons(context)) {
-                runCatching {
-                    if (!manifestFor(a.manifestUrl).canSubs(contentType, contentId)) return@runCatching
-                    found += Stremio.loadSubtitles(a.base, contentType, contentId).map { AddonSub(it, a.name) }
-                }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
-                // the panel fills in as each add-on answers; a handful per language is plenty
-                addonSubs = found.groupBy { it.track.lang.lowercase() }.toSortedMap()
-                    .values.flatMap { it.take(6) }.take(72)
-            }
+            addons.mapIndexed { i, a ->
+                launch {
+                    try {
+                        if (!manifestFor(a.manifestUrl).canSubs(contentType, contentId)) return@launch
+                        slots[i] = Stremio.loadSubtitles(a.base, contentType, contentId).map { AddonSub(it, a.name) }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        return@launch
+                    }
+                    // the panel fills in as each add-on answers; a handful per language is plenty
+                    addonSubs = slots.filterNotNull().flatten().groupBy { it.track.lang.lowercase() }.toSortedMap()
+                        .values.flatMap { it.take(6) }.take(72)
+                }
+            }.forEach { it.join() }
         } finally { subSearching = false }
     }
 
@@ -5516,7 +5581,7 @@ private fun PlayerScreen(
             }
             if (swapOffer != null && now - swapShownAt > 60_000) swapOffer = null   // an offer nobody took lapses once playback has settled
             // Controls hide after (Settings › Playback)
-            if (chromeVisible && exo.isPlaying && !subPanelOpen && !sleepMenuOpen && !scrubbing &&
+            if (chromeVisible && exo.isPlaying && !subPanelOpen && !sleepMenuOpen && !scrubbing && !trackListOpen &&
                 now - chromeTouchedAt > (Prefs.controlsHide * 1000f).toLong()) chromeVisible = false
             // Skip intro / recap: offer the pill, or take it on Auto once per segment a sitting
             // (a scrub back into the titles is taken as meant); a party viewer follows the host.
@@ -5681,16 +5746,140 @@ private fun PlayerScreen(
         }
     }
 
+    // ---- the remote (Android TV, or any keyboard) — issue #1, and the shared player's #pui key rules ----
+    // With the controls asleep, ANY press wakes them: ←/→ open the preview on the seek bar (OK jumps, Back drops
+    // it), everything else lights Play/Pause — except OK on a floating button (Skip intro, Try another source,
+    // Up next), which is that button. While they are up every press keeps them up, and Back puts them away
+    // before it leaves the player. Nothing here runs for a finger: a phone never sends a D-pad key.
+    val inputModes = LocalInputModeManager.current
+    val tvBox = remember { Account.isTv(context) }
+    val remoteNow = tvBox || inputModes.inputMode == InputMode.Keyboard
+    val playFocus = remember { FocusRequester() }
+    val sleepFocus = remember { FocusRequester() }
+    val sleepRowFocus = remember { FocusRequester() }
+    val upnextFocus = remember { FocusRequester() }
+    var chromeHasFocus by remember { mutableStateOf(false) }     // a control inside the chrome is lit
+    var rootHasFocus by remember { mutableStateOf(false) }       // anything on this screen is lit
+    var upnextHasFocus by remember { mutableStateOf(false) }
+    var scrubKick by remember { mutableStateOf<Pair<Int, Int>?>(null) }   // (direction, serial) for the seek bar
+    var wakeSerial by remember { mutableStateOf(0) }
+    /** The controls stay up under the Audio / Quality list (the web keeps them for its menus), so the remote
+        comes back to the button it left from rather than to a chrome that faded while the list was open. */
+    fun android.app.Dialog.keepChrome(): android.app.Dialog = apply {
+        trackListOpen = true
+        setOnDismissListener { trackListOpen = false; chromeTouchedAt = System.currentTimeMillis() }
+    }
+    val landing = remember { LongArray(1) }                  // until when a wake's focus is still on its way
+    val swallowUp = remember { IntArray(1) { -1 } }          // the release of a press this screen took for itself
+    fun wake(dir: Int) {
+        chromeVisible = true
+        val now = System.currentTimeMillis()
+        chromeTouchedAt = now
+        landing[0] = now + 500
+        if (dir != 0) scrubKick = dir to ((scrubKick?.second ?: 0) + 1) else wakeSerial++
+    }
+    // the chrome fades in, so Play/Pause is composed a frame or two after the press: retry across a few frames
+    LaunchedEffect(wakeSerial) {
+        if (wakeSerial == 0) return@LaunchedEffect
+        repeat(10) {
+            withFrameNanos {}
+            if (runCatching { playFocus.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+        }
+    }
+    fun remoteDown(code: Int): Boolean {
+        val side = code == android.view.KeyEvent.KEYCODE_DPAD_LEFT || code == android.view.KeyEvent.KEYCODE_DPAD_RIGHT
+        val arrow = side || code == android.view.KeyEvent.KEYCODE_DPAD_UP || code == android.view.KeyEvent.KEYCODE_DPAD_DOWN
+        val ok = code == android.view.KeyEvent.KEYCODE_DPAD_CENTER || code == android.view.KeyEvent.KEYCODE_ENTER ||
+            code == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER
+        if (!arrow && !ok) return false           // Back goes through the handler below; media keys reach the session
+        val now = System.currentTimeMillis()
+        // the Subtitles panel and the sleep menu own the keys while they are up; the chrome waits behind them
+        if (subPanelOpen || sleepMenuOpen) { chromeTouchedAt = now; return false }
+        // a wake's focus has not landed yet: a held key's repeats belong to the wake, or they would land on nothing
+        if (now < landing[0] && !chromeHasFocus) return true
+        if (chromeVisible) {
+            chromeTouchedAt = now                 // moving about the controls keeps them up
+            if (rootHasFocus) return false        // something is lit: Compose moves focus as usual
+            // up, but nothing lit (the player just opened, the Audio list just closed): the first press lights Play/Pause
+            wake(0); swallowUp[0] = code
+            return true
+        }
+        // asleep but still fading, a control still lit: the press only brings them back, focus where it was —
+        // otherwise OK would press that control (Play/Pause, say) behind a chrome still on its way out
+        if (chromeHasFocus) { chromeVisible = true; chromeTouchedAt = now; swallowUp[0] = code; return true }
+        // asleep: OK on a floating button is that button, and ←/→ walk the Up next card's two buttons
+        if (rootHasFocus && (ok || (side && upnextOpen && upnextHasFocus))) return false
+        wake(when (code) {
+            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> -1
+            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> 1
+            else -> 0
+        })
+        swallowUp[0] = code
+        return true
+    }
+    val onRemoteKey by rememberUpdatedState<(android.view.KeyEvent) -> Boolean>({ ev ->
+        when {
+            // the release of a press taken here is taken too, or it would click whatever the press just lit
+            ev.action == android.view.KeyEvent.ACTION_UP ->
+                if (ev.keyCode == swallowUp[0]) { swallowUp[0] = -1; true } else false
+            ev.action != android.view.KeyEvent.ACTION_DOWN || inPipMode.value -> false
+            else -> remoteDown(ev.keyCode)
+        }
+    })
+    DisposableEffect(Unit) {
+        val mine: (android.view.KeyEvent) -> Boolean = { onRemoteKey(it) }
+        PlayerKeys.handler = mine
+        // a screen replacement briefly overlaps two players: only the one that installed it takes it away
+        onDispose { if (PlayerKeys.handler === mine) PlayerKeys.handler = null }
+    }
+    // Back peels one layer on a remote, as on the web: the sleep menu, then the Up next card, then the controls —
+    // and only then leaves. A phone's back gesture still leaves at once. The Subtitles panel and a seek-bar preview
+    // register their own Back later, so they are peeled first.
+    BackHandler(enabled = remoteNow && !pip && (sleepMenuOpen || upnextOpen || chromeVisible)) {
+        when {
+            sleepMenuOpen -> { sleepMenuOpen = false; chromeTouchedAt = System.currentTimeMillis() }
+            upnextOpen -> { upnextCounting = false; upnextOpen = false; upnextDismissed = true }
+            else -> chromeVisible = false
+        }
+    }
+    // The sleep menu floats at the right edge, away from the toolbar the D-pad walks: opening it
+    // lights its chosen row, and closing it (a pick or Back) hands the remote back to the Sleep button.
+    val sleepWasOpen = remember { BooleanArray(1) }
+    LaunchedEffect(sleepMenuOpen) {
+        val target = when {
+            sleepMenuOpen && remoteNow -> sleepRowFocus
+            !sleepMenuOpen && sleepWasOpen[0] && remoteNow && chromeVisible -> sleepFocus
+            else -> null
+        }
+        sleepWasOpen[0] = sleepMenuOpen
+        if (target != null) repeat(10) {
+            withFrameNanos {}
+            if (runCatching { target.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+        }
+    }
+    // With the chrome asleep the Up next card takes the remote (after Skip and the source pill, which already do),
+    // so OK near the end is Play now — as the web card owns OK.
+    LaunchedEffect(upnextOpen, chromeVisible, skipKind == null, swapOffer == null) {
+        if (!upnextOpen || chromeVisible || !remoteNow || skipKind != null || swapOffer != null) return@LaunchedEffect
+        repeat(10) {
+            withFrameNanos {}
+            if (runCatching { upnextFocus.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+        }
+    }
+
     // On a phone on its side the chrome keeps the title beside Back; on a TV-height screen it sits above the
     // scrubber, so the cards that float above the chrome (Skip, Up next) start higher there.
     val shortScreen = LocalConfiguration.current.screenHeightDp < 480
     val aboveChrome = if (!chromeVisible) 40.dp else if (shortScreen) 150.dp else 214.dp
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
+    Box(Modifier.fillMaxSize().background(Color.Black).onFocusChanged { rootHasFocus = it.hasFocus }) {
         AndroidView(
             factory = { ctx ->
                 PlayerView(ctx).apply {
                     player = exo
                     useController = false          // the Title Card chrome is the controller
+                    // and never a place for the remote to land: a focused PlayerView would swallow the D-pad
+                    isFocusable = false
+                    descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
                     setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
                     playerViewRef = this
                     subtitleView?.let { SubStyle.apply(ctx, it) }
@@ -5757,7 +5946,7 @@ private fun PlayerScreen(
         // the Title Card chrome (see PlayerChrome.kt)
         // a scrim under the pause board, so the words read over any picture
         if (pauseBoardOn && !pip) Box(Modifier.fillMaxSize().background(Color(0x7A000000)))
-        if (!pip) TitleCardChrome(
+        if (!pip) Box(Modifier.fillMaxSize().onFocusChanged { chromeHasFocus = it.hasFocus }) { TitleCardChrome(
             visible = chromeVisible,
             title = showName,
             isPlaying = isPlayingState,
@@ -5769,6 +5958,10 @@ private fun PlayerScreen(
             seekStepMs = Prefs.seekStep * 1000L,
             liveOffsetMs = liveOffMs,
             subtitlesFocus = subsFocus,
+            playFocus = playFocus,
+            sleepFocus = sleepFocus,
+            scrubKick = scrubKick,
+            onScrubKickTaken = { k -> if (scrubKick?.second == k) scrubKick = null },
             dimTitle = pauseBoardOn,
             infoOn = pinfoOn,
             onInfo = { pinfoOn = !pinfoOn; chromeTouchedAt = System.currentTimeMillis() },
@@ -5827,13 +6020,13 @@ private fun PlayerScreen(
             onAudio = {
                 runCatching {
                     TrackSelectionDialogBuilder(context, "Audio", exo, C.TRACK_TYPE_AUDIO)
-                        .setShowDisableOption(false).build().show()
+                        .setShowDisableOption(false).build().keepChrome().show()
                 }
             },
             onQuality = {
                 runCatching {
                     TrackSelectionDialogBuilder(context, "Quality", exo, C.TRACK_TYPE_VIDEO)
-                        .setAllowAdaptiveSelections(true).setShowDisableOption(false).build().show()
+                        .setAllowAdaptiveSelections(true).setShowDisableOption(false).build().keepChrome().show()
                 }
             },
             onSpeedCycle = {
@@ -5855,7 +6048,7 @@ private fun PlayerScreen(
                     setImmersive(it, isFullscreen)
                 }
             },
-        )
+        ) }
         // The pause board (top-left, under the back button) and the playback HUD (top-right)
         if (!pip) {
             val remain = (durMs - posMs).coerceAtLeast(0L)
@@ -5906,11 +6099,15 @@ private fun PlayerScreen(
                     color = MutedC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                 )
-                SubMenuRow("Off", sleepMode.isEmpty()) { sleepSet("") }
+                // the remote lands on the chosen row: "When this episode ends" when that is set, else Off
+                val epRow = sleepMode == "ep" && nextEpisode != null
+                SubMenuRow("Off", sleepMode.isEmpty(), if (!epRow) Modifier.focusRequester(sleepRowFocus) else Modifier) { sleepSet("") }
                 listOf(15, 30, 45, 60, 90).forEach { m ->
                     SubMenuRow("In ${sleepText(m * 60_000L)}", false) { sleepSet("min", m) }
                 }
-                if (nextEpisode != null) SubMenuRow("When this episode ends", sleepMode == "ep") { sleepSet("ep") }
+                if (nextEpisode != null) SubMenuRow(
+                    "When this episode ends", sleepMode == "ep", if (epRow) Modifier.focusRequester(sleepRowFocus) else Modifier,
+                ) { sleepSet("ep") }
                 Text(
                     if (sleepMode == "min") "Pausing in ${sleepText(sleepAt - System.currentTimeMillis())}."
                     else "Playback pauses when the time is up.",
@@ -5982,6 +6179,7 @@ private fun PlayerScreen(
             Column(
                 Modifier.align(Alignment.BottomEnd)
                     .padding(end = 20.dp, bottom = if (chromeVisible) aboveChrome else 150.dp)
+                    .onFocusChanged { upnextHasFocus = it.hasFocus }
                     .width(300.dp)
                     .background(Color(0xE62C2C2E), RoundedCornerShape(16.dp))
                     .padding(18.dp),
@@ -6004,6 +6202,7 @@ private fun PlayerScreen(
                     Button(
                         // a hand on Play now ends the autoplay run the Still watching? count is about
                         onClick = { upnextCounting = false; autoRun = 0; onPlayNext(nextEpisode) },
+                        modifier = Modifier.focusRequester(upnextFocus),
                         colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
                         shape = RoundedCornerShape(50),
                     ) { Text(if (upnextCounting) "Play now ($upnextLeft)" else "Play now", fontWeight = FontWeight.SemiBold) }

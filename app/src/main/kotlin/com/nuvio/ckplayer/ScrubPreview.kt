@@ -33,10 +33,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.key.Key
@@ -401,6 +404,8 @@ internal fun Scrubber(
     onSeekBy: (Long) -> Unit, onSeekTo: (Long) -> Unit, onScrub: (Long?) -> Unit,
     modifier: Modifier = Modifier,
     stepMs: Long = 10_000L,          // Skip by (Settings › Playback): one press; ×3 after five quick ones, ×6 after ten
+    kick: Pair<Int, Int>? = null,    // (direction, serial): a ←/→ that woke the hidden chrome — take focus, take that step
+    onKickTaken: (Int) -> Unit = {},  // the serial it was given, so a stale one never clears a newer kick
 ) {
     val context = LocalContext.current
     val tv = remember { Account.isTv(context) }
@@ -418,6 +423,32 @@ internal fun Scrubber(
     val onScrubNow by rememberUpdatedState(onScrub)
     val onSeekToNow by rememberUpdatedState(onSeekTo)
     fun cancelScrub() { if (scrubMs != null) { scrubMs = null; onScrubNow(null) } }
+    /** One ←/→ on the focused rail: move the preview (a live stream, or no length yet, seeks at once as before). */
+    fun step(dir: Int) {
+        if (isLive || durationMs <= 0) { onSeekBy(dir * stepMs); return }
+        val now = System.currentTimeMillis()
+        scrubRun = if (now - scrubLastAt <= 400) scrubRun + 1 else 1
+        scrubLastAt = now
+        val step = when { scrubRun > 10 -> stepMs * 6; scrubRun > 5 -> stepMs * 3; else -> stepMs }
+        val t = ((scrubMs ?: positionMs) + dir * step).coerceIn(0L, durationMs)
+        scrubMs = t
+        scrubTick++
+        onScrubNow(t)
+    }
+    // The chrome woke on a ←/→ (the TV rule the web player follows: the preview moves, OK jumps, Back drops it).
+    // The rail is composed with the chrome, which fades in — so retry across a few frames, and the step waits for
+    // the focus: a preview on an unfocused rail would be cancelled by the focus effect above the moment it ran.
+    val railFocus = remember { FocusRequester() }
+    val onKickTakenNow by rememberUpdatedState(onKickTaken)
+    LaunchedEffect(kick?.second) {
+        val k = kick ?: return@LaunchedEffect
+        try {
+            repeat(10) {
+                withFrameNanos {}
+                if (runCatching { railFocus.requestFocus() }.getOrDefault(false)) { step(k.first); return@LaunchedEffect }
+            }
+        } finally { onKickTakenNow(k.second) }    // taken or not, once: a chrome shown again later must not replay it
+    }
     LaunchedEffect(scrubMs != null, scrubTick) { if (scrubMs != null) { delay(4000); cancelScrub() } }
     LaunchedEffect(seekFocused) { if (!seekFocused) cancelScrub() }
     LaunchedEffect(durationMs) { cancelScrub() }     // a new item's length arrived: a remote preview of the old one is void
@@ -436,6 +467,7 @@ internal fun Scrubber(
         Box(
             Modifier.fillMaxWidth().height(26.dp).padding(top = 12.dp)
                 .onSizeChanged { trackWidth = it.width.coerceAtLeast(1) }
+                .focusRequester(railFocus)
                 .focusable(interactionSource = seekInteraction)
                 .onKeyEvent { e ->
                     if (e.type == KeyEventType.KeyUp) {
@@ -446,17 +478,7 @@ internal fun Scrubber(
                     swallowBackUp = false           // a KeyUp that never came back here must not eat a later Back
                     when (e.key) {
                         Key.DirectionLeft, Key.DirectionRight -> {
-                            val dir = if (e.key == Key.DirectionLeft) -1 else 1
-                            // live, or a length not known yet: nothing to preview, so seek at once as before
-                            if (isLive || durationMs <= 0) { onSeekBy(dir * stepMs); return@onKeyEvent true }
-                            val now = System.currentTimeMillis()
-                            scrubRun = if (now - scrubLastAt <= 400) scrubRun + 1 else 1
-                            scrubLastAt = now
-                            val step = when { scrubRun > 10 -> stepMs * 6; scrubRun > 5 -> stepMs * 3; else -> stepMs }
-                            val t = ((scrubMs ?: positionMs) + dir * step).coerceIn(0L, durationMs)
-                            scrubMs = t
-                            scrubTick++
-                            onScrubNow(t)
+                            step(if (e.key == Key.DirectionLeft) -1 else 1)
                             true
                         }
                         Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {

@@ -1,6 +1,10 @@
 package com.nuvio.ckplayer
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 /**
  * The stall watchdog's memory and its search for a sibling — mirrors the shared player's stall / stallPick.
@@ -35,14 +39,21 @@ internal class StallWatch {
             val all = activeAddons(ctx)
             val origin = all.firstOrNull { it.manifestUrl == originUrl }
             val order = listOfNotNull(origin) + all.filter { origin == null || it.manifestUrl != origin.manifestUrl }
-            val out = ArrayList<Pair<StreamItem, Addon>>()
-            for (a in order) {
-                runCatching {
-                    if ((origin == null || a.manifestUrl != origin.manifestUrl) && !manifestFor(a.manifestUrl).canStream(type, id)) return@runCatching
-                    arrangeStreams(Stremio.loadStreams(a.base, type, id), runtime).forEach { out.add(it to a) }
-                }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+            // every add-on at once, as the streams page asks them; the list keeps the page's order
+            return coroutineScope {
+                order.map { a ->
+                    async<List<Pair<StreamItem, Addon>>> {
+                        try {
+                            if ((origin == null || a.manifestUrl != origin.manifestUrl) && !manifestFor(a.manifestUrl).canStream(type, id)) emptyList()
+                            else arrangeStreams(Stremio.loadStreams(a.base, type, id), runtime).map { it to a }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            emptyList()
+                        }
+                    }
+                }.awaitAll().flatten()
             }
-            return out
         }
 
         /** The next row after the playing one, round the list: not its twin, and one this connection carries before one it cannot. */

@@ -365,10 +365,11 @@ object Stremio {
         return out
     }
 
-    suspend fun loadStreams(base: String, type: String, id: String): List<StreamItem> {
+    /** Parsed off the main thread: a torrent add-on can answer with hundreds of rows, and every add-on now answers at once. */
+    suspend fun loadStreams(base: String, type: String, id: String): List<StreamItem> = withContext(Dispatchers.IO) {
         val u = "$base/stream/${enc(type)}/${enc(id)}.json"
         val j = JSONObject(httpGetText(u))
-        val arr = j.optJSONArray("streams") ?: return emptyList()
+        val arr = j.optJSONArray("streams") ?: return@withContext emptyList()
         val out = mutableListOf<StreamItem>()
         for (i in 0 until arr.length()) {
             val s = arr.getJSONObject(i)
@@ -401,7 +402,7 @@ object Stremio {
                 fileName = bh?.optString("filename").orEmpty(),
             ))
         }
-        return out
+        out
     }
 
     /** Extract a ClearKey license URL (dashif:laurl / clearkey:Laurl) from a DASH manifest. */

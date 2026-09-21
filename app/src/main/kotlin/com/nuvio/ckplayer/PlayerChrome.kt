@@ -60,12 +60,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -96,13 +101,21 @@ private fun GlassCircle(
     size: Dp = 44.dp,
     iconSize: Dp = 22.dp,
     on: Boolean = false,                 // a lit toggle (the info HUD) inverts to white
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val bg = if (on) (if (focused) Color.White else Color(0xEBFFFFFF)) else if (focused) GlassHot else Glass
+    // under a remote the lit button wears the web player's ring (4 px of half-white outside the glass) and grows a
+    // little — a lighter grey alone does not read from a sofa. A finger never focuses these, so a phone is unchanged.
+    val ring = focused && LocalInputModeManager.current.inputMode == InputMode.Keyboard
     Box(
-        Modifier.size(size)
+        modifier.size(size)
+            .scale(if (ring) 1.06f else 1f)
+            .then(if (ring) Modifier.drawBehind {
+                drawCircle(Color(0x80FFFFFF), radius = this.size.minDimension / 2 + 2.dp.toPx(), style = Stroke(4.dp.toPx()))
+            } else Modifier)
             .background(bg, CircleShape)
             .clickable(interactionSource = interaction, indication = null) { onClick() },
         contentAlignment = Alignment.Center,
@@ -202,6 +215,7 @@ private fun PlayerToolbar(
     hasNext: Boolean, showSubtitles: Boolean, showAudio: Boolean,
     qualityLabel: String?, speedLabel: String, sleepLabel: String?, partyActive: Boolean,
     subtitlesFocus: FocusRequester?,
+    sleepFocus: FocusRequester? = null,
     onNext: () -> Unit, onSubtitles: () -> Unit, onAudio: () -> Unit, onQuality: () -> Unit,
     onSpeedCycle: () -> Unit, onSleep: () -> Unit, onParty: () -> Unit, onInvite: () -> Unit, onReact: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -223,7 +237,11 @@ private fun PlayerToolbar(
             if (showAudio) ToolItem(Icons.Outlined.Audiotrack, "Audio", onClick = onAudio)
             if (qualityLabel != null) ToolItem(Icons.Outlined.HighQuality, "Quality", qualityLabel, onClick = onQuality)
             ToolItem(Icons.Outlined.Speed, "Speed", speedLabel, onClick = onSpeedCycle)
-            ToolItem(Icons.Outlined.Bedtime, "Sleep", sleepLabel, on = sleepLabel != null, onClick = onSleep)
+            ToolItem(
+                Icons.Outlined.Bedtime, "Sleep", sleepLabel, on = sleepLabel != null,
+                modifier = if (sleepFocus != null) Modifier.focusRequester(sleepFocus) else Modifier,
+                onClick = onSleep,
+            )
             ToolItem(Icons.Outlined.Groups, if (partyActive) "Leave party" else "Party", onClick = onParty)
             if (partyActive) {
                 ToolItem(Icons.Outlined.PersonAdd, "Invite", onClick = onInvite)
@@ -355,6 +373,10 @@ internal fun TitleCardChrome(
     clockLine: String? = null,          // "9:41 pm · Ends 11:12 pm" (just the clock on live)
     liveOffsetMs: Long = 0L,            // how far behind the live edge, for the left pill
     subtitlesFocus: FocusRequester? = null,   // so the panel can hand focus back to its opener
+    playFocus: FocusRequester? = null,        // the remote's landing place when the chrome wakes
+    sleepFocus: FocusRequester? = null,       // the sleep menu hands focus back here when it closes
+    scrubKick: Pair<Int, Int>? = null,        // (direction, serial): a ←/→ that woke the chrome onto the seek bar
+    onScrubKickTaken: (Int) -> Unit = {},
     scrubFrame: State<Bitmap?>? = null,       // the scrub preview's frame for the position being previewed
     onScrub: (Long?) -> Unit = {},            // a preview position is up (finger or remote); null when it ends
     seekStepMs: Long = 10_000L,               // Skip by (Settings › Playback): the transport's step
@@ -417,7 +439,9 @@ internal fun TitleCardChrome(
                 Spacer(Modifier.width(34.dp))
                 GlassCircle(
                     if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    "Play/Pause", size = 80.dp, iconSize = 40.dp, onClick = onPlayPause,
+                    "Play/Pause", size = 80.dp, iconSize = 40.dp,
+                    modifier = if (playFocus != null) Modifier.focusRequester(playFocus) else Modifier,
+                    onClick = onPlayPause,
                 )
                 Spacer(Modifier.width(34.dp))
                 GlassCircle(fwdIcon, "Forward $stepS seconds", size = 56.dp, iconSize = 26.dp) { onSeekBy(seekStepMs) }
@@ -435,6 +459,7 @@ internal fun TitleCardChrome(
                     positionMs = positionMs, durationMs = durationMs, bufferedMs = bufferedMs,
                     isLive = isLive, liveOffsetMs = liveOffsetMs, frame = scrubFrame,
                     onSeekBy = onSeekBy, onSeekTo = onSeekTo, onScrub = onScrub, stepMs = seekStepMs,
+                    kick = scrubKick, onKickTaken = onScrubKickTaken,
                 )
                 // elapsed at the left end, remaining (or, on a tap, the total) at the right — glass pills
                 Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -454,7 +479,7 @@ internal fun TitleCardChrome(
                 PlayerToolbar(
                     hasNext = hasNext, showSubtitles = showSubtitles, showAudio = showAudio,
                     qualityLabel = qualityLabel, speedLabel = speedLabel, sleepLabel = sleepLabel, partyActive = partyActive,
-                    subtitlesFocus = subtitlesFocus,
+                    subtitlesFocus = subtitlesFocus, sleepFocus = sleepFocus,
                     onNext = onNext, onSubtitles = onSubtitles, onAudio = onAudio, onQuality = onQuality,
                     onSpeedCycle = onSpeedCycle, onSleep = onSleep, onParty = onParty, onInvite = onInvite, onReact = onReact,
                     modifier = Modifier.padding(top = 10.dp),
