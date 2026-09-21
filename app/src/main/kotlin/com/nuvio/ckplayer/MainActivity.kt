@@ -1517,11 +1517,17 @@ internal fun tvFirstFocus(ready: Boolean = true, key: Any? = Unit): FocusRequest
     val tv = remember(ctx) { Account.isTv(ctx) }
     val keys = LocalInputModeManager.current.inputMode == InputMode.Keyboard
     val entry = LocalScreenEntry.current
+    // Once per visit, and only while the viewer has not moved: [ready] can turn true again later (Home's list pivots
+    // back to the top when the viewer walks up to it; slow rows land after a cold start while the viewer browses
+    // Continue watching) and a second claim would pull focus out from under a hand.
+    val openedAt = remember(key) { android.os.SystemClock.uptimeMillis() }
+    var claimed by remember(key) { mutableStateOf(false) }
     LaunchedEffect(tv || keys, ready, key) {
-        if (!(tv || keys) || !ready) return@LaunchedEffect
+        if (!(tv || keys) || !ready || claimed) return@LaunchedEffect
+        if (KeyWatch.lastDownAt > openedAt) { claimed = true; return@LaunchedEffect }
         // Back returned here: the item the viewer left takes focus instead (Modifier.returnTo); this lands only if
         // that never happens
-        if (yieldToReturn(entry)) return@LaunchedEffect
+        if (yieldToReturn(entry)) { claimed = true; return@LaunchedEffect }
         // requestFocus() RETURNS whether it took; runCatching only guards the throw from a
         // requester with no node attached yet. A list's first item is composed a frame after
         // the list itself and an AnimatedContent screen fades in over ~180 ms, so retry across
@@ -1529,7 +1535,7 @@ internal fun tvFirstFocus(ready: Boolean = true, key: Any? = Unit): FocusRequest
         // which is the whole defect being fixed.
         repeat(10) {
             withFrameNanos {}
-            if (runCatching { req.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+            if (runCatching { req.requestFocus() }.getOrDefault(false)) { claimed = true; return@LaunchedEffect }
         }
     }
     return req
@@ -2425,6 +2431,8 @@ private fun BottomBar(current: Screen, onTab: (Screen) -> Unit, modifier: Modifi
  */
 @Composable
 private fun SideRail(current: Screen, onTab: (Screen) -> Unit) {
+    // a rail taken away while it held focus (a deep link or a party replacing the stack) says so on its way out
+    DisposableEffect(Unit) { onDispose { RailFocus.has = false } }
     Column(
         Modifier.fillMaxHeight().width(104.dp)
             // a screen's fallback landing leaves a viewer on the rail alone (TvFocus.kt)
@@ -2799,6 +2807,18 @@ private fun HomeScreen(
         // keeps the old ones on screen until the new set is whole: blanking them first took away the card Back was
         // returning to and dropped the list's place.
         val rebuilding = st.rows.isNotEmpty()
+        // …but a row whose add-on was just removed or switched off, or which was just hidden, goes at once
+        if (rebuilding) {
+            val keep = st.rows.filter { r ->
+                val a = addons.firstOrNull { it.manifestUrl == r.addon.manifestUrl } ?: return@filter false
+                val ci = runCatching {
+                    manifestFor(a.manifestUrl).catalogs.filter { it.browsable }
+                        .indexOfFirst { it.type == r.catalog.type && it.id == r.catalog.id }
+                }.getOrDefault(-1)
+                ci < 0 || HomeRows.visible(ctx, HomeRows.key(a, r.catalog), ci)
+            }
+            if (keep.size != st.rows.size) st.rows = keep
+        }
         for ((ai, a) in addons.withIndex()) {
             runCatching {
                 val all = manifestFor(a.manifestUrl).catalogs.filter { it.browsable }
@@ -2812,7 +2832,8 @@ private fun HomeScreen(
                 st.wanted += wanted.size
                 for ((c, oi) in wanted) {
                     runCatching {
-                        val items = Stremio.loadCatalog(a.base, c, null).take(15)
+                        // one card per title: the row is keyed by it (a catalogue listing a title twice would crash it)
+                        val items = Stremio.loadCatalog(a.base, c, null).distinctBy { it.type + ":" + it.id }.take(15)
                         if (items.isNotEmpty()) {
                             rows.add(CatRow(a, c, items, oi)); rows.sortBy { it.oi }
                             if (!rebuilding) st.rows = rows.toList()
@@ -2959,7 +2980,8 @@ private fun HomeScreen(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             contentPadding = PaddingValues(horizontal = 16.dp),
                         ) {
-                            itemsIndexed(r.items) { mi, m ->
+                            // keyed by title: a rebuild that reorders a catalogue keeps focus on the same title
+                            itemsIndexed(r.items, key = { _, m -> m.type + ":" + m.id }) { mi, m ->
                                 MetaCard(
                                     m,
                                     Modifier.returnTo("row/$rowKey/${m.type}:${m.id}")
@@ -5662,10 +5684,14 @@ private fun PlayerScreen(
         if (keepPick == null) lastPick = null
         activeAddonSub = null; subBaseFile = null; subOffsetMs = 0L; subAppliedMs = 0L
         val isMpd = Regex("\\.mpd(\\?|#|$)", RegexOption.IGNORE_CASE).containsMatchIn(url)
-        // A protected stream's licence address is read from its manifest before the item is set — a whole extra read
-        // (the sports backend answers in 1.3–2.6 s) on every start. Kept per address for the session, and read BESIDE
-        // the relay lookup and the kept subtitle rather than after them.
-        val laurlAsk = if (isMpd) async { licenceUrlFor(url) } else null
+        // A protected stream's licence address used to be read from its manifest HERE, before the item was set — a
+        // whole extra read of a manifest the player then fetched again (the sports backend answers in 1.3–2.6 s), on
+        // every start: issue #1's "slow" for every sports channel. The player reads the address from the manifest
+        // itself (Media3's DASH parser takes clearkey:Laurl / dashif:Laurl into the key request), so the item carries
+        // the ClearKey configuration with no address and nothing is read first. A manifest that names it some other
+        // way fails the key request instead; onPlayerError then reads it the old way, once, and prepares again — and
+        // the answer is kept, so that address starts with it from then on.
+        val laurl = if (isMpd) licenceCache[url]?.takeIf { System.currentTimeMillis() - it.second < 1_800_000 }?.first else null
         val keptAsk = keepPick?.let { k -> async { cachedSubFile(context, k) } }
         // Play through your PC (Relay.kt, the TV only): the sharing computer, when one answers — settled before the item is set
         Relay.via = null; viaRelay = null
@@ -5673,7 +5699,6 @@ private fun PlayerScreen(
             val l = Relay.resolve(context)
             if (l != null) { Relay.via = l; viaRelay = l }
         }
-        val laurl = laurlAsk?.await()
         val keptFile = keptAsk?.await()
         runCatching {
             val b = MediaItem.Builder().setUri(url)
@@ -5688,11 +5713,10 @@ private fun PlayerScreen(
             when {
                 isMpd -> {
                     b.setMimeType(MimeTypes.APPLICATION_MPD)
-                    if (laurl != null) {
-                        b.setDrmConfiguration(
-                            MediaItem.DrmConfiguration.Builder(C.CLEARKEY_UUID).setLicenseUri(laurl).build()
-                        )
-                    }
+                    // an unencrypted manifest carries no protection, so no licence session is ever opened for it
+                    b.setDrmConfiguration(
+                        MediaItem.DrmConfiguration.Builder(C.CLEARKEY_UUID).apply { if (laurl != null) setLicenseUri(laurl) }.build()
+                    )
                 }
                 Regex("\\.m3u8", RegexOption.IGNORE_CASE).containsMatchIn(url) -> b.setMimeType(MimeTypes.APPLICATION_M3U8)
             }
@@ -5808,6 +5832,7 @@ private fun PlayerScreen(
     }
 
     val behindLiveAt = remember { LongArray(1) }
+    val drmAsked = remember { HashSet<String>() }           // addresses whose licence was read after a key request failed
     // The app leaving the screen pauses the film: Home on a TV without picture-in-picture, the box going to standby,
     // a phone's power button. Nothing did — the audio played on under the launcher, and a box left running autoplayed
     // episode after episode all night, ticking each one watched. Picture-in-picture pauses the Activity without
@@ -5833,6 +5858,29 @@ private fun PlayerScreen(
                     System.currentTimeMillis() - behindLiveAt[0] > 10_000) {
                     behindLiveAt[0] = System.currentTimeMillis()
                     exo.seekToDefaultPosition(); exo.prepare()
+                    return
+                }
+                // A protected stream whose licence address the player did not find in the manifest (named some other way):
+                // read it ourselves — the old way — once per address, and prepare again with it (see LaunchedEffect(url))
+                val drmItem = exo.currentMediaItem
+                val drmUri = drmItem?.localConfiguration?.uri?.toString()
+                val drmConf = drmItem?.localConfiguration?.drmConfiguration
+                if (e.errorCode in 6000..6999 && drmItem != null && drmUri != null && drmConf != null &&
+                    drmConf.licenseUri == null && drmAsked.add(drmUri)) {
+                    val pos = exo.currentPosition
+                    val live = exo.isCurrentMediaItemLive
+                    scope.launch {
+                        val la = licenceUrlFor(drmUri)
+                        if (la == null || exo.currentMediaItem?.localConfiguration?.uri?.toString() != drmUri) {
+                            if (la == null) error = "Playback error ${e.errorCodeName} (${e.errorCode})"
+                            return@launch
+                        }
+                        val next = drmItem.buildUpon()
+                            .setDrmConfiguration(MediaItem.DrmConfiguration.Builder(C.CLEARKEY_UUID).setLicenseUri(la).build())
+                            .build()
+                        if (!live && pos > 0) exo.setMediaItem(next, pos) else exo.setMediaItem(next)
+                        exo.prepare(); exo.play()
+                    }
                     return
                 }
                 // Play through your PC: the sharing computer stopped answering — the same item again, direct, from where it
@@ -5870,14 +5918,23 @@ private fun PlayerScreen(
                     // The processor may not keep up (a TV box with 1080p60 in software) and dropped frames are no error,
                     // so nothing would ever say so: look after a few seconds of play, and offer the next source when a
                     // fifth or more of the frames are being dropped.
+                    // Every 8 s while it lasts, on the frames of that stretch alone: one look at 8 s missed a stream that
+                    // spent it buffering or paused, and the slideshow after never said so.
                     scope.launch {
-                        delay(8_000)
-                        if (!softDecode || swapOffer != null) return@launch
-                        val c = exo.videoDecoderCounters ?: return@launch
-                        c.ensureUpdated()
-                        val dropped = c.droppedBufferCount
-                        val all = dropped + c.renderedOutputBufferCount
-                        if (all >= 60 && dropped * 5 >= all) offerSwap("Decoding too slowly")
+                        var seenDropped = 0
+                        var seenAll = 0
+                        while (true) {
+                            delay(8_000)
+                            if (!softDecode || swapOffer != null) return@launch
+                            val c = exo.videoDecoderCounters ?: continue
+                            c.ensureUpdated()
+                            val dropped = c.droppedBufferCount
+                            val all = dropped + c.renderedOutputBufferCount
+                            val d = dropped - seenDropped
+                            val n = all - seenAll
+                            seenDropped = dropped; seenAll = all
+                            if (n >= 60 && d * 5 >= n) { offerSwap("Decoding too slowly"); return@launch }
+                        }
                     }
                     return
                 }

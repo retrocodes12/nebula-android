@@ -131,7 +131,9 @@ internal fun playbackInfoRows(
     }
     val speed = exo.playbackParameters.speed
     if (speed != 1f) rows += InfoRow("Speed", speed.toString().trimEnd('0').trimEnd('.') + "×")
-    if (exo.currentMediaItem?.localConfiguration?.drmConfiguration != null) rows += InfoRow("Encryption", "Decrypted on device")
+    // the tracks' own protection, not the item's configuration: every DASH item carries a ClearKey configuration now,
+    // protected or not (MainActivity, LaunchedEffect(url))
+    if (exo.videoFormat?.drmInitData != null || exo.audioFormat?.drmInitData != null) rows += InfoRow("Encryption", "Decrypted on device")
     if (viaLine != null) rows += InfoRow("Via", viaLine)                    // Play through your PC: the sharing computer
     if (decoderLine != null) rows += InfoRow("Decoding", decoderLine)      // 1.73.0: the picture is on the processor, not the chip
     if (subOffsetMs != 0L) rows += InfoRow("Subtitle timing", fmtSubOffset(subOffsetMs))

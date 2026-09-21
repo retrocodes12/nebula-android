@@ -70,7 +70,11 @@ internal object ReturnFocus {
         three seconds pass: a hand-back whose item never composes must not latch on the screen. */
     var returningTo by mutableStateOf<Any?>(null)
         private set
-    fun aim(entry: Any?) { returningTo = entry; since = android.os.SystemClock.uptimeMillis() }
+    /** Bumped by every [aim]: a returnable item's claim restarts on it even when the entry aimed at is the same one
+        as before (a second hand-off on a screen whose first one lapsed would otherwise go unheard). */
+    var aimSerial by mutableStateOf(0)
+        private set
+    fun aim(entry: Any?) { returningTo = entry; since = android.os.SystemClock.uptimeMillis(); aimSerial++ }
     fun clear() { returningTo = null }
     /** Is a hand-back to [entry] live? */
     fun pending(entry: Any?): Boolean =
@@ -124,8 +128,8 @@ internal fun Modifier.returnTo(key: String): Modifier = composed {
     val entry = LocalScreenEntry.current
     val remote = remoteMode()
     val req = remember { FocusRequester() }
-    // keyed on the hand-back too, so a removal naming this item after composition still reaches it
-    if (entry != null) LaunchedEffect(entry, key, remote, ReturnFocus.returningTo == entry) {
+    // keyed on every hand-back too, so a removal naming this item after composition still reaches it
+    if (entry != null) LaunchedEffect(entry, key, remote, ReturnFocus.aimSerial) {
         if (!remote || !ReturnFocus.pending(entry) || ReturnFocus.keyFor(entry) != key) return@LaunchedEffect
         // a lazy list composes its items a frame after itself and the screen fades in: retry, as tvFirstFocus does
         repeat(12) {
@@ -164,8 +168,13 @@ internal fun rememberKeptList(key: String, ready: Boolean = true): LazyListState
     val entry = LocalScreenEntry.current
     val k = placeKey(entry, key)
     val at = remember { if (ReturnFocus.backTo(entry)) KeptPlace.list[k] else null }
-    val st = rememberLazyListState()
-    var placed by remember { mutableStateOf(at == null) }
+    // rows there from the first frame start at the place outright (scrolling after showed the top for a frame)
+    val readyAtOnce = remember { ready }
+    val st = rememberLazyListState(
+        if (readyAtOnce && at != null) at.first else 0,
+        if (readyAtOnce && at != null) at.second else 0,
+    )
+    var placed by remember { mutableStateOf(at == null || readyAtOnce) }
     LaunchedEffect(ready, placed) {
         if (placed || !ready || at == null) return@LaunchedEffect
         runCatching { st.scrollToItem(at.first, at.second) }
@@ -285,11 +294,14 @@ internal fun LandingFallback(slot: LandingSlot, entry: Any?) {
     val remote = remoteMode()
     LaunchedEffect(slot, remote) {
         if (!remote) return@LaunchedEffect
+        // whichever way this ends, a hand-back to this screen that nobody claimed by now is over — left pending it
+        // would refuse the notes of what the viewer focuses next for the rest of its three seconds
+        fun standDown() { if (entry != null && ReturnFocus.returningTo == entry) ReturnFocus.clear() }
         repeat(40) {
             withFrameNanos {}
-            if (slot.hasFocus || RailFocus.has) return@LaunchedEffect
+            if (slot.hasFocus || RailFocus.has) { standDown(); return@LaunchedEffect }
         }
-        if (entry != null && ReturnFocus.returningTo == entry) ReturnFocus.clear()
+        standDown()
         repeat(360) {
             // the viewer on the rail (picking a tab, walking it) is never pulled into the page
             if (slot.hasFocus || RailFocus.has) return@LaunchedEffect
