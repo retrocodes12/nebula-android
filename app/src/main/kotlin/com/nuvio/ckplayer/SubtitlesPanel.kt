@@ -343,7 +343,7 @@ private fun StyleColumn(modifier: Modifier, offsetMs: Long, canShift: Boolean, o
                 Note("If the words arrive before the voices, choose +.", top = 6.dp)
             } else Note("Timing can be nudged for add-on subtitles; the stream's own tracks cannot be shifted.", top = 6.dp)
             Eyebrow("Appearance", Modifier.padding(top = 14.dp), Label2)
-            SubStyleRows(ctx, style, Modifier.padding(top = 4.dp))
+            SubStyleRows(ctx, style, Modifier.padding(top = 4.dp), arrows = false)
             Row(Modifier.padding(top = 10.dp, bottom = 8.dp)) {
                 GlassPill("Reset to defaults", onClick = { SubStyle.reset(ctx) })
             }

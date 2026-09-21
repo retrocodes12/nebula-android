@@ -159,6 +159,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.platform.LocalInputModeManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -231,6 +232,7 @@ import androidx.media3.ui.PlayerView
 import androidx.media3.ui.TrackSelectionDialogBuilder
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -557,6 +559,14 @@ internal fun cardShape() = RoundedCornerShape(cardRadius().dp)
 // which item auto stream selection already fired for (survives the screen)
 private var autoPlayedFor: String? = null
 
+/** A protected stream's licence address per manifest address, for the session (thirty minutes, in case it carries a
+    token): reading the manifest for it is a whole extra round trip before the player can start. */
+private val licenceCache = java.util.concurrent.ConcurrentHashMap<String, Pair<String, Long>>()
+private suspend fun licenceUrlFor(mpd: String): String? {
+    licenceCache[mpd]?.let { (u, at) -> if (System.currentTimeMillis() - at < 1_800_000) return u }
+    return Stremio.resolveClearKeyLicenseUri(mpd)?.also { licenceCache[mpd] = it to System.currentTimeMillis() }
+}
+
 /** A streams page's answers, kept for Back (StreamsScreen). */
 private class StreamsMemo(val at: Long, val sections: List<Pair<Addon, List<StreamItem>>>, val status: String, val usual: String?)
 private val streamsMemo = HashMap<String, StreamsMemo>()
@@ -859,11 +869,11 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
             val searchState = remember { SearchUiState() }
             val ctx = LocalContext.current
             val scope = rememberCoroutineScope()
-            fun push(s: Screen) { ReturnFocus.returningTo = null; stack = stack + s }
+            fun push(s: Screen) { ReturnFocus.clear(); stack = stack + s }
             fun pop() {
                 if (stack.size > 1) {
                     // the screen beneath gets the remote back where it left it (TvFocus.kt)
-                    ReturnFocus.returningTo = stack[stack.size - 2]
+                    ReturnFocus.aim(stack[stack.size - 2])
                     // a viewer backing out of playback leaves the party (the host keeps it alive)
                     if (stack.last() is Screen.Play && partyUi.active() && !partyUi.isHost) {
                         partyUi.reset(); partyUi.status = "Left the party"
@@ -871,7 +881,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                     stack = stack.dropLast(1)
                 }
             }
-            fun setTab(s: Screen) { ReturnFocus.returningTo = null; stack = listOf(s) }
+            fun setTab(s: Screen) { ReturnFocus.clear(); stack = listOf(s) }
 
             // ---- watch party wiring ----
             fun partyEvent(ev: PartyEvent) {
@@ -1134,6 +1144,15 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
             }
             // anything but Home is its own destination and must not wait on catalogues
             LaunchedEffect(stack.last()) { if (stack.last() !is Screen.Home) booting = false }
+            // Under a finger nothing claims a hand-back (focus is a remote's), so it is cleared once the screen Back
+            // returned to has read it at its first composition — a live one lingering would put a kept place back on
+            // any later rebuild of that screen (a Library tab switch).
+            val navKeys = LocalInputModeManager.current.inputMode == InputMode.Keyboard
+            LaunchedEffect(stack) {
+                if (Account.isTv(ctx) || navKeys) return@LaunchedEffect
+                withFrameNanos {}; withFrameNanos {}
+                ReturnFocus.clear()
+            }
 
             Box(Modifier.fillMaxSize()) {
                 val current = stack.last()
@@ -1772,12 +1791,19 @@ internal fun Chip(text: String, on: Boolean, inSeg: Boolean = false, modifier: M
     }
 }
 
+/** Room at a chip row's ends for the ring a lit chip wears outside itself — a scroller clips at its edges. TV only. */
+@Composable
+internal fun chipEdge(): Dp = if (remoteMode()) 6.dp else 0.dp
+
 /** A row of chips inside one hairline pill — the settings segmented control. */
 @Composable
 internal fun Segmented(modifier: Modifier = Modifier, content: @Composable RowScope.() -> Unit) {
+    // under a remote the scrolled strip keeps a few dp at its ends: a scroller clips at its edges, and the ring a lit
+    // chosen chip wears outside itself lost its outer side on the first and last chip
+    val edge = if (remoteMode()) 5.dp else 0.dp
     Row(
         modifier.border(1.dp, LineC, RoundedCornerShape(50)).padding(3.dp)
-            .horizontalScroll(rememberScrollState()),
+            .horizontalScroll(rememberScrollState()).padding(horizontal = edge),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
         verticalAlignment = Alignment.CenterVertically,
         content = content,
@@ -2139,6 +2165,7 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
         }
         item(key = "add") {
             val typing = tvTyping()
+            val keyboard = LocalSoftwareKeyboardController.current
             fun addFriend() {
                 scope.launch {
                     val (name, err) = Social.addFriend(ctx, codeIn)
@@ -2153,7 +2180,7 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                     singleLine = true, readOnly = typing.readOnly, modifier = typing.modifier.weight(1f),
                     // Done adds, as the button does (it did nothing)
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, autoCorrectEnabled = false),
-                    keyboardActions = KeyboardActions(onDone = { addFriend() }),
+                    keyboardActions = KeyboardActions(onDone = { addFriend(); keyboard?.hide() }),
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = Color.White, unfocusedBorderColor = Line2, cursorColor = Red,
@@ -2399,7 +2426,10 @@ private fun BottomBar(current: Screen, onTab: (Screen) -> Unit, modifier: Modifi
 @Composable
 private fun SideRail(current: Screen, onTab: (Screen) -> Unit) {
     Column(
-        Modifier.fillMaxHeight().width(104.dp).background(Color(0xF014141A))
+        Modifier.fillMaxHeight().width(104.dp)
+            // a screen's fallback landing leaves a viewer on the rail alone (TvFocus.kt)
+            .onFocusChanged { RailFocus.has = it.hasFocus }
+            .background(Color(0xF014141A))
             .padding(vertical = 20.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -2762,11 +2792,13 @@ private fun HomeScreen(
         st.hasAddons = addons.isNotEmpty()
         val sig = addons.joinToString("|") { it.manifestUrl } + "#" + HomeRows.version
         if (st.sig == sig && st.rows.isNotEmpty() && System.currentTimeMillis() - st.builtAt < 300_000) return@LaunchedEffect
-        st.sig = sig
         st.loading = true
         st.hidden = 0; st.wanted = 0
         val rows = mutableListOf<CatRow>()
-        st.rows = emptyList()
+        // A first build shows rows as they load. A REBUILD (the rows went stale while the viewer was away watching)
+        // keeps the old ones on screen until the new set is whole: blanking them first took away the card Back was
+        // returning to and dropped the list's place.
+        val rebuilding = st.rows.isNotEmpty()
         for ((ai, a) in addons.withIndex()) {
             runCatching {
                 val all = manifestFor(a.manifestUrl).catalogs.filter { it.browsable }
@@ -2783,12 +2815,15 @@ private fun HomeScreen(
                         val items = Stremio.loadCatalog(a.base, c, null).take(15)
                         if (items.isNotEmpty()) {
                             rows.add(CatRow(a, c, items, oi)); rows.sortBy { it.oi }
-                            st.rows = rows.toList()
+                            if (!rebuilding) st.rows = rows.toList()
                         }
                     }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
                 }
             }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
         }
+        if (rebuilding) st.rows = rows.toList()
+        // stamped only once the set is whole: a build cut off by leaving Home must run again, not pass for done
+        st.sig = sig
         st.builtAt = System.currentTimeMillis()
         st.loading = false
     }
@@ -2833,6 +2868,7 @@ private fun HomeScreen(
                     onClick = onGoAddons,
                     colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
                     shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.focusRing(RoundedCornerShape(12.dp)),
                 ) { Text("Add an add-on", fontWeight = FontWeight.SemiBold) }
             }
             st.rows.isEmpty() && st.loading && st.continueRows.isEmpty() -> {
@@ -2875,8 +2911,10 @@ private fun HomeScreen(
                 // the hero's slot is ALWAYS the first item, empty until the rows arrive: Continue watching paints
                 // first, and a hero inserted above it later left the list anchored on Continue watching — the hero
                 // sat off-screen above, for anyone with something in progress
+                // (1 dp, not nothing: a list treats a zero-height first item as off-screen and anchors on the next one)
                 item(key = "hero") {
                     if (heroOn) HeroHeader(st.rows, onOpen, detailsModifier = Modifier.focusRequester(land))
+                    else Spacer(Modifier.fillMaxWidth().height(1.dp))
                 }
                 if (cwOn) item(key = "continue") {
                     Column {
@@ -3114,6 +3152,7 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
     var rowSpanPx by remember { mutableStateOf(0f) }
     val screenEntry = LocalScreenEntry.current
     val urlTyping = tvTyping()
+    val keyboard = LocalSoftwareKeyboardController.current
     // a remote lands on the first add-on (the page opened with nothing lit, and the first press was spent)
     val firstRow = tvFirstFocus(ready = addons.isNotEmpty())
     /** Add the add-on in the field — the button, or Done on the keyboard (Enter did nothing). */
@@ -3172,7 +3211,7 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                     singleLine = true,
                     readOnly = urlTyping.readOnly,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done, autoCorrectEnabled = false),
-                    keyboardActions = KeyboardActions(onDone = { addNow() }),
+                    keyboardActions = KeyboardActions(onDone = { addNow(); keyboard?.hide() }),
                     modifier = urlTyping.modifier.fillMaxWidth().padding(top = 8.dp),
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -3587,7 +3626,8 @@ internal fun SettingsToggle(title: String, sub: String, checked: Boolean, divide
     Row(
         Modifier.fillMaxWidth()
             .returnTo("toggle/$title").landingSlot()
-            .clickable(interactionSource = interaction, indication = null) { onChange(!checked) }
+            // a finger keeps its ripple; the remote's lit state is rowLit's
+            .clickable(interactionSource = interaction, indication = LocalIndication.current) { onChange(!checked) }
             .then(rowLit(focused))
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -3615,10 +3655,14 @@ internal fun SettingsChips(title: String, sub: String?, options: List<Pair<Strin
     Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
         Text(title, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         if (sub != null) Text(sub, color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(top = 2.dp))
-        // the requester sits on the strip, and a strip hands focus to its first chip (return and landing alike)
-        Box(Modifier.padding(top = 10.dp).returnTo("chips/$title").landingSlot()) {
+        // return and landing sit on the CHOSEN chip (on the strip they reached only its leftmost, through the
+        // scroller's own focus search)
+        Box(Modifier.padding(top = 10.dp)) {
             Segmented {
-                options.forEach { o -> Chip(o.second, selected == o.first, inSeg = true) { onPick(o.first) } }
+                options.forEach { o ->
+                    val on = selected == o.first
+                    Chip(o.second, on, inSeg = true, modifier = if (on) Modifier.returnTo("chips/$title").landingSlot() else Modifier) { onPick(o.first) }
+                }
             }
         }
     }
@@ -4367,7 +4411,7 @@ private fun DetailScreen(
 
         if (item.type == "series") {
             if (seasons.size > 1) item(key = "seasons") {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 14.dp)) {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(start = chipEdge(), end = chipEdge(), bottom = 14.dp)) {
                     items(seasons.size) { i ->
                         val sn = seasons[i]
                         Chip(if (sn == 0) "Specials" else "Season $sn", sn == currentSeason, modifier = Modifier.returnTo("season/$sn")) { selectedSeason = sn }
@@ -4666,10 +4710,59 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
     val clearable = query.isNotEmpty() || submitted.isNotEmpty()
     // the skeleton's shimmer, only while there is a skeleton (the grid's builder is not a composable)
     val br = if (loading && items.isEmpty()) shimmerBrush() else null
+    // search and the chip rows: on a TV they ride at the top of the grid and scroll away with it (fixed above it they
+    // took ~226 dp of the 540, leaving one row of posters with the focused one cut off); a phone keeps them fixed
+    val header: @Composable () -> Unit = {
+        Column {
+            if (catalogs.any { it.search }) Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Search ${addon.name}", color = MutedC) },
+                    singleLine = true,
+                    readOnly = typing.readOnly,
+                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = MutedC) },
+                    trailingIcon = {
+                        if (clearable && !tvBox) {
+                            IconButton(onClick = { query = ""; submitted = "" }) {
+                                Icon(Icons.Filled.Close, contentDescription = "Clear search", tint = MutedC)
+                            }
+                        }
+                    },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { submitted = query.trim() }),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color.White, unfocusedBorderColor = Line2, cursorColor = Red,
+                        focusedTextColor = TextC, unfocusedTextColor = TextC,
+                    ),
+                    modifier = typing.modifier.weight(1f).returnTo("catalog-search"),
+                )
+                // inside the field the D-pad can never reach it, so a TV gets it beside
+                if (clearable && tvBox) IconButton(
+                    onClick = { query = ""; submitted = "" },
+                    modifier = Modifier.padding(start = 8.dp).focusRing(CircleShape, landing = false),
+                ) { Icon(Icons.Filled.Close, contentDescription = "Clear search", tint = TextC) }
+            }
+            if (catalogs.size > 1) {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(horizontal = chipEdge()), modifier = Modifier.padding(bottom = 8.dp)) {
+                    items(catalogs) { c ->
+                        Chip(c.name, c == current && submitted.isEmpty(), modifier = Modifier.returnTo("cat/${c.type}/${c.id}")) {
+                            current = c; genre = null; query = ""; submitted = ""
+                        }
+                    }
+                }
+            }
+            if (submitted.isEmpty()) current?.genres?.take(20)?.let { gs ->
+                if (gs.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(horizontal = chipEdge()), modifier = Modifier.padding(bottom = 10.dp)) {
+                    items(gs) { g -> Chip(g, genre == g, modifier = Modifier.returnTo("genre/$g")) { genre = if (genre == g) null else g } }
+                }
+            }
+        }
+    }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
         BackBar(addon.name, status, onBack)
-        // Search and the chip rows ride at the top of the grid and scroll away with it: fixed above it they took
-        // ~226 dp of a TV's 540, leaving one row of posters with the focused one cut off
+        if (!tvBox) header()
         LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = 140.dp * Prefs.posterScale),
             state = st.gridState,
@@ -4677,54 +4770,7 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
             verticalArrangement = Arrangement.spacedBy(if (loading && items.isEmpty()) 12.dp else 14.dp),
             contentPadding = PaddingValues(bottom = 20.dp),
         ) {
-            item(key = "head", span = { GridItemSpan(maxLineSpan) }) {
-                Column {
-                    if (catalogs.any { it.search }) Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = query,
-                            onValueChange = { query = it },
-                            placeholder = { Text("Search ${addon.name}", color = MutedC) },
-                            singleLine = true,
-                            readOnly = typing.readOnly,
-                            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = MutedC) },
-                            trailingIcon = {
-                                if (clearable && !tvBox) {
-                                    IconButton(onClick = { query = ""; submitted = "" }) {
-                                        Icon(Icons.Filled.Close, contentDescription = "Clear search", tint = MutedC)
-                                    }
-                                }
-                            },
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                            keyboardActions = KeyboardActions(onSearch = { submitted = query.trim() }),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = Color.White, unfocusedBorderColor = Line2, cursorColor = Red,
-                                focusedTextColor = TextC, unfocusedTextColor = TextC,
-                            ),
-                            modifier = typing.modifier.weight(1f).returnTo("catalog-search"),
-                        )
-                        // inside the field the D-pad can never reach it, so a TV gets it beside
-                        if (clearable && tvBox) IconButton(
-                            onClick = { query = ""; submitted = "" },
-                            modifier = Modifier.padding(start = 8.dp).focusRing(CircleShape, landing = false),
-                        ) { Icon(Icons.Filled.Close, contentDescription = "Clear search", tint = TextC) }
-                    }
-                    if (catalogs.size > 1) {
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
-                            items(catalogs) { c ->
-                                Chip(c.name, c == current && submitted.isEmpty(), modifier = Modifier.returnTo("cat/${c.type}/${c.id}")) {
-                                    current = c; genre = null; query = ""; submitted = ""
-                                }
-                            }
-                        }
-                    }
-                    if (submitted.isEmpty()) current?.genres?.take(20)?.let { gs ->
-                        if (gs.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 10.dp)) {
-                            items(gs) { g -> Chip(g, genre == g, modifier = Modifier.returnTo("genre/$g")) { genre = if (genre == g) null else g } }
-                        }
-                    }
-                }
-            }
+            if (tvBox) item(key = "head", span = { GridItemSpan(maxLineSpan) }) { header() }
             if (br != null) {
                 items(12) {
                     Column {
@@ -4797,7 +4843,7 @@ private fun EpisodesScreen(
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
         BackBar(item.name, status, onBack)
         if (seasons.size > 1) {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 12.dp)) {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(start = chipEdge(), end = chipEdge(), bottom = 12.dp)) {
                 items(seasons, key = { it }) { s ->
                     Chip(if (s == 0) "Specials" else "Season $s", s == current) { selectedSeason = s }
                 }
@@ -4863,6 +4909,8 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
     var pending by remember { mutableStateOf<Pair<StreamItem, Addon>?>(null) }    // a play waiting on the sheet
     var pendingByHand by remember { mutableStateOf(true) }
     fun play(s: StreamItem, from: Addon, byHand: Boolean) {
+        // a row chosen by hand settles it for this title: auto-pick never overrides that choice on the way back
+        if (byHand) autoPlayedFor = item.id
         if (!chosen) { pending = s to from; pendingByHand = byHand; return }
         onPlay(s, from, byHand, startOver)
     }
@@ -4875,6 +4923,9 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
         )
     }
     val openedAt = remember(item.id, reload) { android.os.SystemClock.uptimeMillis() }   // "has the remote moved here yet?"
+    // Back returned here (from the player, most often) — read at the first composition, before anything claims focus
+    val streamsEntry = LocalScreenEntry.current
+    val backHere = remember { ReturnFocus.backTo(streamsEntry) }
     LaunchedEffect(item, reload) {
         loading = true
         usualUrl = null
@@ -4914,15 +4965,16 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                 else (list.firstOrNull { !StreamBadges.slow(it, item.runtime) } ?: list.first())
             play(pick, a, false)
         }
-        // The answers are kept ten minutes per title (the window NextEp already trusts a pick for): Back from the
-        // player used to ask every add-on again and wait for all of them — issue #1's "slow" a second time, for a
-        // viewer who only wanted the row below the one that failed. ↻ always asks afresh.
+        // Back from the player shows the list it left (kept ten minutes per title, the window NextEp trusts a pick
+        // for): it used to ask every add-on again and wait for all of them — issue #1's "slow" a second time, for a
+        // viewer who only wanted the row below the one that failed. Only on Back: a fresh visit (a live event, whose
+        // rows change by the minute) always asks, and ↻ always asks afresh. Never an auto-pick from it — the viewer
+        // just came back from playing; throwing them straight into the top row would be a bounce.
         val memoKey = listOf(item.type, item.id, order.joinToString("|") { it.manifestUrl },
             Prefs.minRes, Prefs.streamSort, Prefs.slowMark, Prefs.p2p.toString()).joinToString("\n")
-        val memo = if (reload == 0) streamsMemo[memoKey]?.takeIf { System.currentTimeMillis() - it.at < 600_000 } else null
+        val memo = if (reload == 0 && backHere) streamsMemo[memoKey]?.takeIf { System.currentTimeMillis() - it.at < 600_000 } else null
         if (memo != null) {
             sections = memo.sections; status = memo.status; usualUrl = memo.usual
-            decide()
             loading = false
             return@LaunchedEffect
         }
@@ -4993,9 +5045,10 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
         }
     }
     Column(Modifier.fillMaxSize()) {
-        // kept across the player, so the row played is still composed to take focus again
+        // kept across the player, so the row played is still composed to take focus again — put back once the rows
+        // exist (a list clamps a start index past its skeletons)
         LazyColumn(
-            Modifier.fillMaxWidth(), state = rememberKeptList("streams"),
+            Modifier.fillMaxWidth(), state = rememberKeptList("streams", ready = sections.isNotEmpty()),
             verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 20.dp),
         ) {
             item(key = "hero") {
@@ -5051,16 +5104,20 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                     }
                 }
             }
-            if (sections.size > 1) item(key = "filters") {
+            // ↻ whenever the page has answered, even with one add-on (a live event's rows change by the minute, and
+            // that page had no way to ask again); the add-on filters only when there is more than one to choose
+            if (!loading || sections.isNotEmpty()) item(key = "filters") {
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(7.dp),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 ) {
                     item { StreamFilterChip("↻", false) { filter = null; reload++ } }
-                    item { StreamFilterChip("All", filter == null) { filter = null } }
-                    items(sections.size) { i ->
-                        val nm = sections[i].first.name
-                        StreamFilterChip(nm, filter == nm) { filter = nm }
+                    if (sections.size > 1) {
+                        item { StreamFilterChip("All", filter == null) { filter = null } }
+                        items(sections.size) { i ->
+                            val nm = sections[i].first.name
+                            StreamFilterChip(nm, filter == nm) { filter = nm }
+                        }
                     }
                 }
             }
@@ -5343,7 +5400,6 @@ private fun PlayerScreen(
     var activeAddonSub by remember { mutableStateOf<String?>(null) }
     var lastPick by remember { mutableStateOf<SubTrack?>(null) }     // the add-on subtitle picked by hand, and for which title
     var lastPickFor by remember { mutableStateOf<String?>(null) }
-    var repick by remember { mutableStateOf<SubTrack?>(null) }
     // the Title Card chrome replaces Media3's controller entirely
     var chromeVisible by remember { mutableStateOf(true) }
     var chromeTouchedAt by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -5585,7 +5641,11 @@ private fun PlayerScreen(
             val c = runCatching { StallWatch.pick(StallWatch.siblings(context, type, id, addonUrl, null), url, null) }.getOrNull()
             stallWatch.busy = false; stallWatch.offered = true
             if (c != null) { swapOffer = c; swapShownAt = System.currentTimeMillis() }
-            else Toasts.show(if (why == "Keeps stalling") "This source keeps stalling — another stream from the list may do better." else "This device cannot decode this source — another stream from the list may.")
+            else Toasts.show(when (why) {
+                "Keeps stalling" -> "This source keeps stalling — another stream from the list may do better."
+                "Decoding too slowly" -> "This device cannot decode this source smoothly — another stream from the list may."
+                else -> "This device cannot decode this source — another stream from the list may."
+            })
         }
     }
 
@@ -5596,28 +5656,38 @@ private fun PlayerScreen(
         if (softDecode) { softDecode = false; runCatching { decoders.selectVideoDecoder(DecoderMode.AUTO) } }
         upnextOpen = false; upnextCounting = false; upnextDismissed = false; stillAsk = false; subForced = false
         // and without the last one's add-on subtitle: its file and timing must not be re-fed into this item — but a swap
-        // to another source of the SAME title keeps the viewer's pick, fetched again once the new item is set
+        // to another source of the SAME title keeps the viewer's pick, set on the new item BEFORE its first prepare
+        // (re-applying it afterwards prepared the stream twice, and on live put it at the window's start)
         val keepPick = lastPick?.takeIf { contentId != null && lastPickFor == contentId }
         if (keepPick == null) lastPick = null
         activeAddonSub = null; subBaseFile = null; subOffsetMs = 0L; subAppliedMs = 0L
+        val isMpd = Regex("\\.mpd(\\?|#|$)", RegexOption.IGNORE_CASE).containsMatchIn(url)
+        // A protected stream's licence address is read from its manifest before the item is set — a whole extra read
+        // (the sports backend answers in 1.3–2.6 s) on every start. Kept per address for the session, and read BESIDE
+        // the relay lookup and the kept subtitle rather than after them.
+        val laurlAsk = if (isMpd) async { licenceUrlFor(url) } else null
+        val keptAsk = keepPick?.let { k -> async { cachedSubFile(context, k) } }
         // Play through your PC (Relay.kt, the TV only): the sharing computer, when one answers — settled before the item is set
         Relay.via = null; viaRelay = null
         if (url.startsWith("http://") || url.startsWith("https://")) {
             val l = Relay.resolve(context)
             if (l != null) { Relay.via = l; viaRelay = l }
         }
+        val laurl = laurlAsk?.await()
+        val keptFile = keptAsk?.await()
         runCatching {
             val b = MediaItem.Builder().setUri(url)
-                // what the system's now-playing card, the TV's assistant and a headset announce: it was nameless
+                // what the system's now-playing card, the TV's assistant and a headset announce: the title and the
+                // episode (it was nameless, then briefly the stream row's own label)
                 .setMediaMetadata(
-                    MediaMetadata.Builder().setTitle(title)
+                    MediaMetadata.Builder().setTitle(showName)
+                        .apply { episodeTag?.let { setSubtitle(it) } }
                         .apply { poster?.let { runCatching { setArtworkUri(Uri.parse(it)) } } }
                         .build()
                 )
             when {
-                Regex("\\.mpd(\\?|#|$)", RegexOption.IGNORE_CASE).containsMatchIn(url) -> {
+                isMpd -> {
                     b.setMimeType(MimeTypes.APPLICATION_MPD)
-                    val laurl = Stremio.resolveClearKeyLicenseUri(url)
                     if (laurl != null) {
                         b.setDrmConfiguration(
                             MediaItem.DrmConfiguration.Builder(C.CLEARKEY_UUID).setLicenseUri(laurl).build()
@@ -5626,20 +5696,20 @@ private fun PlayerScreen(
                 }
                 Regex("\\.m3u8", RegexOption.IGNORE_CASE).containsMatchIn(url) -> b.setMimeType(MimeTypes.APPLICATION_M3U8)
             }
-            if (subs.isNotEmpty()) {
-                b.setSubtitleConfigurations(
-                    subs.mapIndexed { i, st ->
-                        MediaItem.SubtitleConfiguration.Builder(Uri.parse(st.url))
-                            .setId("sub:$i")                         // the panel badges these with the stream's add-on
-                            .setLanguage(st.lang)
-                            .setMimeType(
-                                if (Regex("\\.srt(\\?|#|$)", RegexOption.IGNORE_CASE).containsMatchIn(st.url))
-                                    MimeTypes.APPLICATION_SUBRIP else MimeTypes.TEXT_VTT
-                            )
-                            .build()
-                    }
-                )
+            val streamSubs = subs.mapIndexed { i, st ->
+                MediaItem.SubtitleConfiguration.Builder(Uri.parse(st.url))
+                    .setId("sub:$i")                         // the panel badges these with the stream's add-on
+                    .setLanguage(st.lang)
+                    .setMimeType(
+                        if (Regex("\\.srt(\\?|#|$)", RegexOption.IGNORE_CASE).containsMatchIn(st.url))
+                            MimeTypes.APPLICATION_SUBRIP else MimeTypes.TEXT_VTT
+                    )
+                    .build()
             }
+            val keptSub = if (keepPick != null && keptFile != null) MediaItem.SubtitleConfiguration.Builder(keptFile.first)
+                .setId("addon-pick").setMimeType(keptFile.second).setLanguage(keepPick.lang)
+                .setSelectionFlags(C.SELECTION_FLAG_DEFAULT).build() else null
+            if (streamSubs.isNotEmpty() || keptSub != null) b.setSubtitleConfigurations(streamSubs + listOfNotNull(keptSub))
             // Resume where this exact item was left off; handing the offset to
             // ExoPlayer starts buffering there rather than loading at 0 and seeking.
             val saved = if (contentType != null && contentId != null) {
@@ -5648,8 +5718,16 @@ private fun PlayerScreen(
             // Start over is a one-play choice: the saved point is skipped, not erased
             val resume = if (startAtMs >= 0) startAtMs else if (startOver) 0L else saved   // a source swap lands on its own second
             if (resume > 0) exo.setMediaItem(b.build(), resume) else exo.setMediaItem(b.build())
+            if (keepPick != null && keptFile != null) {
+                // the kept pick shows, as applyPick would have made it
+                exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                    .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    .setPreferredTextLanguage(keepPick.lang)
+                    .build()
+                activeAddonSub = keepPick.url; subBaseFile = keptFile
+            } else lastPick = null
             exo.prepare()
-            if (keepPick != null) repick = keepPick
             // the pill is drawn inside the app now, so it stays quiet inside a picture-in-picture window
             if (startAtMs < 0 && !inPipMode.value && (resume > 0 || (startOver && saved > 0))) {
                 Toasts.show(if (resume > 0) "Resumed from ${fmtTime(resume)}" else "Starting from the beginning")
@@ -5662,23 +5740,29 @@ private fun PlayerScreen(
         addonSubs = emptyList()                      // the last title's offers are not this one's
         if (contentType == null || contentId == null) return@LaunchedEffect
         subSearching = true
-        // every add-on at once, one slot each so the panel's order is the add-on order whoever answers first
+        // every add-on at once, each answer ADDED in the order it arrives: a card once shown is never pushed out or
+        // moved by a later one (under the remote the panel's lit card would change or vanish). A handful per language
+        // is plenty; the language list itself is not capped, so no later language can crowd one out either.
         val addons = activeAddons(context)
-        val slots = arrayOfNulls<List<AddonSub>>(addons.size)
+        val found = mutableListOf<AddonSub>()
         try {
-            addons.mapIndexed { i, a ->
+            addons.map { a ->
                 launch {
-                    try {
+                    val got = try {
                         if (!manifestFor(a.manifestUrl).canSubs(contentType, contentId)) return@launch
-                        slots[i] = Stremio.loadSubtitles(a.base, contentType, contentId).map { AddonSub(it, a.name) }
+                        Stremio.loadSubtitles(a.base, contentType, contentId).map { AddonSub(it, a.name) }
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         throw e
                     } catch (e: Exception) {
                         return@launch
                     }
-                    // the panel fills in as each add-on answers; a handful per language is plenty
-                    addonSubs = slots.filterNotNull().flatten().groupBy { it.track.lang.lowercase() }.toSortedMap()
-                        .values.flatMap { it.take(6) }.take(72)
+                    val perLang = found.groupingBy { it.track.lang.lowercase() }.eachCount().toMutableMap()
+                    for (sub in got) {
+                        val k = sub.track.lang.lowercase()
+                        val n = perLang[k] ?: 0
+                        if (n < 6) { found += sub; perLang[k] = n + 1 }
+                    }
+                    addonSubs = found.toList()
                 }
             }.forEach { it.join() }
         } finally { subSearching = false }
@@ -5783,6 +5867,18 @@ private fun PlayerScreen(
                     if (!exo.isCurrentMediaItemLive && pos > 0) exo.setMediaItem(item, pos) else exo.setMediaItem(item)
                     exo.prepare(); exo.play()
                     Toasts.show("This device's video chip could not decode this picture — decoding on the processor instead")
+                    // The processor may not keep up (a TV box with 1080p60 in software) and dropped frames are no error,
+                    // so nothing would ever say so: look after a few seconds of play, and offer the next source when a
+                    // fifth or more of the frames are being dropped.
+                    scope.launch {
+                        delay(8_000)
+                        if (!softDecode || swapOffer != null) return@launch
+                        val c = exo.videoDecoderCounters ?: return@launch
+                        c.ensureUpdated()
+                        val dropped = c.droppedBufferCount
+                        val all = dropped + c.renderedOutputBufferCount
+                        if (all >= 60 && dropped * 5 >= all) offerSwap("Decoding too slowly")
+                    }
                     return
                 }
                 error = "Playback error ${e.errorCodeName} (${e.errorCode})"
@@ -6006,8 +6102,6 @@ private fun PlayerScreen(
             lastPick = st; lastPickFor = contentId
         }
     }
-    // a source swap re-applies the add-on subtitle the viewer had picked for this title (LaunchedEffect(url) hands it here)
-    LaunchedEffect(repick) { repick?.let { repick = null; applyPick(it) } }
     /** Subtitles off, or a stream track took over: the add-on pick and its timing are forgotten. */
     fun subsOff() {
         lastPick = null

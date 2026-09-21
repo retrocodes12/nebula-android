@@ -65,15 +65,32 @@ internal val LocalScreenEntry = staticCompositionLocalOf<Any?> { null }
  */
 internal object ReturnFocus {
     private val last = HashMap<Any, String>()
-    /** The entry Back just returned to, until its item takes focus or anything else navigates. */
+    private var since = 0L
+    /** The entry Back (or a removal) is handing focus back to — until its item takes focus, anything navigates, or
+        three seconds pass: a hand-back whose item never composes must not latch on the screen. */
     var returningTo by mutableStateOf<Any?>(null)
-    fun note(entry: Any, key: String) { last[entry] = key }
+        private set
+    fun aim(entry: Any?) { returningTo = entry; since = android.os.SystemClock.uptimeMillis() }
+    fun clear() { returningTo = null }
+    /** Is a hand-back to [entry] live? */
+    fun pending(entry: Any?): Boolean =
+        entry != null && returningTo == entry && android.os.SystemClock.uptimeMillis() - since < 3000
+    fun note(entry: Any, key: String) {
+        // while a hand-back is live here, whatever focus passes through on the way (the re-seed after a removal, a
+        // screen's first frames) must not overwrite the place being handed back to
+        if (pending(entry)) return
+        last[entry] = key
+    }
     fun keyFor(entry: Any): String? = last[entry]
-    fun forget(entry: Any) { last.remove(entry) }
     /** Is the screen composing now one Back returned to? Read once, at its first composition. */
-    fun backTo(entry: Any?): Boolean = entry != null && returningTo == entry
+    fun backTo(entry: Any?): Boolean = pending(entry)
     /** …and with an item noted there to hand focus back to. */
-    fun returning(entry: Any?): Boolean = backTo(entry) && last[entry] != null
+    fun returning(entry: Any?): Boolean = pending(entry) && last[entry] != null
+}
+
+/** Does the TV's side rail hold focus? (AppRoot keeps it.) A screen's fallback landing never pulls focus off it. */
+internal object RailFocus {
+    var has = false
 }
 
 /**
@@ -87,7 +104,7 @@ internal suspend fun yieldToReturn(entry: Any?): Boolean {
         withFrameNanos {}
         if (ReturnFocus.returningTo != entry) return true
     }
-    ReturnFocus.returningTo = null
+    ReturnFocus.clear()
     return false
 }
 
@@ -97,8 +114,9 @@ internal suspend fun yieldToReturn(entry: Any?): Boolean {
  */
 internal fun ReturnFocus.handTo(entry: Any?, key: String) {
     if (entry == null) return
+    clear()                 // so the note below is not refused as passing traffic
     note(entry, key)
-    returningTo = entry
+    aim(entry)
 }
 
 /** Mark a focusable as a place Back can return to. [key] must be stable for the item across a rebuild of the screen. */
@@ -108,11 +126,11 @@ internal fun Modifier.returnTo(key: String): Modifier = composed {
     val req = remember { FocusRequester() }
     // keyed on the hand-back too, so a removal naming this item after composition still reaches it
     if (entry != null) LaunchedEffect(entry, key, remote, ReturnFocus.returningTo == entry) {
-        if (!remote || ReturnFocus.returningTo != entry || ReturnFocus.keyFor(entry) != key) return@LaunchedEffect
+        if (!remote || !ReturnFocus.pending(entry) || ReturnFocus.keyFor(entry) != key) return@LaunchedEffect
         // a lazy list composes its items a frame after itself and the screen fades in: retry, as tvFirstFocus does
         repeat(12) {
             withFrameNanos {}
-            if (runCatching { req.requestFocus() }.getOrDefault(false)) { ReturnFocus.returningTo = null; return@LaunchedEffect }
+            if (runCatching { req.requestFocus() }.getOrDefault(false)) { ReturnFocus.clear(); return@LaunchedEffect }
         }
     }
     this.onFocusChanged { if (entry != null && it.hasFocus) ReturnFocus.note(entry, key) }.focusRequester(req)
@@ -139,14 +157,24 @@ internal fun rememberKeptScroll(key: String): ScrollState {
     return st
 }
 
+/** [ready]: the rows the kept place points into exist — a lazy list clamps a start index past what it holds (a page
+    that rebuilds with only skeletons would land on those), so the place is put back once they are there. */
 @Composable
-internal fun rememberKeptList(key: String): LazyListState {
+internal fun rememberKeptList(key: String, ready: Boolean = true): LazyListState {
     val entry = LocalScreenEntry.current
     val k = placeKey(entry, key)
-    val back = remember { ReturnFocus.backTo(entry) }
-    val at = if (back) KeptPlace.list[k] else null
-    val st = rememberLazyListState(at?.first ?: 0, at?.second ?: 0)
-    DisposableEffect(k) { onDispose { KeptPlace.list[k] = st.firstVisibleItemIndex to st.firstVisibleItemScrollOffset } }
+    val at = remember { if (ReturnFocus.backTo(entry)) KeptPlace.list[k] else null }
+    val st = rememberLazyListState()
+    var placed by remember { mutableStateOf(at == null) }
+    LaunchedEffect(ready, placed) {
+        if (placed || !ready || at == null) return@LaunchedEffect
+        runCatching { st.scrollToItem(at.first, at.second) }
+        placed = true
+    }
+    // a page left before it was put back keeps the place it was given, not the top it briefly showed
+    DisposableEffect(k) {
+        onDispose { KeptPlace.list[k] = if (placed) st.firstVisibleItemIndex to st.firstVisibleItemScrollOffset else at ?: (0 to 0) }
+    }
     return st
 }
 
@@ -170,6 +198,13 @@ internal fun rememberKeptGrid(key: String): LazyGridState {
  */
 internal class TvTyping(val readOnly: Boolean, val modifier: Modifier)
 
+/** A form's Next (the keyboard's own key) carries typing into the next field — it is the keyboard moving on, not the
+    remote walking past, so that field opens writable and the keyboard stays up. */
+internal object TypingCarry {
+    var until = 0L
+    fun next() { until = android.os.SystemClock.uptimeMillis() + 800 }
+}
+
 @Composable
 internal fun tvTyping(): TvTyping {
     val ctx = LocalContext.current
@@ -179,7 +214,10 @@ internal fun tvTyping(): TvTyping {
     return TvTyping(
         readOnly = !editing,
         modifier = Modifier
-            .onFocusChanged { if (!it.hasFocus) editing = false }
+            .onFocusChanged {
+                if (!it.hasFocus) editing = false
+                else if (!editing && android.os.SystemClock.uptimeMillis() < TypingCarry.until) { TypingCarry.until = 0L; editing = true }
+            }
             .onPreviewKeyEvent { e ->
                 val ok = e.key == Key.DirectionCenter || e.key == Key.Enter || e.key == Key.NumPadEnter
                 if (editing || !ok) false
@@ -249,11 +287,12 @@ internal fun LandingFallback(slot: LandingSlot, entry: Any?) {
         if (!remote) return@LaunchedEffect
         repeat(40) {
             withFrameNanos {}
-            if (slot.hasFocus) return@LaunchedEffect
+            if (slot.hasFocus || RailFocus.has) return@LaunchedEffect
         }
-        if (entry != null && ReturnFocus.returningTo == entry) ReturnFocus.returningTo = null
+        if (entry != null && ReturnFocus.returningTo == entry) ReturnFocus.clear()
         repeat(360) {
-            if (slot.hasFocus) return@LaunchedEffect
+            // the viewer on the rail (picking a tab, walking it) is never pulled into the page
+            if (slot.hasFocus || RailFocus.has) return@LaunchedEffect
             if (slot.taken && runCatching { slot.req.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
             withFrameNanos {}
         }

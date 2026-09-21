@@ -81,7 +81,12 @@ internal fun SubStylePreview(style: Map<String, String>, modifier: Modifier = Mo
 
 /** The seven cycling rows: size, colour, background, edge, font, position, bold. */
 @Composable
-internal fun SubStyleRows(ctx: Context, style: Map<String, String>, modifier: Modifier = Modifier) {
+internal fun SubStyleRows(
+    ctx: Context, style: Map<String, String>, modifier: Modifier = Modifier,
+    // ←/→ step the value on the Settings page; inside the player's Subtitles panel they walk its columns, as on the web
+    // (stepping there left the Style column with no way sideways back to the subtitle list)
+    arrows: Boolean = true,
+) {
     Column(modifier) {
         SubStyle.ORDER.forEach { k ->
             val interaction = remember { MutableInteractionSource() }
@@ -96,7 +101,7 @@ internal fun SubStyleRows(ctx: Context, style: Map<String, String>, modifier: Mo
                     // the row reads "‹ value ›", so ←/→ step it back and forth as the arrows promise (OK still steps on);
                     // ↑/↓ and Back leave it as before
                     .onKeyEvent { e ->
-                        if (e.type != KeyEventType.KeyDown) return@onKeyEvent false
+                        if (!arrows || e.type != KeyEventType.KeyDown) return@onKeyEvent false
                         when (e.key) {
                             Key.DirectionLeft -> { SubStyle.cycle(ctx, k, -1); true }
                             Key.DirectionRight -> { SubStyle.cycle(ctx, k, 1); true }

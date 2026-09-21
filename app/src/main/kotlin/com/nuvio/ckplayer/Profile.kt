@@ -387,7 +387,8 @@ private fun SignedIn(me: Profile, tv: Boolean, say: (String) -> Unit, fail: (Str
             Account.AVATARS.forEach { a ->
                 val on = me.avatar.equals(a, ignoreCase = true)
                 Box(
-                    Modifier.focusRing(CircleShape).size(32.dp).clip(CircleShape).background(avatarColor(a))
+                    // never a landing: an OK on the first dot would change the viewer's colour
+                    Modifier.focusRing(CircleShape, landing = false).size(32.dp).clip(CircleShape).background(avatarColor(a))
                         .border(if (on) 3.dp else 1.dp, if (on) Color.White else Color(0x33FFFFFF), CircleShape)
                         .clickable { scope.launch { Account.updateProfile(ctx, avatar = a)?.let(fail) } },
                 )
@@ -588,7 +589,8 @@ internal fun PField(
             keyboardType = if (password) KeyboardType.Password else KeyboardType.Text,
             imeAction = if (last) ImeAction.Done else ImeAction.Next,
         ),
-        keyboardActions = KeyboardActions(onDone = { onDone() }),
+        // the keyboard's Next carries typing into the next field on a TV (TypingCarry), so it stays up between fields
+        keyboardActions = KeyboardActions(onDone = { onDone() }, onNext = { TypingCarry.next(); defaultKeyboardAction(ImeAction.Next) }),
         modifier = typing.modifier.then(if (fill) modifier.fillMaxWidth() else modifier).padding(bottom = 10.dp),
         shape = RoundedCornerShape(12.dp),
         colors = OutlinedTextFieldDefaults.colors(
