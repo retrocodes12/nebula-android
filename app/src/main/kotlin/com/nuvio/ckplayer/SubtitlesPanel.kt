@@ -32,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -66,7 +67,8 @@ internal data class AddonSub(val track: SubTrack, val source: String)
 internal class EmbeddedSub(val group: Tracks.Group, val index: Int, val format: Format, val selected: Boolean)
 
 /** One card of the middle column: where it comes from, what it is, whether it is showing, how to switch it on. */
-private class SubChoice(val badge: String, val label: String, val active: Boolean, val apply: () -> Unit)
+/** [id] is the row's identity (the track, or the add-on file's address), so a card keeps its place under the remote. */
+private class SubChoice(val id: String, val badge: String, val label: String, val active: Boolean, val apply: () -> Unit)
 
 private val Scrim = Color(0xB8000000)          // rgba(0,0,0,.72), as the web's #subPanel
 private val Hair = Color(0x1AFFFFFF)
@@ -114,7 +116,7 @@ internal fun SubtitlesPanel(
         if ((f.roleFlags and C.ROLE_FLAG_DESCRIBES_MUSIC_AND_SOUND) != 0) label += " · SDH"
         if ((f.selectionFlags and C.SELECTION_FLAG_FORCED) != 0) label += " · Forced"
         val badge = if (id.startsWith("sub:")) (streamSource ?: "Add-on") else "Built in"
-        byLang.getOrPut(lang) { mutableListOf() } += SubChoice(badge, label, e.selected) {
+        byLang.getOrPut(lang) { mutableListOf() } += SubChoice("e:" + e.group.mediaTrackGroup.id + ":" + e.index, badge, label, e.selected) {
             player.trackSelectionParameters = textParams()
                 .setOverrideForType(TrackSelectionOverride(e.group.mediaTrackGroup, e.index))
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false).build()
@@ -125,7 +127,7 @@ internal fun SubtitlesPanel(
         val lang = langLabel(a.track.lang)
         val list = byLang.getOrPut(lang) { mutableListOf() }
         val nth = list.count { it.badge == a.source } + 1
-        list += SubChoice(a.source, if (nth == 1) lang else "$lang · $nth", activeAddonSub == a.track.url) { onPickAddon(a.track) }
+        list += SubChoice("a:" + a.track.url, a.source, if (nth == 1) lang else "$lang · $nth", activeAddonSub == a.track.url) { onPickAddon(a.track) }
     }
     val device = langLabel(Locale.getDefault().language)
     val langs = byLang.keys.sortedWith(compareBy<String>({ it != device }, { it != "English" }, { it }))
@@ -217,7 +219,7 @@ private fun LanguagesColumn(
         Column(Modifier.padding(top = 8.dp).verticalScroll(rememberScrollState())) {
             PanelRow("Off", null, selected == null, if (initial == null) Modifier.focusRequester(firstFocus) else Modifier, onOff)
             langs.forEach { l ->
-                PanelRow(l, counts[l], selected == l, if (initial == l) Modifier.focusRequester(firstFocus) else Modifier) { onSelect(l) }
+                key(l) { PanelRow(l, counts[l], selected == l, if (initial == l) Modifier.focusRequester(firstFocus) else Modifier) { onSelect(l) } }
             }
         }
     }
@@ -262,7 +264,9 @@ private fun TracksColumn(modifier: Modifier, lang: String?, choices: List<SubCho
             when {
                 lang == null -> Note(if (anyOn) "Choose a language on the left." else "Subtitles are off. Choose a language to turn them on.")
                 choices.isEmpty() -> Note(if (searching) "Searching add-ons…" else "Nothing found in $lang.")
-                else -> choices.forEach { c -> TrackCard(c) }
+                // keyed: add-ons answer at once and fill in add-on order, so a slower one's cards can land ABOVE the one
+                // the remote is on — without a key the focused slot would start showing (and applying) another file
+                else -> choices.forEach { c -> key(c.id) { TrackCard(c) } }
             }
             if (lang != null && choices.isNotEmpty() && searching) Note("Searching add-ons for more…")
         }

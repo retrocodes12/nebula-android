@@ -14,6 +14,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -92,12 +94,16 @@ internal object Relay {
         }.awaitAll().firstOrNull { it != null }
     }
 
+    /** One lookup at a time: the streams page starts one while the add-ons answer, and the play that follows waits for
+        it and reads its answer — a second lookup racing it would read the cloud copy the first had not stored yet. */
+    private val lookup = Mutex()
+
     /** The relay for the next play: the one that answered lately, else the cloud + a probe — never more than ~2.6 s of waiting. */
-    suspend fun resolve(ctx: Context): Live? {
-        if (!wanted(ctx)) { refreshStatus(ctx); return null }
+    suspend fun resolve(ctx: Context): Live? = lookup.withLock {
+        if (!wanted(ctx)) { refreshStatus(ctx); return@withLock null }
         val l = live
-        if (l != null && System.currentTimeMillis() - l.at < 300_000) return l
-        if (System.currentTimeMillis() < deadUntil) return null
+        if (l != null && System.currentTimeMillis() - l.at < 300_000) return@withLock l
+        if (System.currentTimeMillis() < deadUntil) return@withLock null
         val found = withTimeoutOrNull(2_600) {
             val d = pull(ctx)
             if (usable(d)) probeAll(d!!) else null
@@ -105,7 +111,7 @@ internal object Relay {
         live = found
         if (found == null) deadUntil = System.currentTimeMillis() + 120_000
         refreshStatus(ctx)
-        return found
+        found
     }
 
     /** Settings opened, or the chips changed: ask again now. */

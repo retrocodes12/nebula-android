@@ -423,13 +423,15 @@ internal fun Scrubber(
     val onScrubNow by rememberUpdatedState(onScrub)
     val onSeekToNow by rememberUpdatedState(onSeekTo)
     fun cancelScrub() { if (scrubMs != null) { scrubMs = null; onScrubNow(null) } }
-    /** One ←/→ on the focused rail: move the preview (a live stream, or no length yet, seeks at once as before). */
+    /** One ←/→ on the focused rail: move the preview (a live stream, or no length yet, seeks at once). */
     fun step(dir: Int) {
-        if (isLive || durationMs <= 0) { onSeekBy(dir * stepMs); return }
         val now = System.currentTimeMillis()
         scrubRun = if (now - scrubLastAt <= 400) scrubRun + 1 else 1
         scrubLastAt = now
         val step = when { scrubRun > 10 -> stepMs * 6; scrubRun > 5 -> stepMs * 3; else -> stepMs }
+        // live, or no length yet: nothing to preview, so it seeks at once — with the same speed-up, so walking back
+        // through a long live window is not 10 s a press
+        if (isLive || durationMs <= 0) { onSeekBy(dir * step); return }
         val t = ((scrubMs ?: positionMs) + dir * step).coerceIn(0L, durationMs)
         scrubMs = t
         scrubTick++

@@ -26,6 +26,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -86,6 +91,16 @@ internal fun SubStyleRows(ctx: Context, style: Map<String, String>, modifier: Mo
                     // focus must be visible from the couch: same border language
                     // as every other focusable in the app
                     .border(2.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(8.dp))
+                    // the row reads "‹ value ›", so ←/→ step it back and forth as the arrows promise (OK still steps on);
+                    // ↑/↓ and Back leave it as before
+                    .onKeyEvent { e ->
+                        if (e.type != KeyEventType.KeyDown) return@onKeyEvent false
+                        when (e.key) {
+                            Key.DirectionLeft -> { SubStyle.cycle(ctx, k, -1); true }
+                            Key.DirectionRight -> { SubStyle.cycle(ctx, k, 1); true }
+                            else -> false
+                        }
+                    }
                     .clickable(interactionSource = interaction, indication = null) { SubStyle.cycle(ctx, k) }
                     .padding(horizontal = 8.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.CenterVertically,

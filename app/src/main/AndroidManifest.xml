@@ -10,6 +10,8 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
+    <!-- largeHeap: the player buffers on the Java heap, and a 1 GB TV box's default heap is smaller than the
+         engine's stock buffer (PlayerExtras.bufferLoadControl caps it to a third of whatever this gives). -->
     <application
         android:allowBackup="true"
         android:banner="@drawable/tv_banner"
@@ -18,11 +20,15 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
+        android:largeHeap="true"
         android:theme="@style/Theme.App">
 
+        <!-- configChanges: a Bluetooth keyboard or air-mouse connecting (keyboard), a display or text-size change
+             (density, fontScale, colorMode) must not recreate the Activity — the nav stack is plain state, so a
+             recreation dropped playback and restarted at Home. -->
         <activity
             android:name=".MainActivity"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode|navigation"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|smallestScreenSize|uiMode|navigation|density|fontScale|colorMode"
             android:exported="true"
             android:launchMode="singleTop"
             android:screenOrientation="fullUser"

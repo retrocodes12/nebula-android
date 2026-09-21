@@ -87,11 +87,11 @@ object SubStyle {
         if (!fromSync) Cloud.noteChanged(ctx, "sub_style")
     }
 
-    /** Advance one option to its next value; returns the new value key. */
-    fun cycle(ctx: Context, k: String): String {
+    /** Move one option to its next value (or, with [step] −1, the one before); returns the new value key. */
+    fun cycle(ctx: Context, k: String, step: Int = 1): String {
         val cur = get(ctx).toMutableMap()
         val opts = options(k)
-        val next = opts[(opts.indexOf(cur.getValue(k)) + 1) % opts.size]
+        val next = opts[Math.floorMod(opts.indexOf(cur.getValue(k)) + step, opts.size)]
         cur[k] = next
         save(ctx, cur, System.currentTimeMillis(), fromSync = false)
         return next

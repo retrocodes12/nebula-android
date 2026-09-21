@@ -59,18 +59,21 @@ internal val BUFFER_STEPS = mapOf(60 to 3, 120 to 4, 240 to 5)
 internal fun bufferLabel(secs: Int): String = if (secs >= 60) "${secs / 60} min" else "$secs s"
 
 /**
- * The load control for Settings › Buffer ahead, or null for Auto (the engine's stock 50 s). The stock byte cap
- * (~140 MB) is what actually ends loading on a high-bitrate stream, so it grows with the seconds — but never past
- * half of what this process may allocate: the buffer is plain byte arrays on the Java heap, and 4 min of a 4K
- * stream would want ~600 MB. What does not fit simply buffers less, and the HUD shows what it got.
+ * The load control for Settings › Buffer ahead; Auto keeps the engine's stock 50 s. The byte cap is what actually
+ * ends loading on a high-bitrate stream, so it grows with the seconds — but never past a third of what this process
+ * may allocate, Auto included: the buffer is plain byte arrays on the Java heap, and the stock cap alone (~140 MB)
+ * is more than a 1 GB TV box's whole heap. It used to be floored AT the stock cap, so the ceiling never bit where it
+ * mattered and a high-bitrate file could end in an OutOfMemoryError. What does not fit simply buffers less, and the
+ * HUD shows what it got.
  */
 @UnstableApi
-internal fun bufferLoadControl(secs: Int): LoadControl? {
-    val resume = BUFFER_STEPS[secs] ?: return null
+internal fun bufferLoadControl(secs: Int): LoadControl {
     val stock = DefaultLoadControl.DEFAULT_VIDEO_BUFFER_SIZE.toLong() + DefaultLoadControl.DEFAULT_AUDIO_BUFFER_SIZE
+    val room = (Runtime.getRuntime().maxMemory() / 3).coerceAtLeast(32L shl 20)
+    val resume = BUFFER_STEPS[secs]
+        ?: return DefaultLoadControl.Builder().setTargetBufferBytes(minOf(stock, room).toInt()).build()
     val want = stock * secs * 1000 / DefaultLoadControl.DEFAULT_MAX_BUFFER_MS
-    val room = Runtime.getRuntime().maxMemory() / 2
-    val bytes = maxOf(stock, minOf(want, room)).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    val bytes = minOf(maxOf(stock, want), room).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
     return DefaultLoadControl.Builder()
         .setBufferDurationsMs(
             secs * 1000, secs * 1000,

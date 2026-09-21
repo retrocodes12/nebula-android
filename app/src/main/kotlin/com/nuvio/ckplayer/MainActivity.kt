@@ -206,6 +206,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -214,6 +215,7 @@ import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.util.Util
 import androidx.media3.exoplayer.ExoPlayer
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.DecoderManager
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.DecoderMode
@@ -4684,6 +4686,11 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             .filter { it.enabled }.distinctBy { it.manifestUrl }
         // one slot per add-on, in that order, filled as each answers — the list never reorders under the remote
         val slots = arrayOfNulls<List<StreamItem>>(order.size)
+        // Play through your PC (a TV): find the sharing computer while the add-ons answer, so the play that follows
+        // does not wait up to 2.6 s for it (Relay.resolve takes one lookup at a time; the player reads this one)
+        if (Relay.wanted(ctx)) launch {
+            try { Relay.resolve(ctx) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { }
+        }
         var failures = 0
         var floored = false        // an add-on answered, and Minimum quality hid every row of it
         val pf = NextEp.picked(ctx)
@@ -5105,6 +5112,9 @@ private fun PlayerScreen(
     val subsFocus = remember { FocusRequester() }                 // the toolbar's Subtitles item, to hand focus back to
     var subBusy by remember { mutableStateOf(false) }
     var activeAddonSub by remember { mutableStateOf<String?>(null) }
+    var lastPick by remember { mutableStateOf<SubTrack?>(null) }     // the add-on subtitle picked by hand, and for which title
+    var lastPickFor by remember { mutableStateOf<String?>(null) }
+    var repick by remember { mutableStateOf<SubTrack?>(null) }
     // the Title Card chrome replaces Media3's controller entirely
     var chromeVisible by remember { mutableStateOf(true) }
     var chromeTouchedAt by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -5146,6 +5156,10 @@ private fun PlayerScreen(
     // the film in the background — so a phone's one-second drag has a picture at once (ScrubPreview.warm)
     LaunchedEffect(scrubPreview, durMs > 0, isPlayingState) {
         if (scrubPreview == null || durMs <= 0 || !isPlayingState || !Prefs.scrubFrames) return@LaunchedEffect
+        // not on a TV: up to 120 frames through a second reader competes with the film for a weak box's one decoder
+        // and its memory, and a one-connection host may refuse either reader (the web gave frames up on webOS for the
+        // same reason). A TV still gets a frame for the position it asks for.
+        if (Account.isTv(context)) return@LaunchedEffect
         delay(4000)
         scrubPreview.warm(context, durMs)      // eligible() already rules out manifests, and keys ride on .mpd here
     }
@@ -5168,8 +5182,8 @@ private fun PlayerScreen(
         ExoPlayer.Builder(context)
             .setBandwidthMeter(bandwidth)
             .setRenderersFactory(NextRenderersFactory(context).setDecoderManager(decoders))
-            // Settings › Buffer ahead: a longer load control when one is chosen; Auto keeps the engine's own (PlayerExtras.kt)
-            .let { b -> bufferLoadControl(Prefs.buffer)?.let { b.setLoadControl(it) } ?: b }
+            // Settings › Buffer ahead, and a memory ceiling for every setting including Auto (PlayerExtras.kt)
+            .setLoadControl(bufferLoadControl(Prefs.buffer))
             // one HTTP identity (UA, X-Nebula-Client, cookies) shared with the scrub-frame reader — MediaHttp.kt
             .setMediaSourceFactory(MediaHttp.mediaSourceFactory(context))
             // Without these the app behaves as if it were the only thing on the
@@ -5342,16 +5356,20 @@ private fun PlayerScreen(
             val c = runCatching { StallWatch.pick(StallWatch.siblings(context, type, id, addonUrl, null), url, null) }.getOrNull()
             stallWatch.busy = false; stallWatch.offered = true
             if (c != null) { swapOffer = c; swapShownAt = System.currentTimeMillis() }
-            else Toasts.show(if (why == "Keeps stalling") "This source keeps stalling — another stream from the list may do better." else "This phone cannot decode this source — another stream from the list may.")
+            else Toasts.show(if (why == "Keeps stalling") "This source keeps stalling — another stream from the list may do better." else "This device cannot decode this source — another stream from the list may.")
         }
     }
 
     LaunchedEffect(url) {
-        // a fresh episode starts with the up-next card closed and undismissed, and the stall watchdog at zero
-        stallWatch.reset(); swapOffer = null
+        // a fresh episode starts with the up-next card closed and undismissed, the stall watchdog at zero, and no red line
+        // left over from the address before it (a swap after "Cannot decode" played under the old error for good)
+        stallWatch.reset(); swapOffer = null; error = null
         if (softDecode) { softDecode = false; runCatching { decoders.selectVideoDecoder(DecoderMode.AUTO) } }
         upnextOpen = false; upnextCounting = false; upnextDismissed = false; stillAsk = false; subForced = false
-        // and without the last one's add-on subtitle: its file and timing must not be re-fed into this item
+        // and without the last one's add-on subtitle: its file and timing must not be re-fed into this item — but a swap
+        // to another source of the SAME title keeps the viewer's pick, fetched again once the new item is set
+        val keepPick = lastPick?.takeIf { contentId != null && lastPickFor == contentId }
+        if (keepPick == null) lastPick = null
         activeAddonSub = null; subBaseFile = null; subOffsetMs = 0L; subAppliedMs = 0L
         // Play through your PC (Relay.kt, the TV only): the sharing computer, when one answers — settled before the item is set
         Relay.via = null; viaRelay = null
@@ -5361,6 +5379,12 @@ private fun PlayerScreen(
         }
         runCatching {
             val b = MediaItem.Builder().setUri(url)
+                // what the system's now-playing card, the TV's assistant and a headset announce: it was nameless
+                .setMediaMetadata(
+                    MediaMetadata.Builder().setTitle(title)
+                        .apply { poster?.let { runCatching { setArtworkUri(Uri.parse(it)) } } }
+                        .build()
+                )
             when {
                 Regex("\\.mpd(\\?|#|$)", RegexOption.IGNORE_CASE).containsMatchIn(url) -> {
                     b.setMimeType(MimeTypes.APPLICATION_MPD)
@@ -5396,6 +5420,7 @@ private fun PlayerScreen(
             val resume = if (startAtMs >= 0) startAtMs else if (startOver) 0L else saved   // a source swap lands on its own second
             if (resume > 0) exo.setMediaItem(b.build(), resume) else exo.setMediaItem(b.build())
             exo.prepare()
+            if (keepPick != null) repick = keepPick
             // the pill is drawn inside the app now, so it stays quiet inside a picture-in-picture window
             if (startAtMs < 0 && !inPipMode.value && (resume > 0 || (startOver && saved > 0))) {
                 Toasts.show(if (resume > 0) "Resumed from ${fmtTime(resume)}" else "Starting from the beginning")
@@ -5469,9 +5494,34 @@ private fun PlayerScreen(
         nextEpisode?.let { autoRun++; onPlayNext(it) }
     }
 
+    val behindLiveAt = remember { LongArray(1) }
+    // The app leaving the screen pauses the film: Home on a TV without picture-in-picture, the box going to standby,
+    // a phone's power button. Nothing did — the audio played on under the launcher, and a box left running autoplayed
+    // episode after episode all night, ticking each one watched. Picture-in-picture pauses the Activity without
+    // stopping it, so it plays on there; dismissing its window stops it, which pauses here as it already did.
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val obs = LifecycleEventObserver { _, ev ->
+            if (ev == Lifecycle.Event.ON_STOP) {
+                runCatching { snapshotProgress() }
+                upnextCounting = false
+                exo.pause()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
     DisposableEffect(Unit) {
         val l = object : Player.Listener {
             override fun onPlayerError(e: PlaybackException) {
+                // A live stream that fell behind its window (a long pause, a long stall): rejoin at the edge, as every
+                // player does — it was a final red line. Once per 10 s, so a feed that keeps failing still says so.
+                if (e.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW && exo.currentMediaItem != null &&
+                    System.currentTimeMillis() - behindLiveAt[0] > 10_000) {
+                    behindLiveAt[0] = System.currentTimeMillis()
+                    exo.seekToDefaultPosition(); exo.prepare()
+                    return
+                }
                 // Play through your PC: the sharing computer stopped answering — the same item again, direct, from where it
                 // was. Only a reading failure counts (Media3's 2xxx codes): a decoder that cannot play this file fails
                 // the same way direct, and dropping the relay for it would hide the real error behind a silent restart.
@@ -5491,13 +5541,19 @@ private fun PlayerScreen(
                     || e.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED
                     || e.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED
                     || e.errorCode == PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED
-                if (decodeFail && !softDecode && item != null) {
+                // Not where the processor cannot help: Dolby Vision decoded as plain HEVC plays in purple and green, and
+                // a TV box's processor turns a picture above 1080p into a slideshow that never errors — so there the
+                // pill offers the next source at once.
+                val fmt = (e as? androidx.media3.exoplayer.ExoPlaybackException)?.rendererFormat ?: exo.videoFormat
+                val hopeless = fmt != null && (fmt.sampleMimeType == MimeTypes.VIDEO_DOLBY_VISION ||
+                    (Account.isTv(context) && (fmt.height > 1088 || fmt.width > 1920)))
+                if (decodeFail && !softDecode && item != null && !hopeless) {
                     softDecode = true
                     val pos = exo.currentPosition
                     runCatching { decoders.selectVideoDecoder(DecoderMode.FFMPEG) }
                     if (!exo.isCurrentMediaItemLive && pos > 0) exo.setMediaItem(item, pos) else exo.setMediaItem(item)
                     exo.prepare(); exo.play()
-                    Toasts.show("Your phone's video chip could not decode this picture — decoding on the processor instead")
+                    Toasts.show("This device's video chip could not decode this picture — decoding on the processor instead")
                     return
                 }
                 error = "Playback error ${e.errorCodeName} (${e.errorCode})"
@@ -5534,6 +5590,10 @@ private fun PlayerScreen(
                 }
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                // The screen stays on while something plays and only then (nothing asked before: a TV's screensaver
+                // came down over a long film and a phone went dark mid-scene); a paused film lets it rest.
+                playerViewRef?.keepScreenOn = isPlaying
+                if (isPlaying) error = null        // whatever went wrong before, this plays now
                 (activity as? MainActivity)?.refreshPipParams()
                 if (partyUi.active() && partyUi.isHost) hostDirty = true
             }
@@ -5703,8 +5763,9 @@ private fun PlayerScreen(
                 .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
                 .build()
             val pos = exo.currentPosition
+            val wasPlaying = exo.playWhenReady                  // a pick made while paused stays paused
             exo.setMediaItem(cur.buildUpon().setSubtitleConfigurations(keep + cfg).build(), pos)
-            exo.prepare(); exo.play()
+            exo.prepare(); exo.playWhenReady = wasPlaying
             exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
                 .clearOverridesOfType(C.TRACK_TYPE_TEXT)        // a stream track chosen earlier must not win over it
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
@@ -5713,10 +5774,14 @@ private fun PlayerScreen(
             activeAddonSub = st.url
             subBaseFile = Pair(uri, mime)
             subOffsetMs = 0L; subAppliedMs = 0L
+            lastPick = st; lastPickFor = contentId
         }
     }
+    // a source swap re-applies the add-on subtitle the viewer had picked for this title (LaunchedEffect(url) hands it here)
+    LaunchedEffect(repick) { repick?.let { repick = null; applyPick(it) } }
     /** Subtitles off, or a stream track took over: the add-on pick and its timing are forgotten. */
     fun subsOff() {
+        lastPick = null
         activeAddonSub = null
         subBaseFile = null
         subOffsetMs = 0L; subAppliedMs = 0L
@@ -5804,6 +5869,14 @@ private fun PlayerScreen(
         setOnShowListener { trackListOpen = true }
         setOnDismissListener { trackListOpen = false; chromeTouchedAt = System.currentTimeMillis() }
     }
+    fun openTrackList(label: String, type: Int) {
+        runCatching {
+            TrackSelectionDialogBuilder(context, label, exo, type)
+                .setShowDisableOption(false)
+                .apply { if (type == C.TRACK_TYPE_VIDEO) setAllowAdaptiveSelections(true) }
+                .build().keepChrome().show()
+        }
+    }
     val landing = remember { LongArray(1) }                  // until when a wake's focus is still on its way
     val swallowUp = remember { IntArray(1) { -1 } }          // the release of a press this screen took for itself
     fun wake(dir: Int) {
@@ -5831,9 +5904,25 @@ private fun PlayerScreen(
             if (!remoteNow) return false          // a phone's headset button and the like: exactly as before
             // Space is play/pause, as on the web — once per press: a held key's repeats are eaten, not toggled
             if (code == android.view.KeyEvent.KEYCODE_SPACE && !subPanelOpen && !sleepMenuOpen) {
-                if (repeat == 0) { if (exo.isPlaying) exo.pause() else exo.play() }
+                if (repeat == 0) Util.handlePlayPauseButtonAction(exo)
                 chromeVisible = true; chromeTouchedAt = now; swallowUp[0] = code
                 return true
+            }
+            // the buttons that name a control go straight to it: Captions opens Subtitles, Audio the audio list, Next
+            // the next episode (the session has one item, so it had nothing to skip to)
+            when (code) {
+                android.view.KeyEvent.KEYCODE_CAPTIONS -> {
+                    sleepMenuOpen = false; subPanelOpen = true; chromeVisible = true; chromeTouchedAt = now
+                    swallowUp[0] = code; return true
+                }
+                android.view.KeyEvent.KEYCODE_MEDIA_AUDIO_TRACK -> if (audioTrackCount >= 1 && !subPanelOpen) {
+                    chromeVisible = true; chromeTouchedAt = now; openTrackList("Audio", C.TRACK_TYPE_AUDIO)
+                    swallowUp[0] = code; return true
+                }
+                android.view.KeyEvent.KEYCODE_MEDIA_NEXT -> nextEpisode?.let { n ->
+                    if (repeat == 0) { upnextCounting = false; autoRun = 0; onPlayNext(n) }
+                    swallowUp[0] = code; return true
+                }
             }
             // the remote's other buttons (play/pause, rewind, fast-forward, next, menu, info, captions) show the
             // controls, so what they did is on screen; the key itself goes on — media keys to the session, as before.
@@ -6010,6 +6099,9 @@ private fun PlayerScreen(
             sleepFocus = sleepFocus,
             scrubKick = scrubKick,
             onScrubKickTaken = { k -> if (scrubKick?.second == k) scrubKick = null },
+            onGoLive = { exo.seekToDefaultPosition(); chromeTouchedAt = System.currentTimeMillis() },
+            canFullscreen = !tvBox,
+            canInvite = !tvBox,
             dimTitle = pauseBoardOn,
             infoOn = pinfoOn,
             onInfo = { pinfoOn = !pinfoOn; chromeTouchedAt = System.currentTimeMillis() },
@@ -6028,7 +6120,9 @@ private fun PlayerScreen(
             // since the button only exists while the chrome is up, on a remote it could only ever hide the chrome
             onBack = { onExit?.invoke() ?: (activity as? androidx.activity.ComponentActivity)?.onBackPressedDispatcher?.onBackPressed() },
             onPlayPause = {
-                if (exo.isPlaying) exo.pause() else exo.play()
+                // Media3's own rule: after an error it prepares again, at the end it starts over — play() alone did
+                // nothing in either state, so Play after a network drop was a dead button
+                Util.handlePlayPauseButtonAction(exo)
                 chromeTouchedAt = System.currentTimeMillis()
             },
             onSeekBy = { d -> seekBy(d); chromeTouchedAt = System.currentTimeMillis() },
@@ -6067,18 +6161,8 @@ private fun PlayerScreen(
                 sleepMenuOpen = false
                 chromeTouchedAt = System.currentTimeMillis()
             },
-            onAudio = {
-                runCatching {
-                    TrackSelectionDialogBuilder(context, "Audio", exo, C.TRACK_TYPE_AUDIO)
-                        .setShowDisableOption(false).build().keepChrome().show()
-                }
-            },
-            onQuality = {
-                runCatching {
-                    TrackSelectionDialogBuilder(context, "Quality", exo, C.TRACK_TYPE_VIDEO)
-                        .setAllowAdaptiveSelections(true).setShowDisableOption(false).build().keepChrome().show()
-                }
-            },
+            onAudio = { openTrackList("Audio", C.TRACK_TYPE_AUDIO) },
+            onQuality = { openTrackList("Quality", C.TRACK_TYPE_VIDEO) },
             onSpeedCycle = {
                 val rates = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
                 val next = rates[(rates.indexOfFirst { it == exo.playbackParameters.speed }

@@ -222,6 +222,7 @@ private fun PlayerToolbar(
     sleepFocus: FocusRequester? = null,
     onNext: () -> Unit, onSubtitles: () -> Unit, onAudio: () -> Unit, onQuality: () -> Unit,
     onSpeedCycle: () -> Unit, onSleep: () -> Unit, onParty: () -> Unit, onInvite: () -> Unit, onReact: (String) -> Unit,
+    canInvite: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -248,7 +249,7 @@ private fun PlayerToolbar(
             )
             ToolItem(Icons.Outlined.Groups, if (partyActive) "Leave party" else "Party", onClick = onParty)
             if (partyActive) {
-                ToolItem(Icons.Outlined.PersonAdd, "Invite", onClick = onInvite)
+                if (canInvite) ToolItem(Icons.Outlined.PersonAdd, "Invite", onClick = onInvite)
                 // the reactions are the party's own vocabulary, sent on the wire as they are
                 listOf("\uD83D\uDC4D", "\uD83D\uDE02", "\u2764\uFE0F", "\uD83D\uDD25").forEach { e ->
                     ToolItem(null, e, onClick = { onReact(e) })
@@ -380,6 +381,10 @@ internal fun TitleCardChrome(
     playFocus: FocusRequester? = null,        // the remote's landing place when the chrome wakes
     sleepFocus: FocusRequester? = null,       // the sleep menu hands focus back here when it closes
     scrubKick: Pair<Int, Int>? = null,        // (direction, serial): a ←/→ that woke the chrome onto the seek bar
+    onGoLive: () -> Unit = {},                // the LIVE pill: back to the live edge
+    // a TV has no orientation to turn and, usually, no share sheet: Fullscreen and Invite would be dead controls there
+    canFullscreen: Boolean = true,
+    canInvite: Boolean = true,
     onScrubKickTaken: (Int) -> Unit = {},
     scrubFrame: State<Bitmap?>? = null,       // the scrub preview's frame for the position being previewed
     onScrub: (Long?) -> Unit = {},            // a preview position is up (finger or remote); null when it ends
@@ -426,12 +431,14 @@ internal fun TitleCardChrome(
                     modifier = Modifier.padding(end = 12.dp).background(Color(0xFFE50914), Pill).padding(horizontal = 12.dp, vertical = 6.dp),
                 )
                 GlassCircle(Icons.Outlined.Info, "Playback info", on = infoOn, onClick = onInfo)
-                Spacer(Modifier.width(12.dp))
                 if (canPip) {
-                    GlassCircle(Icons.Filled.PictureInPictureAlt, "Picture-in-picture", onClick = onPip)
                     Spacer(Modifier.width(12.dp))
+                    GlassCircle(Icons.Filled.PictureInPictureAlt, "Picture-in-picture", onClick = onPip)
                 }
-                GlassCircle(Icons.Filled.Fullscreen, "Fullscreen", onClick = onFullscreen)
+                if (canFullscreen) {
+                    Spacer(Modifier.width(12.dp))
+                    GlassCircle(Icons.Filled.Fullscreen, "Fullscreen", onClick = onFullscreen)
+                }
             }
 
             // centre transport — the glyph follows the step (5/10/30 have their own; 15 uses the plain arrows)
@@ -475,7 +482,8 @@ internal fun TitleCardChrome(
                         }
                     )
                     Spacer(Modifier.weight(1f))
-                    if (isLive) TimePill("LIVE")
+                    // the way back to the edge, one press: focusable, so the remote can reach it too
+                    if (isLive) TimePill("LIVE") { onGoLive() }
                     else TimePill(
                         if (showTotal) fmtTime(durationMs) else "−" + fmtTime((durationMs - positionMs).coerceAtLeast(0L))
                     ) { showTotal = !showTotal; Prefs.setTimeDisplay(ctx, if (showTotal) "total" else "left") }
@@ -486,6 +494,7 @@ internal fun TitleCardChrome(
                     subtitlesFocus = subtitlesFocus, sleepFocus = sleepFocus,
                     onNext = onNext, onSubtitles = onSubtitles, onAudio = onAudio, onQuality = onQuality,
                     onSpeedCycle = onSpeedCycle, onSleep = onSleep, onParty = onParty, onInvite = onInvite, onReact = onReact,
+                    canInvite = canInvite,
                     modifier = Modifier.padding(top = 10.dp),
                 )
             }

@@ -186,7 +186,9 @@ object Prefs {
         autoPlayNext = p.getBoolean("pref_autonext", true)
         upnextAt = p.getString("pref_upnextat", "25") ?: "25"
         countdown = p.getInt("pref_countdown", 8)
-        stillWatching = p.getInt("pref_stillwatching", 0)
+        // a TV asks after three in a row unless told otherwise: a box left on (the set asleep, no standby link) would
+        // otherwise autoplay a whole season overnight and tick every episode watched
+        stillWatching = p.getInt("pref_stillwatching", if (Account.isTv(ctx)) 3 else 0)
         resume = p.getString("pref_resume", "resume") ?: "resume"
         seekStep = p.getInt("pref_seekstep", 10)
         speedDefault = p.getString("pref_speeddefault", "1") ?: "1"
