@@ -12,8 +12,8 @@ android {
         applicationId = "com.nuvio.ckplayer"
         minSdk = 26
         targetSdk = 34
-        versionCode = 84
-        versionName = "1.75.0"
+        versionCode = 85
+        versionName = "1.76.0"
         // arm only: every phone and TV box Nebula runs on is arm64 or armv7, and libtorrent's native
         // library is the only thing here with a processor. On anything else the engine reports itself
         // unavailable and P2P streams stay hidden (P2p.available).

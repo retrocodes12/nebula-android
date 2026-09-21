@@ -49,9 +49,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.75.0.apk
+          cp "$APK" Nebula-1.76.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.75.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.75.0 Nebula-1.75.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.75.0" \
-            --notes "Android TV: the player answers the remote again. After the controls fade, any press brings them back; left and right open the seek preview (OK jumps there, Back drops it); Back hides the controls before it leaves; the remote's play, rewind and fast-forward buttons show them too; Skip intro and Up next take the remote when the controls are away. Streams load from every add-on at once instead of one after another, and on a TV the remote lands on the first one."
+          gh release delete v1.76.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.76.0 Nebula-1.76.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.76.0" \
+            --notes "Android TV, a full pass over the remote. Back returns you to the card, row or episode you left, and the title page to the season you were on. Add-ons can be switched off, reordered and removed with the remote. Text fields open the keyboard only when you press OK. Every screen lands somewhere visible, and focus is clearly lit everywhere. Playback pauses when you press Home or the TV sleeps, the screen stays on while playing, a live channel that falls behind rejoins the edge, and protected sports streams start without an extra manifest read. Back from the player reopens the streams list at once."
