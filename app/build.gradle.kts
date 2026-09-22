@@ -18,6 +18,8 @@ android {
         // library is the only thing here with a processor. On anything else the engine reports itself
         // unavailable and P2P streams stay hidden (P2p.available).
         ndk.abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        // the Screens workflow's emulators are x86: only there, and only when asked, do the x86 libraries go in
+        if (project.hasProperty("emulatorAbis")) ndk.abiFilters += listOf("x86_64", "x86")
     }
 
     // Read signing config from Gradle -P properties (passed explicitly on the CI

@@ -58,9 +58,23 @@ def key(k, n=1, wait=0.6):
 
 
 apk = [os.path.join(d, f) for d, _, fs in os.walk('app/build/outputs/apk/debug') for f in fs if f.endswith('.apk')][0]
+def sh(*a):
+    r = adb('shell', *a); return (r.stdout + r.stderr).decode(errors='replace').strip()
+
+
+# let the system finish booting and settle, and clear any "isn't responding" dialog a slow boot leaves
+for _ in range(60):
+    if sh('getprop', 'sys.boot_completed') == '1': break
+    time.sleep(2)
+time.sleep(25)
+sh('am', 'broadcast', '-a', 'android.intent.action.CLOSE_SYSTEM_DIALOGS')
 say('install ' + apk + ' ' + adb('install', '-r', '-g', apk).stdout.decode(errors='replace').strip())
-adb('shell', 'am', 'start', '-n', PKG + '/.MainActivity')
-time.sleep(35)
+adb('logcat', '-c')
+cat = 'android.intent.category.LEANBACK_LAUNCHER' if MODE == 'tv' else 'android.intent.category.LAUNCHER'
+say('launch: ' + sh('monkey', '-p', PKG, '-c', cat, '1'))
+time.sleep(40)
+sh('am', 'broadcast', '-a', 'android.intent.action.CLOSE_SYSTEM_DIALOGS')
+say('focus: ' + sh('dumpsys', 'window', '|', 'grep', '-E', 'mCurrentFocus|mFocusedApp'))
 shot('01-home')
 
 if MODE == 'phone':
@@ -96,4 +110,7 @@ else:
     shot('06-rail')
     key('KEYCODE_DPAD_DOWN', 4); key('KEYCODE_DPAD_CENTER', wait=5)
     shot('07-rail-pick')
+lc = adb('logcat', '-d', '-v', 'brief').stdout.decode(errors='replace')
+open(os.path.join(OUT, MODE + '-logcat.txt'), 'w').write('\n'.join(l for l in lc.splitlines()
+    if re.search(r'AndroidRuntime|FATAL|ckplayer|Nebula|System.err', l))[-400000:])
 say('done')
