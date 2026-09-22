@@ -872,8 +872,12 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
             val searchState = remember { SearchUiState() }
             val ctx = LocalContext.current
             val scope = rememberCoroutineScope()
+            // the next-episode hop in flight (playEpisode): Back, a tab or the Up next card's Dismiss calls it off
+            var hopJob by remember { mutableStateOf<Job?>(null) }
+            fun cancelHop() { hopJob?.cancel(); hopJob = null }
             fun push(s: Screen) { ReturnFocus.clear(); stack = stack + s }
             fun pop() {
+                cancelHop()
                 if (stack.size > 1) {
                     // the screen beneath gets the remote back where it left it (TvFocus.kt)
                     ReturnFocus.aim(stack[stack.size - 2])
@@ -884,7 +888,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                     stack = stack.dropLast(1)
                 }
             }
-            fun setTab(s: Screen) { ReturnFocus.clear(); stack = listOf(s) }
+            fun setTab(s: Screen) { cancelHop(); ReturnFocus.clear(); stack = listOf(s) }
 
             // ---- watch party wiring ----
             fun partyEvent(ev: PartyEvent) {
@@ -897,13 +901,18 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                         partyUi.code = ev.code; partyUi.isHost = false; partyUi.count = ev.count
                         partyUi.lastState = ev.state
                         partyUi.status = "Joined party ${ev.code}"
-                        ev.stream?.let { st -> stack = listOf(Screen.Home, Screen.Play(st.url, st.title, st.subs, st.type, st.id, st.name ?: st.title, st.poster, st.addonUrl)) }
+                        ev.stream?.let { st ->
+                            // the host's stream, not a series of ours: no Next, no Up next, no autoplay into our last show
+                            cancelHop(); seriesChain.clear()
+                            stack = listOf(Screen.Home, Screen.Play(st.url, st.title, st.subs, st.type, st.id, st.name ?: st.title, st.poster, st.addonUrl))
+                        }
                     }
                     is PartyEvent.State -> partyUi.lastState = ev.state
                     is PartyEvent.StreamSwitch -> {
                         if (!partyUi.isHost) {
                             partyUi.lastState = null
                             partyUi.status = "Host switched streams"
+                            cancelHop(); seriesChain.clear()
                             stack = listOf(Screen.Home, Screen.Play(ev.stream.url, ev.stream.title, ev.stream.subs, ev.stream.type, ev.stream.id, ev.stream.name ?: ev.stream.title, ev.stream.poster, ev.stream.addonUrl))
                         }
                     }
@@ -1028,6 +1037,8 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
             // A deep-link play request jumps straight to the player; Back returns Home.
             LaunchedEffect(playReq) {
                 if (playReq != null) {
+                    // a bare address (often a live channel) belongs to no series: whatever chain the last show left goes
+                    cancelHop(); seriesChain.clear()
                     stack = listOf(Screen.Home, Screen.Play(playReq.mpd, playReq.title))
                     onConsumed()
                 }
@@ -1094,24 +1105,35 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 place so Back doesn't have to walk back through every episode. */
             fun playEpisode(ep: Episode) {
                 val origin = seriesChain.addon ?: return
+                // the player this hop replaces: if the viewer has left it by the time a stream is found
+                // (Back, a tab, a party, a deep link), the answer is dropped instead of reopening the player
+                val from = stack.lastOrNull() as? Screen.Play ?: return
                 val label = seriesChain.label(ep)
-                seriesChain.index = seriesChain.episodes.indexOfFirst { it.id == ep.id }
-                val poster = (stack.lastOrNull() as? Screen.Play)?.poster
-                scope.launch {
+                val poster = from.poster
+                fun landed(): Boolean {
+                    if (stack.lastOrNull() !== from) return false
+                    // the chain moves on only when the hop lands: a cancelled one leaves this episode current
+                    seriesChain.index = seriesChain.episodes.indexOfFirst { it.id == ep.id }
+                    return true
+                }
+                cancelHop()   // a second tap on Play now replaces the first hop, it does not race it
+                hopJob = scope.launch {
                     val res = NextEp.take(ep.id) ?: NextEp.source(ctx, origin)?.let { a ->
                         NextEp.resolve(ctx, a, origin, seriesChain.type, ep.id)
                     }
+                    if (stack.lastOrNull() !== from) return@launch
                     val pick = res?.pick
                     if (res != null && pick != null) {
                         // an untouched series adopts the first auto-pick as its taste; a hand-pick is never overwritten
                         NextEp.notePick(ctx, pick, res.addon, byHand = false)
                         withP2p(pick) { address ->
+                            if (!landed()) return@withP2p
                             stack = stack.dropLast(1) + Screen.Play(
                                 address, pick.name, pick.subtitles, seriesChain.type, ep.id, label, poster, res.addon.manifestUrl,
                                 sourceLine = StreamTwin.label(StreamTwin.sig(pick, res.addon)).ifEmpty { null },
                             )
                         }
-                    } else {
+                    } else if (landed()) {
                         // nothing auto-playable — fall back to the picker
                         stack = stack.dropLast(1) + Screen.Streams(origin, MetaItem(ep.id, seriesChain.type, label, poster))
                     }
@@ -1365,6 +1387,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                     currentEpisode = seriesChain.episodes.getOrNull(seriesChain.index),
                                     nextEpisode = seriesChain.next(),
                                     onPlayNext = { ep -> playEpisode(ep) },
+                                    onCancelNext = { cancelHop() },
                                     onSwapSource = { st, from, at -> swapSource(st, from, at) },
                                     onPrefetchNext = { prefetchNext() },
                                     onProgressSaved = { homeState.invalidateContinue() },
@@ -2316,8 +2339,11 @@ private fun FriendRow(title: String, items: List<JSONObject>, onOpen: (MetaItem)
     if (items.isEmpty()) return
     Text(title, color = MutedC, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
         modifier = Modifier.padding(top = 10.dp, bottom = 6.dp))
+    // Keyed type:id, and deduped on it first: a profile published before the per-show dedupe
+    // carries one record per episode, and two of one show would share a key and crash the row.
+    val shown = items.distinctBy { it.optString("type") + ":" + it.optString("id") }.take(15)
     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        items(items.take(15), key = { it.optString("type") + it.optString("id") }) { r ->
+        items(shown, key = { it.optString("type") + ":" + it.optString("id") }) { r ->
             Column(Modifier.width(96.dp)) {
                 Box(
                     Modifier.fillMaxWidth().aspectRatio(2f / 3f)
@@ -5476,6 +5502,7 @@ private fun PlayerScreen(
     currentEpisode: Episode? = null,
     nextEpisode: Episode? = null,
     onPlayNext: (Episode) -> Unit = {},
+    onCancelNext: () -> Unit = {},       // the Up next card was dismissed: a hop already asked for is called off
     onSwapSource: (StreamItem, Addon, Long) -> Unit = { _, _, _ -> },
     onPrefetchNext: () -> Unit = {},
     onProgressSaved: () -> Unit = {},
@@ -6299,10 +6326,12 @@ private fun PlayerScreen(
     LaunchedEffect(pip) { if (pip) chromeVisible = false }
 
     // A party host arriving on a new stream takes the whole room along (mirrors the web player).
+    // Keyed to the address: the next-episode hop and a source swap replace the stream in THIS composition,
+    // and they must reach the room too. The whole description goes, so viewers get subtitles and progress.
     // Not a P2P stream: its address is this phone's own loopback engine and means nothing anywhere else.
-    LaunchedEffect(Unit) {
+    LaunchedEffect(url) {
         if (partyUi.active() && partyUi.isHost && !P2p.isLocal(url)) {
-            partyUi.session?.sendStream(PartyStreamDesc(url, title, subs))
+            partyUi.session?.sendStream(PartyStreamDesc(url, title, subs, contentType, contentId, contentName, poster, addonUrl))
         }
     }
     // Watch-party sync loop: hosts broadcast state, viewers glide to the host's position.
@@ -6482,7 +6511,7 @@ private fun PlayerScreen(
     BackHandler(enabled = remoteNow && !pip && (sleepMenuOpen || upnextOpen || chromeVisible)) {
         when {
             sleepMenuOpen -> { sleepMenuOpen = false; chromeTouchedAt = System.currentTimeMillis() }
-            upnextOpen -> { upnextCounting = false; upnextOpen = false; upnextDismissed = true }
+            upnextOpen -> { upnextCounting = false; upnextOpen = false; upnextDismissed = true; onCancelNext() }
             else -> chromeVisible = false
         }
     }
@@ -6872,7 +6901,7 @@ private fun PlayerScreen(
                         interactionSource = playNowSrc,
                     ) { Text(if (upnextCounting) "Play now ($upnextLeft)" else "Play now", fontWeight = FontWeight.SemiBold) }
                     Button(
-                        onClick = { upnextCounting = false; upnextOpen = false; upnextDismissed = true },
+                        onClick = { upnextCounting = false; upnextOpen = false; upnextDismissed = true; onCancelNext() },
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (keysLit && dismissLit) Color.White else Color(0x6B505058),
                             contentColor = if (keysLit && dismissLit) Color.Black else TextC,

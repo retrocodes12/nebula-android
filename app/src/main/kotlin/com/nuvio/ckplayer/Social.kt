@@ -154,6 +154,8 @@ object Social {
         Progress.all(ctx).values
             .filter { !it.dismissed && it.name.isNotEmpty() }
             .sortedByDescending { it.at }
+            // One record per episode: keep only the newest per show, or a friend's row repeats it.
+            .distinctBy { it.type + ":" + (if (it.type == "series") seriesIdOf(it.id) else it.id) }
             .take(20)
             .forEach { r ->
                 val rootId = if (r.type == "series") seriesIdOf(r.id) else r.id
