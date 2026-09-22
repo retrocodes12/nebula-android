@@ -2102,10 +2102,11 @@ private fun RecommendSheet(type: String, item: MetaItem, scope: CoroutineScope, 
     CardSheet(
         title = item.name, sub = "Recommend to…", poster = item.poster, shape = item.posterShape,
         actions = if (failed) listOf(
-            SheetAction(Icons.Filled.CloudOff, "Could not reach Friends — check the connection") {},
+            // Try again first: a remote lands on the first row, and the sentence below it can do nothing
             SheetAction(Icons.Filled.Refresh, if (trying) "Trying again…" else "Try again", keepOpen = true) {
                 if (!trying) tries++
             },
+            SheetAction(Icons.Filled.CloudOff, "Could not reach Friends — check the connection") {},
         ) else if (list.isEmpty()) listOf(
             SheetAction(Icons.Filled.Groups, "No friends yet — add one in Friends") {},
         ) else list.take(8).map { f ->
@@ -2424,15 +2425,18 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                         }
                     }
                 }
-                item(key = "froff") {
-                    Column {
-                        Text("Turn off Friends", color = MutedC, fontSize = 13.sp,
-                            modifier = Modifier.padding(top = 12.dp).focusRing(RoundedCornerShape(8.dp), landing = false).clip(RoundedCornerShape(8.dp))
-                                .clickable { scope.launch { offErr = Social.disable(ctx); reload++ } }
-                                .padding(6.dp))
-                        // the Profile page's error red
-                        offErr?.let { Text(it, color = Color(0xFFFF453A), fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(start = 6.dp)) }
-                    }
+            }
+        }
+        // offered whatever the list holds — empty, or not loaded — or someone with no friends could never switch it off
+        if (friends != null) {
+            item(key = "froff") {
+                Column {
+                    Text("Turn off Friends", color = MutedC, fontSize = 13.sp,
+                        modifier = Modifier.padding(top = 12.dp).focusRing(RoundedCornerShape(8.dp), landing = false).clip(RoundedCornerShape(8.dp))
+                            .clickable { scope.launch { offErr = Social.disable(ctx); reload++ } }
+                            .padding(6.dp))
+                    // the Profile page's error red
+                    offErr?.let { Text(it, color = Color(0xFFFF453A), fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(start = 6.dp)) }
                 }
             }
         }

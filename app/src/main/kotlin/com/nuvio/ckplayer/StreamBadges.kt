@@ -113,7 +113,9 @@ object StreamBadges {
         else -> null
     }
 
-    private val RE_EMOJI = Regex("""[\u2190-\u21FF\u2300-\u27BF\u2B00-\u2BFF\uFE0F\u200D]|[\uD83C-\uDBFF][\uDC00-\uDFFF]""")
+    // emoji are ONE code point to the regex engine (a surrogate-pair class like [\uD83C-\uDBFF][\uDC00-\uDFFF] never
+    // matched one), so the astral block is written as code points
+    private val RE_EMOJI = Regex("""[\u2190-\u21FF\u2300-\u27BF\u2B00-\u2BFF\uFE0F\u200D]|[\x{1F000}-\x{1FAFF}]""")
     private val RE_RES = Regex("""\b(4k|2160p|uhd|1080p|fhd|720p|480p|360p)\b""", RegexOption.IGNORE_CASE)
     private val RE_EPTAG = Regex("""\bs\d{1,2}\s*e\d{1,3}\b""", RegexOption.IGNORE_CASE)
     private val RE_YEAR = Regex("""^\(?(19|20)\d\d\)?${'$'}""")
@@ -166,7 +168,7 @@ object StreamBadges {
         "\uD83C\uDDE7\uD83C\uDDF7" to "Portuguese", "\uD83C\uDDF7\uD83C\uDDFA" to "Russian",
         "\uD83C\uDDEF\uD83C\uDDF5" to "Japanese", "\uD83C\uDDF0\uD83C\uDDF7" to "Korean",
     )
-    private val RE_FLAG = Regex("""[\uD83C][\uDDE6-\uDDFF]""")
+    private val RE_FLAG = Regex("""[\x{1F1E6}-\x{1F1FF}]""")
 
     private fun langsIn(raw: String): String {
         val out = LinkedHashSet<String>()

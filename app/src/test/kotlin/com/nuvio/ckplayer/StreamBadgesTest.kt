@@ -2,6 +2,7 @@ package com.nuvio.ckplayer
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** The stream row's text: what the name keeps, what the description keeps, and the rate a row needs. */
@@ -12,6 +13,14 @@ class StreamBadgesTest {
 
     @Test fun cleanName_leavesNoDanglingSeparators() {
         assertEquals("Main", StreamBadges.cleanName("Nebula • 1080p • Main", "Nebula"))
+    }
+
+    @Test fun cleanName_dropsEmojiOutsideTheBasicPlane() {
+        // "🐧 PenguPlay ❄️ 4K · 2Peckle": the penguin is one code point (a surrogate pair in a String) — the old
+        // surrogate-pair character class never matched it and it stayed in the row
+        val out = StreamBadges.cleanName("\uD83D\uDC27 PenguPlay \u2744\uFE0F 4K \u00B7 2Peckle", null)
+        assertFalse(out, out.any { Character.isSurrogate(it) })
+        assertTrue(out, out.contains("PenguPlay") && out.contains("2Peckle"))
     }
 
     @Test fun cleanName_dropsSymbolsAndCopesWithNull() {
