@@ -2123,10 +2123,10 @@ internal fun Avatar(hex: String, name: String, size: Dp, dim: Boolean = false, r
     // a Founder wears a gold ring, everywhere the avatar is drawn
     val ringMod = if (ring) Modifier.border(2.dp, Color(0xFFE0B24A), CircleShape) else Modifier
     Box(Modifier.size(size).then(ringMod).background(bg, CircleShape), contentAlignment = Alignment.Center) {
-        Text(
-            name.trim().removePrefix("@").ifEmpty { "?" }.take(1).uppercase(), color = ink,
-            fontSize = (size.value * 0.42f).sp, fontWeight = FontWeight.Bold, fontFamily = Sans,
-        )
+        val initial = name.trim().removePrefix("@").take(1).uppercase()
+        // nobody signed in: a person glyph, not a "?" (it read as an error)
+        if (initial.isEmpty() || initial == "?") Icon(Icons.Filled.Person, contentDescription = null, tint = ink, modifier = Modifier.size(size * 0.5f))
+        else Text(initial, color = ink, fontSize = (size.value * 0.42f).sp, fontWeight = FontWeight.Bold, fontFamily = Sans)
     }
 }
 
@@ -4331,10 +4331,17 @@ private fun DetailScreen(
     }
 
     Box(Modifier.fillMaxSize()) {
+        val detailList = rememberLazyListState()
         // full-bleed backdrop; the scrim exists only so type stays legible
         // The art stops 2 dp short of the scrim's solid bottom: 430 dp is a fractional pixel height, and the last row,
         // half-covered by both layers, let the picture bleed through as a hairline seam under the header.
-        Box(Modifier.fillMaxWidth().height(430.dp).clipToBounds()) {
+        // It leaves with the page: drifting up at half the scroll and dissolving by the time the header has scrolled its
+        // own height (seen on an emulator: held still, the Play pill, the cast and the stars slid over the picture).
+        Box(Modifier.fillMaxWidth().height(430.dp).clipToBounds().graphicsLayer {
+            val off = if (detailList.firstVisibleItemIndex == 0) detailList.firstVisibleItemScrollOffset.toFloat() else size.height
+            if (!Prefs.reducedMotion) translationY = -off * 0.5f
+            alpha = (1f - off / size.height).coerceIn(0f, 1f)
+        }) {
             val art = full?.background ?: item.background ?: item.poster
             if (art != null) {
                 AsyncImage(model = art, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxWidth().height(428.dp))
@@ -4393,7 +4400,6 @@ private fun DetailScreen(
         val eps = (bySeason[currentSeason] ?: emptyList()).sortedBy { it.episode ?: 0 }
 
         // the list's place, put back once the episodes are there to scroll to (the page rebuilds with only its header)
-        val detailList = rememberLazyListState()
         val keptPlace = remember { if (backHere) screenEntry?.let { keptDetailPlaces[it] } else null }
         var placed by remember { mutableStateOf(keptPlace == null) }
         LaunchedEffect(eps.size, epsLoading) {
@@ -4428,7 +4434,7 @@ private fun DetailScreen(
             full?.runtime,
             full?.videos?.map { it.season }?.filter { it > 0 }?.distinct()?.size
                 ?.takeIf { it > 0 }?.let { "$it season" + (if (it > 1) "s" else "") },
-        ).joinToString("   ·   ")
+        ).joinToString(" · ")   // (the web's "   ·   " is collapsed by HTML; spelled out here it read as three gaps)
         // facts in the mono register; the IMDb figure is a plate, not a badge
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             if (facts.isNotEmpty()) Eyebrow(facts, color = Color(0xD1FFFFFF))
