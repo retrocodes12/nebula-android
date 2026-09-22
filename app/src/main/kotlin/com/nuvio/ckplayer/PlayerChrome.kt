@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.nuvio.ckplayer
 
 import android.graphics.Bitmap
@@ -291,9 +293,10 @@ internal fun PauseBoard(
                 desc, color = Color(0xCCEBEBF5), fontSize = 13.5.sp, lineHeight = 19.sp, maxLines = 3,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 10.dp),
             )
-            if (meta.isNotEmpty()) Row(
+            if (meta.isNotEmpty()) androidx.compose.foundation.layout.FlowRow(
                 Modifier.padding(top = 14.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 meta.forEach { (t, next) ->
                     Text(
