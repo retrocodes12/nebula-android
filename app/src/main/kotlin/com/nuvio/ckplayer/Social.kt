@@ -138,7 +138,8 @@ object Social {
             ),
         )
         true
-    }.getOrDefault(false)
+    }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }   // cancelled is not "failed to send"
+        .getOrDefault(false)
 
     /** Push the profile a few seconds after whatever changed it settles. */
     fun publishSoon(ctx: Context) {

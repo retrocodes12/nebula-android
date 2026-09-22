@@ -233,6 +233,7 @@ import androidx.media3.ui.PlayerView
 import androidx.media3.ui.SubtitleView
 import androidx.media3.ui.TrackSelectionDialogBuilder
 import coil.compose.AsyncImage
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -240,7 +241,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.roundToInt
-import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -2056,9 +2056,10 @@ private fun RatingStars(item: MetaItem) {
 
 /** Pick a friend to send this title to. */
 @Composable
-private fun RecommendSheet(type: String, item: MetaItem, onDismiss: () -> Unit) {
+private fun RecommendSheet(type: String, item: MetaItem, scope: CoroutineScope, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
+    // `scope` is the title page's: a pick closes this sheet, and the sheet's own scope would be cancelled ~190 ms
+    // later, mid-request, turning a sent recommendation into "Could not send that"
     var friends by remember { mutableStateOf<List<JSONObject>?>(null) }
     LaunchedEffect(Unit) {
         val fr = Social.friends(ctx)
@@ -2567,8 +2568,9 @@ internal fun typeLabel(type: String): String = when (type) {
 }
 
 /**
- * "Update available" banner shown on Home. Auto-downloads the APK in the
- * background as soon as it appears (cached per version), then Install is one tap.
+ * "Update available" banner shown on Home. Downloads the APK in the background as
+ * soon as it appears, unless on metered data (cached per version, one download per
+ * process — Updates.startDownload), then Install is one tap.
  * The version line carries the download's size, and ⓘ opens the release's whole text
  * (the card itself has room for its first line only) — the Founder, 09-22, pointing at
  * Nuvio's update bar: "our player don't show this so add it".
@@ -2576,43 +2578,44 @@ internal fun typeLabel(type: String): String = when (type) {
 @Composable
 private fun UpdateCard(version: String, notes: String, apkUrl: String = Updates.APK_URL, size: Long = 0L, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
     var notesOpen by remember { mutableStateOf(false) }
     if (notesOpen) ReleaseNotesSheet(version, notes) { notesOpen = false }
     val firstLine = remember(notes) { notes.lineSequence().map { it.trim().removePrefix("• ") }.firstOrNull { it.isNotEmpty() }?.take(140).orEmpty() }
     val mb = if (size > 0) " · " + (size / 1_000_000.0).roundToInt() + " MB" else ""
-    var progress by remember { mutableStateOf(0) }
-    var apk by remember { mutableStateOf<File?>(null) }
-    var phase by remember { mutableStateOf("idle") } // idle · downloading · ready · failed
     var message by remember { mutableStateOf<String?>(null) }
-
-    suspend fun download() {
-        phase = "downloading"; progress = 0; message = null
-        val f = Updates.downloadApk(ctx, version, apkUrl) { progress = it }
-        if (f != null) { apk = f; phase = "ready" } else { phase = "failed"; message = "Download failed — tap Retry" }
-    }
-    // Kick the download off automatically; reuse a completed one if already cached.
+    // The download is the process's own (Updates.startDownload): a later visit to Home, or a second card, watches the
+    // same one instead of starting another writer. A file already cached from an earlier session is ready as it is.
+    val dl = Updates.download?.takeIf { it.version == version }
+    val cached = remember(version, dl?.phase) { if (dl == null) Updates.cachedApk(ctx, version) else null }
+    val phase = dl?.phase ?: if (cached != null) "ready" else "idle"      // idle · downloading · ready · failed
+    val progress = dl?.progress ?: 0
+    val apk = dl?.file ?: cached
+    fun download() { message = null; Updates.startDownload(ctx, version, apkUrl) }
+    // Fetched in the background as soon as the card appears — but not on metered data (a phone on mobile data):
+    // there the card waits for a tap on Update.
     LaunchedEffect(version) {
-        val cached = Updates.cachedApk(ctx, version)
-        if (cached != null) { apk = cached; phase = "ready" } else download()
+        if (Updates.download?.version != version && Updates.cachedApk(ctx, version) == null && !Updates.metered(ctx)) download()
     }
 
+    // The sheets' material (a panel with a hairline), not a slab of red: one accent, on the button that acts.
     Row(
         Modifier.fillMaxWidth()
-            .background(Color(0xFFE50914), RoundedCornerShape(12.dp))
+            .background(SurfaceC, RoundedCornerShape(12.dp))
+            .border(1.dp, LineC, RoundedCornerShape(12.dp))
             .padding(start = 14.dp, top = 12.dp, end = 6.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Text("Update available · v$version$mb", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            Text("Update available · v$version$mb", color = TextC, fontSize = 15.sp, fontWeight = FontWeight.Bold)
             Text(
                 message ?: when (phase) {
                     "downloading" -> "Downloading… $progress%"
                     "ready" -> "Ready — tap Install."
+                    "failed" -> "Download failed — tap Retry"
                     else -> firstLine.ifEmpty { "A new version is available." }
                 },
-                color = Color(0xFFFFE0E0), fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                color = MutedC, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 2.dp),
             )
         }
@@ -2624,11 +2627,15 @@ private fun UpdateCard(version: String, notes: String, apkUrl: String = Updates.
                         val f = apk
                         if (f != null) Updates.installApk(ctx, f)?.let { message = it }
                     }
-                    else -> scope.launch { download() }
+                    else -> download()
                 }
             },
             enabled = phase != "downloading",
-            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Red),
+            // the accent's own ink (dark on White, Gold, Ice…), so the label reads on every accent
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Red, contentColor = OnAccent,
+                disabledContainerColor = Red.copy(alpha = .6f), disabledContentColor = OnAccent.copy(alpha = .8f),
+            ),
             shape = RoundedCornerShape(12.dp),
             modifier = Modifier.focusRing(RoundedCornerShape(12.dp), landing = false),
         ) {
@@ -2639,10 +2646,10 @@ private fun UpdateCard(version: String, notes: String, apkUrl: String = Updates.
         }
         // the whole of what changed, one press away (nothing to show when the release carries no text)
         if (notes.isNotBlank()) IconButton(onClick = { notesOpen = true }, modifier = Modifier.focusRing(CircleShape, landing = false)) {
-            Icon(Icons.Filled.Info, contentDescription = "Release notes", tint = Color.White)
+            Icon(Icons.Filled.Info, contentDescription = "Release notes", tint = TextC)
         }
         IconButton(onClick = onDismiss, modifier = Modifier.focusRing(CircleShape, landing = false)) {
-            Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = Color(0xFFFFD9D9))
+            Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = MutedC)
         }
     }
 }
@@ -3139,7 +3146,9 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
     val ctx = LocalContext.current
     LaunchedEffect(st.submitted) {
         val q = st.submitted.trim()
-        if (q.isEmpty()) { st.sections = emptyList(); st.searchedFor = null; return@LaunchedEffect }
+        // cleared mid-search: the run this key change cancelled never reached its `searching = false`,
+        // and a stuck flag would hold the skeleton up in place of Discover
+        if (q.isEmpty()) { st.sections = emptyList(); st.searchedFor = null; st.searching = false; return@LaunchedEffect }
         if (q == st.searchedFor && st.sections.isNotEmpty()) return@LaunchedEffect
         st.searching = true
         val out = mutableListOf<CatRow>()
@@ -4224,7 +4233,8 @@ private fun DetailScreen(
     var inList by remember(ck) { mutableStateOf(Library.inList(ctx, item.type, item.id)) }
     var recOpen by remember(ck) { mutableStateOf(false) }
     var moreOpen by remember(ck) { mutableStateOf(false) }
-    if (recOpen) RecommendSheet(item.type, item) { recOpen = false }
+    val pageScope = rememberCoroutineScope()
+    if (recOpen) RecommendSheet(item.type, item, pageScope) { recOpen = false }
 
     LaunchedEffect(ck) {
         if (full != null) return@LaunchedEffect
@@ -4766,8 +4776,10 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
                 current = initial?.let { i -> it.firstOrNull { c -> c.type == i.type && c.id == i.id } } ?: it.firstOrNull()
                 if (it.isEmpty()) { status = "No catalogs."; loading = false }
             }
-            .onFailure { status = "Failed: ${it.message}"; loading = false }
+            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; status = "Failed: ${it.message}"; loading = false }
     }
+    // A run cancelled by a newer genre, catalog or query must not write over it: every onFailure below rethrows
+    // cancellation, or a stale run would print "Failed: … was cancelled" and stop paging on the new list.
     LaunchedEffect(current, genre, submitted) {
         val q = submitted.trim()
         // Re-entering the screen (back from streams) relaunches this effect; if the
@@ -4780,7 +4792,7 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
             loading = true; status = "Searching…"; items = emptyList()
             runCatching { Stremio.loadCatalog(addon.base, sc, null, q) }
                 .onSuccess { items = it; status = if (it.isEmpty()) "No matches for “$q”." else "${it.size} result${if (it.size > 1) "s" else ""} for “$q”"; loading = false; st.loadedFor = want }
-                .onFailure { status = "Failed: ${it.message}"; loading = false; st.loadedFor = null }
+                .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; status = "Failed: ${it.message}"; loading = false; st.loadedFor = null }
         } else {
             val c = current ?: return@LaunchedEffect
             loading = true; status = "Loading…"; items = emptyList()
@@ -4794,7 +4806,7 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
                     status = if (it.isEmpty()) "No items." else "${it.size} items" + (if (st.pageDone) "" else " — scroll for more")
                     loading = false; st.loadedFor = want
                 }
-                .onFailure { status = "Failed: ${it.message}"; loading = false; st.loadedFor = null; st.pageDone = true }
+                .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; status = "Failed: ${it.message}"; loading = false; st.loadedFor = null; st.pageDone = true }
         }
     }
 
@@ -4812,7 +4824,8 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
         val c = current ?: return@LaunchedEffect
         if (items.size >= 1000) { st.pageDone = true; return@LaunchedEffect }   // ceiling for TV memory
         st.paging = true
-        runCatching { Stremio.loadCatalog(addon.base, c, genre, null, st.fetched) }
+        // cancelled mid-page (a new genre or query), the flag must still come down, or paging stays off for good
+        try { runCatching { Stremio.loadCatalog(addon.base, c, genre, null, st.fetched) }
             .onSuccess { page ->
                 st.fetched += page.size
                 val seen = items.mapTo(HashSet()) { it.type + ":" + it.id }
@@ -4825,7 +4838,7 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
                 if (it is kotlinx.coroutines.CancellationException) throw it
                 st.pageDone = true
             }
-        st.paging = false
+        } finally { st.paging = false }
     }
 
     val typing = tvTyping()
@@ -6544,6 +6557,9 @@ private fun PlayerScreen(
     // scrubber, so the cards that float above the chrome (Skip, Up next) start higher there.
     val shortScreen = LocalConfiguration.current.screenHeightDp < 480
     val aboveChrome = if (!chromeVisible) 40.dp else if (shortScreen) 150.dp else 214.dp
+    // a phone on its side has no room for both: the board would sit over the centre transport, so while the
+    // controls are up there it steps aside (with its scrim and the title it hides), and comes back when they fade
+    val boardUp = pauseBoardOn && !(shortScreen && chromeVisible)
     Box(Modifier.fillMaxSize().background(Color.Black).onFocusChanged { rootHasFocus = it.hasFocus }) {
         AndroidView(
             factory = { ctx ->
@@ -6629,7 +6645,7 @@ private fun PlayerScreen(
         }
         // the Title Card chrome (see PlayerChrome.kt)
         // a scrim under the pause board, so the words read over any picture
-        if (pauseBoardOn && !pip) Box(Modifier.fillMaxSize().background(Color(0x7A000000)))
+        if (boardUp && !pip) Box(Modifier.fillMaxSize().background(Color(0x7A000000)))
         if (!pip) Box(Modifier.fillMaxSize().onFocusChanged { chromeHasFocus = it.hasFocus }) { TitleCardChrome(
             visible = chromeVisible,
             title = showName,
@@ -6649,7 +6665,7 @@ private fun PlayerScreen(
             onGoLive = { exo.seekToDefaultPosition(); chromeTouchedAt = System.currentTimeMillis() },
             canFullscreen = !tvBox,
             canInvite = !tvBox,
-            dimTitle = pauseBoardOn,
+            dimTitle = boardUp,
             infoOn = pinfoOn,
             onInfo = { pinfoOn = !pinfoOn; chromeTouchedAt = System.currentTimeMillis() },
             sleepLabel = sleepLabel,
@@ -6751,7 +6767,7 @@ private fun PlayerScreen(
                     (if (n.name.isNotEmpty()) " · ${n.name}" else "")) to true
             }
             PauseBoard(
-                visible = pauseBoardOn,
+                visible = boardUp,
                 kicker = (if (sleepFired) "Sleep timer · " else "") +
                     when { ended -> "Finished"; isLiveState -> "Live · Paused"; else -> "Paused" },
                 title = showName,

@@ -2,10 +2,19 @@ package com.nuvio.ckplayer
 
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
 import android.net.Uri
 import android.provider.Settings
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -142,20 +151,59 @@ object Updates {
 
     private fun apkFile(context: Context, version: String) = File(context.cacheDir, "nebula-update-$version.apk")
 
+    /**
+     * The one APK download of this process. It used to live in the Home card's own scope: leaving Home could not
+     * stop the blocking copy, and coming back started a second writer into the same file ("Download failed", and a
+     * cached APK that could be two downloads interleaved). Now whichever card asks first starts it here, in the
+     * app's scope, and every card after that — the same visit or a later one — only watches it.
+     */
+    class Download(val version: String) {
+        var progress by mutableStateOf(0)
+        var phase by mutableStateOf("downloading")      // downloading · ready · failed
+        var file by mutableStateOf<File?>(null)
+    }
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var job: Job? = null
+    /** The download in flight or finished this session, if any (main thread only). */
+    var download by mutableStateOf<Download?>(null)
+        private set
+
+    /** Start [version]'s download unless it is already running or done; returns the one to watch. */
+    fun startDownload(context: Context, version: String, url: String = APK_URL): Download {
+        download?.let { d -> if (d.version == version && d.phase != "failed") return d }
+        job?.cancel()
+        val app = context.applicationContext
+        val d = Download(version)
+        download = d
+        job = appScope.launch {
+            val f = downloadApk(app, version, url) { p -> if (p != d.progress) d.progress = p }
+            if (f != null) { d.file = f; d.phase = "ready" } else d.phase = "failed"
+        }
+        return d
+    }
+
+    /** Metered data (a phone on mobile data, a hotspot): the card waits for a tap instead of spending it unasked. */
+    fun metered(context: Context): Boolean =
+        (context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager)?.isActiveNetworkMetered == true
+
     /** A previously-completed download for this version, if one is cached. */
     fun cachedApk(context: Context, version: String): File? =
         apkFile(context, version).takeIf { it.exists() && it.length() > 0L }
 
     /**
-     * Download this version's APK into cacheDir, reporting 0..100 progress.
-     * Writes to a .part file and promotes it only on success (so a cached file is
+     * Download this version's APK into cacheDir, reporting 0..100 progress (from the IO thread).
+     * Writes to a unique .part file and promotes it only on success (so a cached file is
      * always complete), and clears downloads for other versions. Returns the file or null.
+     * Only [startDownload] calls it, so one runs per process.
      * [url] is the release's own asset when the check learned it, else the evergreen link.
      */
-    suspend fun downloadApk(context: Context, version: String, url: String = APK_URL, onProgress: (Int) -> Unit): File? = withContext(Dispatchers.IO) {
+    private suspend fun downloadApk(context: Context, version: String, url: String = APK_URL, onProgress: (Int) -> Unit): File? = withContext(Dispatchers.IO) {
+        // a name of its own per writer, promoted by an atomic rename: two writers can never share one file
+        var tmp: File? = null
         try {
             val out = apkFile(context, version)
-            val tmp = File(context.cacheDir, "nebula-update-$version.part")
+            val part = File.createTempFile("nebula-update-$version-", ".part", context.cacheDir)
+            tmp = part
             val src = if (url.startsWith(ASSET_PREFIX)) url else APK_URL
             val conn = (URL(src).openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = true
@@ -163,33 +211,41 @@ object Updates {
                 readTimeout = 30000
                 setRequestProperty("User-Agent", "NebulaPlayer")
             }
-            conn.connect()
-            if (conn.responseCode !in 200..299) { conn.disconnect(); return@withContext null }
-            val total = conn.contentLength.toLong()
-            conn.inputStream.use { input ->
-                tmp.outputStream().use { output ->
-                    val buf = ByteArray(64 * 1024)
-                    var readTotal = 0L
-                    while (true) {
-                        val n = input.read(buf)
-                        if (n < 0) break
-                        output.write(buf, 0, n)
-                        readTotal += n
-                        if (total > 0) onProgress(((readTotal * 100) / total).toInt().coerceIn(0, 100))
+            try {
+                conn.connect()
+                if (conn.responseCode !in 200..299) return@withContext null
+                val total = conn.contentLength.toLong()
+                conn.inputStream.use { input ->
+                    part.outputStream().use { output ->
+                        val buf = ByteArray(64 * 1024)
+                        var readTotal = 0L
+                        while (true) {
+                            ensureActive()          // the copy blocks: cancellation is only seen here
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            output.write(buf, 0, n)
+                            readTotal += n
+                            if (total > 0) onProgress(((readTotal * 100) / total).toInt().coerceIn(0, 100))
+                        }
                     }
                 }
+            } finally {
+                conn.disconnect()
             }
-            conn.disconnect()
-            if (tmp.length() <= 0L) { tmp.delete(); return@withContext null }
+            if (part.length() <= 0L) return@withContext null
+            // clear older versions and leftovers of a killed run (only one writer runs per process)
             context.cacheDir.listFiles()?.forEach {
-                if (it.name.startsWith("nebula-update-") && it != tmp) it.delete()
+                if (it.name.startsWith("nebula-update-") && it != part) it.delete()
             }
-            if (!tmp.renameTo(out)) return@withContext null
+            if (!part.renameTo(out)) return@withContext null
+            tmp = null
             out
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
             null
+        } finally {
+            tmp?.delete()
         }
     }
 

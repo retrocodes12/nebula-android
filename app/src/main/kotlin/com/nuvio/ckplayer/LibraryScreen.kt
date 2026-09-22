@@ -132,8 +132,11 @@ internal fun LibraryScreen(
     // the date list costs a meta call per saved series, so it is fetched when the tab is opened
     LaunchedEffect(version, items.size, libTab) {
         if (libTab != 2 || upcoming != null) return@LaunchedEffect
+        // a tab switch mid-fetch cancels this; that must not land as an empty list ("Nothing scheduled" for good)
         upcoming = if (items.none { it.type == "series" }) emptyList()
-        else runCatching { Library.upcoming(ctx) }.getOrDefault(emptyList())
+        else runCatching { Library.upcoming(ctx) }
+            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+            .getOrDefault(emptyList())
     }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
