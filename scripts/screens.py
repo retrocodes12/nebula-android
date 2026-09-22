@@ -57,7 +57,9 @@ def key(k, n=1, wait=0.6):
         adb('shell', 'input', 'keyevent', k); time.sleep(wait)
 
 
-apk = [os.path.join(d, f) for d, _, fs in os.walk('app/build/outputs/apk/debug') for f in fs if f.endswith('.apk')][0]
+# the RELEASE build is what people install; SCREENS_APK=debug looks at the debug one instead
+kind = os.environ.get('SCREENS_APK', 'release')
+apk = [os.path.join(d, f) for d, _, fs in os.walk('app/build/outputs/apk/' + kind) for f in fs if f.endswith('.apk')][0]
 def sh(*a):
     r = adb('shell', *a); return (r.stdout + r.stderr).decode(errors='replace').strip()
 
