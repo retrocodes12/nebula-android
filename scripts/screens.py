@@ -79,25 +79,37 @@ sh('am', 'broadcast', '-a', 'android.intent.action.CLOSE_SYSTEM_DIALOGS')
 say('focus: ' + sh('dumpsys', 'window', '|', 'grep', '-E', 'mCurrentFocus|mFocusedApp'))
 shot('01-home')
 
+def front():
+    """bring the app back to the front on its Home (a relaunch lands where the task was)"""
+    sh('monkey', '-p', PKG, '-c', cat, '1'); time.sleep(6)
+
+
 if MODE == 'phone':
     adb('shell', 'input', 'swipe', '540', '1900', '540', '700', '400'); time.sleep(3)
     shot('02-home-rows')
     adb('shell', 'input', 'swipe', '540', '700', '540', '1900', '300'); time.sleep(2)
     if tap('Search', exact=True):
-        adb('shell', 'input', 'text', 'the%sbear'); key('KEYCODE_ENTER', wait=8)
+        adb('shell', 'input', 'text', 'severance'); key('KEYCODE_ENTER', wait=8)
+        key('KEYCODE_BACK', wait=2)                    # the keyboard down
         shot('03-search')
-        if tap('The Bear', exact=True, wait=10):
+        if tap('Severance', exact=True, wait=10):
             shot('04-title')
             adb('shell', 'input', 'swipe', '540', '1900', '540', '500', '400'); time.sleep(3)
             shot('05-title-episodes')
-            tap('System', wait=12)
-            shot('06-streams')
-    key('KEYCODE_BACK', 4)
-    if tap('Library', exact=True): shot('07-library')
-    if tap('Settings', exact=True): shot('08-settings')
-    if tap('Appearance'): shot('09-appearance'); key('KEYCODE_BACK')
-    if tap('Add-ons', exact=True): shot('10-addons')
+            adb('shell', 'input', 'swipe', '540', '1900', '540', '500', '400'); time.sleep(3)
+            shot('05b-title-episodes-more')
+            if tap('Good News About Hell', wait=12): shot('06-streams')
+    for tab, name in (('Library', '07-library'), ('Settings', '08-settings')):
+        key('KEYCODE_BACK', 2, wait=1.5); front()
+        if tap(tab, exact=True): shot(name)
+    if tap('Appearance'): shot('09-appearance'); key('KEYCODE_BACK', wait=2)
+    if tap('Playback'): shot('09b-playback'); key('KEYCODE_BACK', wait=2)
+    adb('shell', 'input', 'swipe', '540', '1900', '540', '600', '400'); time.sleep(2)
+    shot('08b-settings-lower')
+    key('KEYCODE_BACK', 2, wait=1.5); front()
+    if tap('Profile', exact=True): shot('10-profile')
     adb('shell', 'settings', 'put', 'system', 'font_scale', '1.3'); time.sleep(3)
+    key('KEYCODE_BACK', 2, wait=1.5); front()
     if tap('Home', exact=True, wait=6): shot('11-home-large-text')
 else:
     key('KEYCODE_DPAD_DOWN'); key('KEYCODE_DPAD_DOWN'); time.sleep(2)
