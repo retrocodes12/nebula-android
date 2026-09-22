@@ -5441,19 +5441,21 @@ internal fun langLabel(code: String): String = runCatching {
         .ifEmpty { c.uppercase() }.replaceFirstChar { it.uppercase() }
 }.getOrDefault(code.uppercase())
 
-/** Add-on subtitle links carry no extension and are sometimes CP1252 — download,
-    sniff the format, re-encode as UTF-8 and hand ExoPlayer a local file. */
-private suspend fun cachedSubFile(ctx: Context, st: SubTrack): Pair<Uri, String>? = runCatching {
-    val raw = Stremio.httpGetBytes(st.url)
+/** Add-on subtitle links carry no extension and are sometimes CP1252 — download one and hand back its text as
+    UTF-8 (parseSubCues sniffs SRT or WebVTT from it). A cancelled download stays cancelled: a player left while a
+    subtitle loaded used to say "Could not load that subtitle" over whatever came next. */
+private suspend fun subText(st: SubTrack): String? {
+    val raw = try {
+        Stremio.httpGetBytes(st.url)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        return null
+    }
     var text = String(raw, Charsets.UTF_8)
     if (text.isBlank() || text.contains('\uFFFD')) text = String(raw, charset("windows-1252"))
-    text = text.removePrefix("\uFEFF")
-    if (text.isBlank()) return@runCatching null
-    val vtt = text.trimStart().startsWith("WEBVTT")
-    val f = File(ctx.cacheDir, "sub-" + Integer.toHexString(st.url.hashCode()) + (if (vtt) ".vtt" else ".srt"))
-    f.writeText(text)
-    Pair(Uri.fromFile(f), if (vtt) MimeTypes.TEXT_VTT else MimeTypes.APPLICATION_SUBRIP)
-}.getOrNull()
+    return text.removePrefix("\uFEFF").takeIf { it.isNotBlank() }
+}
 
 // ---------- player (unchanged behavior) ----------
 @OptIn(UnstableApi::class)
@@ -5496,8 +5498,6 @@ private fun PlayerScreen(
     val subsFocus = remember { FocusRequester() }                 // the toolbar's Subtitles item, to hand focus back to
     var subBusy by remember { mutableStateOf(false) }
     var activeAddonSub by remember { mutableStateOf<String?>(null) }
-    var lastPick by remember { mutableStateOf<SubTrack?>(null) }     // the add-on subtitle picked by hand, and for which title
-    var lastPickFor by remember { mutableStateOf<String?>(null) }
     // the Title Card chrome replaces Media3's controller entirely
     var chromeVisible by remember { mutableStateOf(true) }
     var chromeTouchedAt by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -5537,6 +5537,10 @@ private fun PlayerScreen(
     var tracksFor by remember { mutableStateOf<String?>(null) }                 // the address whose tracks are known
     var autoSubDone by remember { mutableStateOf<String?>(null) }               // the address the autoload has settled
     var subChosenFor by remember { mutableStateOf<String?>(null) }              // the title whose subtitles were chosen by hand
+    var subsTitle by remember { mutableStateOf<String?>(null) }                 // the title the subtitle state belongs to
+    var autoSubTry by remember { mutableStateOf(0) }                            // bumped when an autoload file would not load
+    val autoSubFailed = remember { mutableSetOf<String>() }                     // files that would not load, not tried again
+    val autoSubBusy = remember { BooleanArray(1) }                              // an autoload download is under way
     // Scrub preview (ScrubPreview.kt): a second, silent reader of a progressive file hands the tip its frames;
     // rebuilt per URL, released with the player. While a preview is up the chrome stays awake.
     val scrubPreview = remember(url) { if (ScrubPreview.eligible(url)) ScrubPreview(url, context) else null }
@@ -5759,18 +5763,16 @@ private fun PlayerScreen(
         stallWatch.reset(); swapOffer = null; error = null
         if (softDecode) { softDecode = false; runCatching { decoders.selectVideoDecoder(DecoderMode.AUTO) } }
         upnextOpen = false; upnextCounting = false; upnextDismissed = false; stillAsk = false; subForced = false
-        // and without the last one's add-on subtitle — but a swap to another source of the SAME title keeps the viewer's
-        // pick: the overlay draws it over whichever source plays, so nothing is fed into the new item
-        val keepPick = lastPick?.takeIf { contentId != null && lastPickFor == contentId && overlayCues != null }
-        subOffsetMs = 0L; tracksFor = null
-        if (keepPick == null) {
-            val had = overlayCues != null
+        // and without the last title's add-on subtitle — a swap to another source of the SAME title keeps it, its timing
+        // and a pick still downloading: the add-on subtitle is drawn over whichever source plays, so nothing is fed
+        // into the new item
+        val sameTitle = contentId != null && contentId == subsTitle
+        subsTitle = contentId
+        tracksFor = null
+        val textBack = !sameTitle && overlayCues != null
+        if (!sameTitle) {
             pickSerial[0]++; subBusy = false
-            lastPick = null; activeAddonSub = null; overlayCues = null
-            // the overlay had the stream's own tracks off; the next title has them back as the settings say — on, in
-            // the hand-picked language first, after a pick (as a pick always left them)
-            if (had) exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
-                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, Prefs.subStart == "off" && pickLang == null).build()
+            activeAddonSub = null; overlayCues = null; subOffsetMs = 0L
         }
         val isMpd = Regex("\\.mpd(\\?|#|$)", RegexOption.IGNORE_CASE).containsMatchIn(url)
         // A protected stream's licence address used to be read from its manifest HERE, before the item was set — a
@@ -5825,6 +5827,11 @@ private fun PlayerScreen(
             } else 0L
             // Start over is a one-play choice: the saved point is skipped, not erased
             val resume = if (startAtMs >= 0) startAtMs else if (startOver) 0L else saved   // a source swap lands on its own second
+            // the add-on subtitle had the stream's own tracks off; the new title has them back as the settings say (on, in
+            // the hand-picked language first, after a pick) — now, as the item changes, not while the last one still
+            // plays through a slow relay lookup
+            if (textBack) exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, Prefs.subStart == "off" && pickLang == null).build()
             if (resume > 0) exo.setMediaItem(b.build(), resume) else exo.setMediaItem(b.build())
             exo.prepare()
             // the pill is drawn inside the app now, so it stays quiet inside a picture-in-picture window
@@ -6201,6 +6208,8 @@ private fun PlayerScreen(
         }
     }
 
+    // the settings' subtitle languages, as trackParams reads them
+    fun prefLangs() = listOf(Prefs.subLang.ifEmpty { java.util.Locale.getDefault().language }, Prefs.subLang2).filter { it.isNotEmpty() }
     /**
      * Download an add-on subtitle and draw it over the video; the stream's own tracks stand aside. Nothing about the
      * stream changes, so it never restarts (issue #1). [auto] is the autoload's pick: quiet, and not a choice by hand.
@@ -6208,22 +6217,22 @@ private fun PlayerScreen(
      */
     suspend fun loadPick(st: SubTrack, auto: Boolean): Boolean? {
         val serial = ++pickSerial[0]
-        val got = cachedSubFile(context, st)
-        val cues = got?.let { (uri, mime) -> uri.path?.let { p -> withContext(Dispatchers.Default) { parseSubCues(File(p), mime) } } }
+        val cues = subText(st)?.let { t -> withContext(Dispatchers.Default) { parseSubCues(t) } }
         if (serial != pickSerial[0]) return null
         if (!auto) subBusy = false
         if (cues == null) return false
+        // and the stream's tracks, when they come back (Off, a stream track, the next title), prefer a hand-picked
+        // language, then the settings' (the pick's raw code used to replace them: "pob" matched nothing)
+        val prefer = (listOf(subLangKey(st.lang).ifEmpty { st.lang }) + prefLangs()).distinct()
         exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
             .clearOverridesOfType(C.TRACK_TYPE_TEXT)
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-            // and the stream's tracks, when they come back (Off, a stream track, the next title), prefer its language
-            .apply { if (!auto) setPreferredTextLanguage(st.lang) }
+            .apply { if (!auto) setPreferredTextLanguages(*prefer.toTypedArray()) }
             .build()
         overlayCues = cues
         activeAddonSub = st.url
         subOffsetMs = 0L
         subForced = true
-        lastPick = st; lastPickFor = contentId
         if (!auto) pickLang = st.lang
         return true
     }
@@ -6236,37 +6245,48 @@ private fun PlayerScreen(
     fun subsOff() {
         pickSerial[0]++
         subBusy = false
-        lastPick = null; activeAddonSub = null; overlayCues = null
+        activeAddonSub = null; overlayCues = null
         subOffsetMs = 0L
         pickLang = null
         subChosenFor = contentId
     }
 
     // Subtitles when a video starts, for the add-ons' subtitles too (issue #1: "the chosen subtitles for autoload don't
-    // show up" — only the stream's own tracks were ever switched on). Once this address's tracks are known and nothing
-    // showing is in a preferred language, the first add-on subtitle in the first language goes on by itself; the second
-    // language only once every add-on has answered. Once per address, never over a choice made by hand for this title.
-    LaunchedEffect(url, addonSubs, tracksFor, subSearching) {
-        if (tracksFor != url || autoSubDone == url || contentId == null || subChosenFor == contentId || overlayCues != null) return@LaunchedEffect
-        val device = java.util.Locale.getDefault().language
-        val langs = (listOfNotNull(pickLang) + (if (Prefs.subStart != "off") listOf(Prefs.subLang.ifEmpty { device }, Prefs.subLang2) else emptyList()))
+    // show up" — only the stream's own tracks were ever switched on). Once this address's tracks are known, the languages
+    // are walked in order: one the stream already shows ends it; else the first add-on file in it goes on by itself; a
+    // language nobody has offered yet waits while add-ons are still answering. A file that will not load gives way to
+    // the next. Always, with nothing in a preferred language and no text in the stream at all: the first add-on file.
+    // Once per address, never over a choice made by hand for this title.
+    LaunchedEffect(url, addonSubs, tracksFor, subSearching, autoSubTry) {
+        if (autoSubBusy[0] || tracksFor != url || autoSubDone == url || contentId == null || subChosenFor == contentId || overlayCues != null) return@LaunchedEffect
+        val langs = (listOfNotNull(pickLang) + (if (Prefs.subStart != "off") prefLangs() else emptyList()))
             .map { subLangKey(it) }.filter { it.isNotEmpty() }.distinct()
         // off in the settings, or turned off by hand on an earlier title (the stream's tracks stay off too)
         if (langs.isEmpty() || C.TRACK_TYPE_TEXT in exo.trackSelectionParameters.disabledTrackTypes) { autoSubDone = url; return@LaunchedEffect }
-        // the stream already shows one in a preferred language (Media3 chose it from the same list)
-        if (embeddedSubs.any { it.selected && subLangKey(it.format.language) in langs }) { autoSubDone = url; return@LaunchedEffect }
+        var pick: AddonSub? = null
         for (k in langs) {
-            val hits = addonSubs.filter { subLangKey(it.track.lang) == k }.take(3)
-            if (hits.isNotEmpty()) {
-                autoSubDone = url
-                val cid = contentId
-                // a download that fails moves on to the next file in that language
-                scope.launch { for (h in hits) { if (subChosenFor == cid || loadPick(h.track, auto = true) != false) break } }
-                return@LaunchedEffect
+            // the stream shows this language already (Media3 chose it from the same list) — a forced-only track, signs
+            // and foreign lines, is not subtitles in it
+            if (embeddedSubs.any { it.selected && (it.format.selectionFlags and C.SELECTION_FLAG_FORCED) == 0 && subLangKey(it.format.language) == k }) {
+                autoSubDone = url; return@LaunchedEffect
             }
+            pick = addonSubs.firstOrNull { subLangKey(it.track.lang) == k && it.track.url !in autoSubFailed }
+            if (pick != null) break
             if (subSearching) return@LaunchedEffect           // add-ons still answering may have this language
         }
-        if (!subSearching) autoSubDone = url
+        if (pick == null && Prefs.subStart == "always" && embeddedSubs.isEmpty()) pick = addonSubs.firstOrNull { it.track.url !in autoSubFailed }
+        val p = pick ?: run { if (!subSearching) autoSubDone = url; return@LaunchedEffect }
+        autoSubBusy[0] = true
+        val cid = contentId
+        val u = url
+        scope.launch {
+            val r = try { if (subChosenFor == cid) null else loadPick(p.track, auto = true) } finally { autoSubBusy[0] = false }
+            if (r == true) autoSubDone = u
+            else {
+                if (r == false) autoSubFailed += p.track.url
+                autoSubTry++                                    // look again: the next file, the next language, or nothing
+            }
+        }
     }
 
     // In picture-in-picture only the video shows — no chrome, no gestures.
@@ -6502,18 +6522,17 @@ private fun PlayerScreen(
                     setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
                     playerViewRef = this
                     subtitleView?.let { SubStyle.apply(ctx, it) }
-                }
-            },
-            modifier = Modifier.fillMaxSize()
-        )
-        // add-on subtitles draw here, over the video, from their own cues (loadPick) — the same style and lift as the
-        // stream's own, which draw inside the PlayerView under it
-        AndroidView(
-            factory = { ctx ->
-                SubtitleView(ctx).apply {
-                    isFocusable = false
-                    SubStyle.apply(ctx, this)
-                    overlaySubView = this
+                    // add-on subtitles (loadPick) draw on a second SubtitleView just above the stream's own, inside the
+                    // picture's frame — so they size and sit exactly as those do (spread over the whole screen they
+                    // were 3.6x larger on an upright phone, and sat in a wide film's black bar)
+                    val own = subtitleView
+                    val frame = own?.parent as? android.view.ViewGroup ?: this
+                    val over = SubtitleView(ctx).apply { isFocusable = false; SubStyle.apply(ctx, this) }
+                    frame.addView(
+                        over, if (own != null && own.parent === frame) frame.indexOfChild(own) + 1 else frame.childCount,
+                        android.view.ViewGroup.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT),
+                    )
+                    overlaySubView = over
                 }
             },
             modifier = Modifier.fillMaxSize()

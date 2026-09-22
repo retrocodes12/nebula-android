@@ -14,7 +14,6 @@ import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import androidx.media3.extractor.text.SubtitleParser
 import androidx.media3.extractor.text.subrip.SubripParser
 import androidx.media3.extractor.text.webvtt.WebvttParser
-import java.io.File
 import java.util.Locale
 
 /**
@@ -177,15 +176,16 @@ internal fun clockLine(ctx: Context, remainMs: Long, speed: Float, live: Boolean
 internal class SubCue(val startUs: Long, val endUs: Long, val cues: List<Cue>)
 
 /**
- * The cues of a downloaded add-on subtitle (the UTF-8 SRT/VTT file cachedSubFile wrote), in time order.
- * The player draws them over the video itself (the overlay in PlayerScreen), so a pick or a timing nudge
- * never rebuilds the stream around a side-loaded file — that re-prepare was issue #1's "restarts the stream".
+ * The cues of a downloaded add-on subtitle (its text, as subText decoded it), in time order: WebVTT when it
+ * says so, SRT otherwise. The player draws them itself (the second SubtitleView in PlayerScreen), so a pick or a
+ * timing nudge never rebuilds the stream around a side-loaded file — that re-prepare was issue #1's "restarts
+ * the stream". Parsed in memory: two loads of the same file never share a file on disk.
  */
 @UnstableApi
-internal fun parseSubCues(file: File, mime: String): List<SubCue>? = runCatching {
-    val parser: SubtitleParser = if (mime == MimeTypes.TEXT_VTT) WebvttParser() else SubripParser()
+internal fun parseSubCues(text: String): List<SubCue>? = runCatching {
+    val parser: SubtitleParser = if (text.trimStart().startsWith("WEBVTT")) WebvttParser() else SubripParser()
     val out = ArrayList<SubCue>()
-    parser.parse(file.readBytes(), SubtitleParser.OutputOptions.allCues()) { c ->
+    parser.parse(text.toByteArray(Charsets.UTF_8), SubtitleParser.OutputOptions.allCues()) { c ->
         if (c.cues.isEmpty()) return@parse
         val start = if (c.startTimeUs == C.TIME_UNSET) 0L else c.startTimeUs
         val end = if (c.durationUs == C.TIME_UNSET) start + 5_000_000L else start + c.durationUs
@@ -204,21 +204,31 @@ internal fun cuesAt(all: List<SubCue>, timeUs: Long, into: MutableList<Int>) {
     }
 }
 
+// Media3 files these under their macrolanguage ("sr" and "scc" become "hbs-srp", "id" becomes "ms-ind"); the
+// settings name the language itself
+private val SUB_MACRO = listOf("hbs-srp" to "sr", "hbs-hrv" to "hr", "hbs-bos" to "bs", "ms-ind" to "id")
+
 /**
- * A subtitle language as one comparable key: add-ons say "eng", "en", "en-US", "pob" or "English"; the
- * settings say "en". The key is the two-letter code where there is one.
+ * A subtitle language as one comparable key: add-ons say "eng", "en", "en-US", "fre", "pob", "scc" or
+ * "English"; the settings say "en". The key is the two-letter code where there is one.
  */
 @UnstableApi
 internal fun subLangKey(code: String?): String {
     val c = (code ?: "").trim().lowercase(Locale.ROOT).replace('_', '-')
     if (c.isEmpty() || c == "und") return ""
-    when (c) {
-        "pob", "pb", "pt-br" -> return "pt"          // OpenSubtitles' Brazilian Portuguese
-        "scc" -> return "sr"
-        "scr" -> return "hr"
+    when (c) {                                   // OpenSubtitles' own codes
+        "pob", "pb" -> return "pt"               // Brazilian Portuguese
+        "spn", "spl", "ea" -> return "es"        // Spanish (Europe), Spanish (Latin America)
+        "zht", "zhe", "ze" -> return "zh"        // Chinese traditional, bilingual
+        "scr" -> return "hr"                     // Croatian, bibliographic
     }
-    val main = (Util.normalizeLanguageCode(c) ?: c).substringBefore('-')
+    val n = Util.normalizeLanguageCode(c) ?: c
+    SUB_MACRO.firstOrNull { n == it.first || n.startsWith(it.first + "-") }?.let { return it.second }
+    val main = n.substringBefore('-')
     if (main.length == 2) return main
-    // a name rather than a code
-    return Prefs.LANGS.firstOrNull { it.second.lowercase(Locale.ROOT) == c }?.first?.takeIf { it.isNotEmpty() } ?: main
+    // a name rather than a code: "English", or "Portuguese (Brazil)" — the longest name it starts with, so
+    // "Malayalam" is not read as Malay
+    val named = Prefs.LANGS.filter { it.first.isNotEmpty() }
+        .filter { c.startsWith(it.second.lowercase(Locale.ROOT)) }.maxByOrNull { it.second.length }
+    return named?.first ?: main
 }

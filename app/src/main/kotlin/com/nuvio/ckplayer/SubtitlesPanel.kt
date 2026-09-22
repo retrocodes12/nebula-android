@@ -133,6 +133,8 @@ internal fun SubtitlesPanel(
     val anyOn = byLang.values.any { l -> l.any { it.active } }
     val current = byLang.entries.firstOrNull { e -> e.value.any { it.active } }?.key
     var lang by remember { mutableStateOf(current) }
+    // a subtitle that goes on while the panel shows Off (the autoload landing) lights its language
+    LaunchedEffect(current) { if (lang == null && current != null) lang = current }
     val initial = remember { current }
     // opening lands on the language that is showing (or Off) — for a remote; a finger needs no focus
     val firstFocus = remember { FocusRequester() }
