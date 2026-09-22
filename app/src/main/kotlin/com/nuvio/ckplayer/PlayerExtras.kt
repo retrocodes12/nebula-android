@@ -162,12 +162,12 @@ internal fun fmtSubOffset(ms: Long): String {
     return (if (ms > 0) "+" else if (ms < 0) "−" else "") + String.format(Locale.US, "%.1f s", kotlin.math.abs(s))
 }
 
-/** "9:41 pm · Ends 11:12 pm" for the chrome's top-right; just the clock on live or while the
-    end is unknown. Follows the device's 12/24-hour setting; the end accounts for the speed. */
 /** One clock time the way the player writes them everywhere (the device's 12/24-hour setting, lower-case am/pm). */
 internal fun clockAt(ctx: Context, ms: Long): String =
     android.text.format.DateFormat.getTimeFormat(ctx).format(java.util.Date(ms)).replace("AM", "am").replace("PM", "pm")
 
+/** "9:41 pm · Ends 11:12 pm" for the chrome's top-right; just the clock on live or while the
+    end is unknown. Follows the device's 12/24-hour setting; the end accounts for the speed. */
 internal fun clockLine(ctx: Context, remainMs: Long, speed: Float, live: Boolean): String {
     fun at(ms: Long) = clockAt(ctx, ms)
     val now = System.currentTimeMillis()

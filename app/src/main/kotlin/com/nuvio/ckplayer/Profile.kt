@@ -171,7 +171,7 @@ private fun SignedOut(
     var mode by remember(legacy) { mutableStateOf(if (legacy) "attach" else if (tv) "code" else "signin") }
     Text(
         if (legacy) "This device syncs with a link code from an earlier version. Give it a profile — everything you’ve synced stays exactly where it is, and every device signs in by handle from now on."
-        else "Your add-ons, progress, My List and ratings follow you to every device you sign in on. No email, no tracking — a profile is optional.",
+        else "Your add-ons, progress, My List and ratings follow you to every device you sign in on.",
         color = MutedC, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(bottom = 14.dp),
     )
     val modes = when {
