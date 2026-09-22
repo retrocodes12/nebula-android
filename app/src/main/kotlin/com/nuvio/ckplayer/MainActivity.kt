@@ -342,6 +342,10 @@ class MainActivity : ComponentActivity() {
         if (!data.scheme.equals("nebula", ignoreCase = true)) return null
         val mpd = data.getQueryParameter("mpd")?.trim().orEmpty()
         if (mpd.isEmpty()) return null
+        // any web page can fire this link: only a web address may come through it, never file:// or content://
+        // (which would have the player read this app's own files, or another app's, on a stranger's say-so)
+        val scheme = runCatching { Uri.parse(mpd).scheme }.getOrNull()?.lowercase()
+        if (scheme != "http" && scheme != "https") return null
         val title = (data.getQueryParameter("t") ?: data.getQueryParameter("title") ?: "Nebula Sports").trim()
         return PlayReq(mpd, title)
     }
@@ -608,7 +612,7 @@ private fun seriesResumeRec(ctx: Context, seriesId: String): ProgressRec? =
 private fun epAirDate(ep: Episode): String? = ep.released?.let {
     runCatching {
         java.time.LocalDate.parse(it.take(10))
-            .format(java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy"))
+            .format(java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy", java.util.Locale.US))
     }.getOrNull()
 }
 
@@ -1009,7 +1013,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
             var addonsVersion by remember { mutableStateOf(0) }
             LaunchedEffect(Unit) {
                 Cloud.onApplied = { keys ->
-                    if ("addons" in keys) { manifestCache.clear(); homeState.invalidate(); addonsVersion++ }
+                    if ("addons" in keys) { manifestCache.clear(); homeState.invalidate(); searchState.discover.optionsLoaded = false; addonsVersion++ }
                     if ("progress" in keys) homeState.invalidateContinue()
                     if ("library" in keys) libraryVersion++
                 }
@@ -1229,7 +1233,8 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                     version = addonsVersion,
                                     onBack = { pop() },
                                     onOpen = { push(Screen.Catalog(it)) },
-                                    onAddonsChanged = { manifestCache.clear(); homeState.invalidate(); homeState.invalidateContinue() },   // an add-on off takes its titles out of Continue watching
+                                    // an add-on off takes its titles out of Continue watching, and its catalogs out of Discover's pickers
+                                    onAddonsChanged = { manifestCache.clear(); homeState.invalidate(); homeState.invalidateContinue(); searchState.discover.optionsLoaded = false },
                                 )
                                 is Screen.Settings -> SettingsScreen(
                                     onAddons = { push(Screen.Addons) },
@@ -6757,7 +6762,7 @@ private fun PlayerScreen(
                     meta += (if (off != C.TIME_UNSET && off > 12_000) fmtTime(off) + " behind live" else "At the live edge") to false
                 } else if (durMs > 0) {
                     meta += (if (remain >= 60_000) "${remain / 60_000} min left" else "Under a minute left") to false
-                    val ends = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+                    val ends = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US)
                         .format(java.util.Date(System.currentTimeMillis() + (remain / exo.playbackParameters.speed).toLong()))
                     meta += "Ends $ends" to false
                 }
@@ -7009,8 +7014,9 @@ private fun tapZone(x: Float, width: Int): Int = when {
 
 internal fun fmtTime(ms: Long): String {
     val s = (ms / 1000).coerceAtLeast(0)
-    return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, (s % 3600) / 60, s % 60)
-    else "%d:%02d".format(s / 60, s % 60)
+    // Locale.US: the device's locale would print Arabic-Indic or Bengali digits into the time pills
+    return if (s >= 3600) String.format(java.util.Locale.US, "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60)
+    else String.format(java.util.Locale.US, "%d:%02d", s / 60, s % 60)
 }
 
 private fun setImmersive(activity: Activity, on: Boolean) {

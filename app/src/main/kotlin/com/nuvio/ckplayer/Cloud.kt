@@ -64,17 +64,48 @@ object Cloud {
     var devices by mutableStateOf<List<DeviceRec>>(emptyList()); internal set
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-    private fun gid(ctx: Context) = prefs(ctx).getString("cloud_gid", null)
-    private fun secret(ctx: Context) = prefs(ctx).getString("cloud_secret", null)
-    private fun token(ctx: Context) = prefs(ctx).getString("cloud_token", null)
+
+    /** The sign-in alone, in a file Auto Backup and device transfer leave behind (res/xml/backup_rules.xml,
+        data_extraction_rules.xml): a device token copied into a backup, or onto a new phone, is this device's
+        credential in someone else's hands. Everything else in `ckplayer` still backs up. Moved out of it once. */
+    private const val CRED = "ckplayer_cred"
+    private val CRED_KEYS = listOf("cloud_gid", "cloud_secret", "cloud_token")
+    @Volatile private var credMoved = false
+    private fun cred(ctx: Context): android.content.SharedPreferences {
+        val c = ctx.getSharedPreferences(CRED, Context.MODE_PRIVATE)
+        if (!credMoved) synchronized(this) {
+            if (!credMoved) {
+                val p = prefs(ctx)
+                if (CRED_KEYS.any { p.contains(it) }) {
+                    val e = c.edit()
+                    CRED_KEYS.forEach { k -> if (!c.contains(k)) p.getString(k, null)?.let { e.putString(k, it) } }
+                    e.commit()
+                    val pe = p.edit()
+                    CRED_KEYS.forEach { pe.remove(it) }
+                    pe.commit()
+                }
+                credMoved = true
+            }
+        }
+        return c
+    }
+    private fun gid(ctx: Context) = cred(ctx).getString("cloud_gid", null)
+    private fun secret(ctx: Context) = cred(ctx).getString("cloud_secret", null)
+    private fun token(ctx: Context) = cred(ctx).getString("cloud_token", null)
     internal fun hasToken(ctx: Context) = !token(ctx).isNullOrEmpty()
     /** A device token replaces the master secret for good. */
-    internal fun setToken(ctx: Context, t: String) = prefs(ctx).edit().putString("cloud_token", t).remove("cloud_secret").apply()
+    internal fun setToken(ctx: Context, t: String) = cred(ctx).edit().putString("cloud_token", t).remove("cloud_secret").apply()
     fun linked(ctx: Context) = !gid(ctx).isNullOrEmpty() && (!token(ctx).isNullOrEmpty() || !secret(ctx).isNullOrEmpty())
     /** "out" (nothing), "in" (a profile), or "legacy" (a link-code group with no profile yet). */
     fun state(ctx: Context): String = if (!linked(ctx)) "out" else if (profile != null) "in" else "legacy"
 
     fun load(ctx: Context) {
+        // restored from a backup, the profile comes without its credential (kept out of backups): signed out, not half in
+        if (!linked(ctx)) {
+            if (prefs(ctx).contains("profile")) prefs(ctx).edit().remove("profile").apply()
+            profile = null
+            return
+        }
         profile = parseProfile(runCatching { JSONObject(prefs(ctx).getString("profile", "") ?: "") }.getOrNull())
     }
     private fun parseProfile(o: JSONObject?): Profile? {
@@ -131,8 +162,10 @@ object Cloud {
 
     // ---------- HTTP ----------
     class HttpFail(val code: Int, val error: String) : RuntimeException("HTTP $code $error")
-    /** One call to the cloud. `auth = false` is for the public profile routes (sign-in, TV code). */
-    internal suspend fun api(ctx: Context, method: String, path: String, body: JSONObject?, auth: Boolean = true): JSONObject =
+    /** One call to the cloud. `auth = false` is for the public profile routes (sign-in, TV code). [timeoutMs] > 0 caps
+        the whole call: the blocking execute() below cannot be cut short by a caller's withTimeout, so a caller on a
+        budget (Relay's lookup before a play) must bound the call itself. */
+    internal suspend fun api(ctx: Context, method: String, path: String, body: JSONObject?, auth: Boolean = true, timeoutMs: Long = 0L): JSONObject =
         withContext(Dispatchers.IO) {
             val b = Request.Builder().url(BASE + path)
             val signed = auth && linked(ctx)
@@ -144,7 +177,9 @@ object Cloud {
                 "DELETE" -> b.delete(payload)
                 else -> b.get()
             }
-            http.newCall(b.build()).execute().use { r ->
+            val call = http.newCall(b.build())
+            if (timeoutMs > 0) call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
+            call.execute().use { r ->
                 val text = r.body?.string() ?: "{}"
                 if (!r.isSuccessful) {
                     val err = runCatching { JSONObject(text).optString("error") }.getOrDefault("")
@@ -158,10 +193,12 @@ object Cloud {
 
     /** Take a credential set {gid, token, profile} as this device's identity. */
     internal fun adopt(ctx: Context, r: JSONObject, fresh: Boolean) {
-        prefs(ctx).edit()
+        cred(ctx).edit()
             .putString("cloud_gid", r.getString("gid"))
             .putString("cloud_token", r.getString("token"))
             .remove("cloud_secret")
+            .apply()
+        prefs(ctx).edit()
             .putString("cloud_revs", "{}")
             .putString("cloud_dirty", "{}")
             .apply()
@@ -175,14 +212,16 @@ object Cloud {
             SYNC_KEYS.forEach { k -> if (hasContent(app, k)) scope.launch { pushKey(app, k) } }
         } else {
             // merge; newer local records push back on their own
-            scope.launch { pullAll(app, force = true); Social.refresh(app) }
+            // on Main like AppRoot's pulls: the merge writes the same stores the main thread does (api() is on IO)
+            scope.launch { withContext(Dispatchers.Main) { pullAll(app, force = true) }; Social.refresh(app) }
         }
     }
 
     /** Forget the credential on this device only; nothing local is deleted. */
     fun forget(ctx: Context) {
+        cred(ctx).edit().remove("cloud_gid").remove("cloud_secret").remove("cloud_token").apply()
         prefs(ctx).edit()
-            .remove("cloud_gid").remove("cloud_secret").remove("cloud_token").remove("profile")
+            .remove("profile")
             .putString("cloud_revs", "{}").putString("cloud_dirty", "{}")
             .apply()
         profile = null
@@ -231,7 +270,12 @@ object Cloud {
 
     private suspend fun pushKey(ctx: Context, key: String) {
         if (!linked(ctx)) return
-        val v = docFor(ctx, key) ?: return
+        // The stores behind the docs (Progress above all) are plain maps the main thread writes, and this runs on IO
+        // from noteChanged/flushNow: copying one mid-write threw ConcurrentModificationException and took the app
+        // down. The doc is read on Main; the upload stays on IO.
+        val v = runCatching { withContext(Dispatchers.Main) { docFor(ctx, key) } }
+            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+            .getOrNull() ?: return
         runCatching {
             val r = api(ctx, "PUT", "/v1/kv/$key", JSONObject().put("v", v))
             putJsonPref(ctx, "cloud_revs", jsonPref(ctx, "cloud_revs").put(key, r.getInt("rev")))

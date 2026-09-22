@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ (android:dataExtractionRules): the same exclusions as backup_rules.xml, for the cloud backup and for
+     a transfer to a new device — a copied device token would make the new phone this device. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="ckplayer_cred.xml" />
+        <exclude domain="file" path="p2p" />
+        <exclude domain="external" path="p2p" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="ckplayer_cred.xml" />
+        <exclude domain="file" path="p2p" />
+        <exclude domain="external" path="p2p" />
+    </device-transfer>
+</data-extraction-rules>

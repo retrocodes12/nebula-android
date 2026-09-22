@@ -50,6 +50,7 @@ internal object Relay {
     private val probe = OkHttpClient.Builder()
         .connectTimeout(1500, TimeUnit.MILLISECONDS)
         .readTimeout(1500, TimeUnit.MILLISECONDS)
+        .callTimeout(1500, TimeUnit.MILLISECONDS)      // connect + read together: a blocking call ignores withTimeout
         .build()
 
     fun wanted(ctx: Context): Boolean = Account.isTv(ctx) && Prefs.relay != "off"
@@ -64,7 +65,9 @@ internal object Relay {
         if (System.currentTimeMillis() - pulledAt < 60_000) return doc
         pulledAt = System.currentTimeMillis()
         doc = try {
-            JSONObject(Cloud.api(ctx, "GET", "/v1/kv/relay_v1", null).getString("v"))
+            // capped at 2 s: resolve() waits at most ~2.6 s, but withTimeoutOrNull cannot interrupt the blocking cloud call,
+            // whose own limits (12 s connect, 20 s read) once held a play up for half a minute
+            JSONObject(Cloud.api(ctx, "GET", "/v1/kv/relay_v1", null, timeoutMs = 2_000).getString("v"))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Cloud.HttpFail) {

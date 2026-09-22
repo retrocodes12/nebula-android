@@ -215,8 +215,9 @@ internal fun DiscoverSection(
     onOpen: (Addon, MetaItem) -> Unit,
     header: @Composable () -> Unit,
 ) {
-    // the add-ons' catalogs, once per session (manifests are cached)
-    LaunchedEffect(Unit) {
+    // the add-ons' catalogs, once per session (manifests are cached) — and again after the add-on list changes
+    // (AppRoot clears `optionsLoaded` then; keyed on it so a sync landing while this is on screen reloads too)
+    LaunchedEffect(st.optionsLoaded) {
         if (st.optionsLoaded) return@LaunchedEffect
         st.options = discoverOptions(ctx)
         st.optionsLoaded = true

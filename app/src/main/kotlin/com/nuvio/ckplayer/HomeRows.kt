@@ -169,6 +169,7 @@ internal fun SettingsHomeRowsScreen(onBack: () -> Unit) {
 
     LaunchedEffect(attempt) {
         val out = mutableListOf<HomeRowItem>()
+        val seen = HashSet<String>()      // the list is keyed on HomeRows.key: a repeat would crash it
         var reached = 0
         addons.forEachIndexed { ai, a ->
             val m = runCatching { manifestFor(a.manifestUrl) }
@@ -178,6 +179,9 @@ internal fun SettingsHomeRowsScreen(onBack: () -> Unit) {
             val all = m.catalogs.filter { it.browsable }
             val name = a.name.ifEmpty { m.addon.name }
             all.forEachIndexed { ci, c ->
+                // Home's `seenCat`: a manifest listing one type+id twice gets one row, the first, and `ci` stays the
+                // catalog's place in the manifest so visibility and order read the same as Home's
+                if (!seen.add(HomeRows.key(a, c))) return@forEachIndexed
                 val label = catalogLabel(c, m.catalogs)
                 out.add(HomeRowItem(HomeRows.key(a, c), a, c, ai, ci, if (all.size > 1) label else name, if (all.size > 1) name else label))
             }

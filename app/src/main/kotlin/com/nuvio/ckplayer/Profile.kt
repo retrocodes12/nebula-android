@@ -129,8 +129,10 @@ internal fun ProfileScreen(onBack: () -> Unit) {
     val state = remember(profile, gen) { Cloud.state(ctx) }
     var recovery by remember { mutableStateOf<String?>(null) }
     var status by remember { mutableStateOf<Pair<String, Boolean>?>(null) }   // message · is it an error
-    val say: (String) -> Unit = { status = it to false }
-    val fail: (String) -> Unit = { status = it to true }
+    // the line under the header is at the TOP of a long page, and the panel that acted (password, devices, delete)
+    // sits far below it on a phone — so every result is also a toast, which shows wherever the page is scrolled
+    val say: (String) -> Unit = { status = it to false; Toasts.show(it) }
+    val fail: (String) -> Unit = { status = it to true; Toasts.show(it) }
 
     LaunchedEffect(profile?.handle) { if (profile != null) Account.refreshProfile(ctx) }
 

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Auto Backup on Android 11 and older (android:fullBackupContent). Everything backs up except this device's
+     sign-in (Cloud.kt keeps it alone in ckplayer_cred.xml) and the P2P engine's downloads, which would blow the
+     25 MB backup quota and stop every backup. Android 12+ reads data_extraction_rules.xml instead. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="ckplayer_cred.xml" />
+    <exclude domain="file" path="p2p" />
+    <exclude domain="external" path="p2p" />
+</full-backup-content>
