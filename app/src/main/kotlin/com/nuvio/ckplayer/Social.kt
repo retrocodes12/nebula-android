@@ -57,8 +57,8 @@ object Social {
         runCatching {
             val r = Cloud.api(ctx, "GET", "/v1/social/me", null)
             on = r.optBoolean("on")
-            code = if (on) r.optString("code") else ""
-            handle = if (on) r.optString("handle") else ""
+            code = if (on) jstr(r, "code") else ""
+            handle = if (on) jstr(r, "handle") else ""
             store(ctx)
         }
     }
@@ -73,7 +73,7 @@ object Social {
         val p = Cloud.profile ?: return "Friends find each other by @handle — sign in or create a profile first."
         return runCatching {
             val r = Cloud.api(ctx, "POST", "/v1/social/enable", JSONObject().put("name", displayName(ctx)))
-            on = true; code = r.optString("code"); handle = r.optString("handle").ifEmpty { p.handle }; store(ctx)
+            on = true; code = jstr(r, "code"); handle = jstr(r, "handle").ifEmpty { p.handle }; store(ctx)
             publishSoon(ctx)
             null
         }.getOrElse { Account.errorText(it) }
@@ -85,12 +85,15 @@ object Social {
     }
 
     /** `{handle}` or `{code}` for a friend card — what the server's social routes take. */
+    /** A string field that may be JSON null: org.json's optString turns null into the text "null" (a friend with no
+        handle became "@null", and two of them one duplicate key). */
+    fun jstr(o: JSONObject, k: String): String = if (o.isNull(k)) "" else o.optString(k)
     fun friendRef(f: JSONObject): JSONObject {
-        val h = f.optString("handle")
-        return if (h.isNotEmpty()) JSONObject().put("handle", h) else JSONObject().put("code", f.optString("code"))
+        val h = jstr(f, "handle")
+        return if (h.isNotEmpty()) JSONObject().put("handle", h) else JSONObject().put("code", jstr(f, "code"))
     }
-    fun friendKey(f: JSONObject): String = f.optString("handle").ifEmpty { null }?.let { "@$it" } ?: f.optString("code")
-    fun friendLabel(f: JSONObject): String = f.optString("name").ifEmpty { friendKey(f) }.ifEmpty { "A friend" }
+    fun friendKey(f: JSONObject): String = jstr(f, "handle").ifEmpty { null }?.let { "@$it" } ?: jstr(f, "code")
+    fun friendLabel(f: JSONObject): String = jstr(f, "name").ifEmpty { friendKey(f) }.ifEmpty { "A friend" }
     /** Friend cards carry the supporter mark too, so friends see each other's. */
     fun friendSup(f: JSONObject): Boolean = f.optBoolean("sup")
     fun friendMark(f: JSONObject): String = Support.cleanMark(f.optString("mark"))
@@ -135,10 +138,18 @@ object Social {
         Cloud.api(ctx, "GET", "/v1/social/asks", null).optJSONArray("asks")
     }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
 
-    /** Adding back is the yes (true when it worked). */
-    suspend fun acceptAsk(ctx: Context, f: JSONObject): Boolean = runCatching {
-        Cloud.api(ctx, "POST", "/v1/social/friend", friendRef(f)); true
-    }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrDefault(false)
+    /** Adding back is the yes: null when it worked, else what to tell the viewer. */
+    suspend fun acceptAsk(ctx: Context, f: JSONObject): String? = runCatching {
+        Cloud.api(ctx, "POST", "/v1/social/friend", friendRef(f)); null
+    }.getOrElse {
+        if (it is kotlinx.coroutines.CancellationException) throw it
+        when ((it as? Cloud.HttpFail)?.code) {
+            404 -> "They are not on Friends any more."
+            409 -> "Friends is off on their side now."
+            507 -> "Your friend list is full."
+            else -> Account.errorText(it)
+        }
+    }
 
     /** Clears the ask from your list (the asker is not told). */
     suspend fun dismissAsk(ctx: Context, f: JSONObject) {
@@ -176,6 +187,17 @@ object Social {
 
     private suspend fun publish(ctx: Context) {
         if (!on || !Cloud.linked(ctx)) return
+        // the stores are plain maps the main thread writes: the doc is built there (a copy off it could throw mid-write)
+        val doc = kotlinx.coroutines.withContext(Dispatchers.Main) { profileDoc(ctx) }
+        runCatching {
+            Cloud.api(
+                ctx, "PUT", "/v1/social/profile",
+                JSONObject().put("v", doc.toString()).put("name", displayName(ctx)),
+            )
+        }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+    }
+
+    private fun profileDoc(ctx: Context): JSONObject {
         val recent = JSONArray()
         Progress.all(ctx).values
             .filter { !it.dismissed && it.name.isNotEmpty() }
@@ -200,14 +222,8 @@ object Social {
                     .put("poster", li.poster ?: "").put("shape", li.shape),
             )
         }
-        val doc = JSONObject()
+        return JSONObject()
             .put("name", displayName(ctx)).put("recent", recent)
             .put("ratings", ratings).put("list", list)
-        runCatching {
-            Cloud.api(
-                ctx, "PUT", "/v1/social/profile",
-                JSONObject().put("v", doc.toString()).put("name", displayName(ctx)),
-            )
-        }
     }
 }

@@ -80,7 +80,7 @@ internal class DiscoverUiState {
     var loading by mutableStateOf(false)
     var status by mutableStateOf("")
     var loadedFor: Pair<String, String?>? = null
-    var fetched = 0
+    var fetched by mutableStateOf(0)
     var pageDone by mutableStateOf(true)
     var paging by mutableStateOf(false)
     val gridState = LazyGridState()
@@ -260,21 +260,24 @@ internal fun DiscoverSection(
             last >= 0 && last >= st.gridState.layoutInfo.totalItemsCount - 12
         }
     }
-    LaunchedEffect(reachedEnd, st.pageDone, st.paging, current, st.genre) {
+    // keyed on `fetched`, never on `paging`: setting the flag it was keyed on cancelled the request, and with nothing
+    // to lower it again `paging` stuck true — Discover never loaded a second page
+    LaunchedEffect(reachedEnd, st.pageDone, st.fetched, current, st.genre) {
         if (!reachedEnd || st.pageDone || st.paging || st.loading) return@LaunchedEffect
         val c = current ?: return@LaunchedEffect
         if (st.items.size >= 1000) { st.pageDone = true; return@LaunchedEffect }
         st.paging = true
-        runCatching { Stremio.loadCatalog(c.addon.base, c.catalog, st.genre, null, st.fetched) }
-            .onSuccess { page ->
-                st.fetched += page.size
-                val seen = st.items.mapTo(HashSet()) { it.type + ":" + it.id }
-                val fresh = page.filter { seen.add(it.type + ":" + it.id) }
-                if (fresh.isNotEmpty()) st.items = st.items + fresh
-                st.pageDone = page.isEmpty() || fresh.isEmpty()
-            }
-            .onFailure { if (it is CancellationException) throw it; st.pageDone = true }
-        st.paging = false
+        try {
+            runCatching { Stremio.loadCatalog(c.addon.base, c.catalog, st.genre, null, st.fetched) }
+                .onSuccess { page ->
+                    val seen = st.items.mapTo(HashSet()) { it.type + ":" + it.id }
+                    val fresh = page.filter { seen.add(it.type + ":" + it.id) }
+                    if (fresh.isNotEmpty()) st.items = st.items + fresh
+                    st.pageDone = page.isEmpty() || fresh.isEmpty()
+                    st.fetched += page.size
+                }
+                .onFailure { if (it is CancellationException) throw it; st.pageDone = true }
+        } finally { st.paging = false }
     }
 
     var picker by remember { mutableStateOf<String?>(null) }     // "type" | "catalog" | "genre"

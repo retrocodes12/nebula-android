@@ -445,7 +445,7 @@ private fun whenText(t: Long): String {
 
 private fun devIcon(plat: String): ImageVector = when (plat) {
     "webos", "tv", "androidtv" -> Icons.Filled.Tv
-    "windows", "mac", "linux" -> Icons.Filled.Computer
+    "windows", "mac", "macos", "linux" -> Icons.Filled.Computer
     "android", "ios" -> Icons.Filled.PhoneAndroid
     else -> Icons.Filled.Language
 }
