@@ -2256,18 +2256,18 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                         .padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Avatar(f.optString("avatar"), f.optString("name").ifEmpty { f.optString("handle") }, 40.dp, ring = Social.friendFounder(f))
+                    Avatar(Social.jstr(f, "avatar"), Social.jstr(f, "name").ifEmpty { Social.jstr(f, "handle") }, 40.dp, ring = Social.friendFounder(f))
                     Column(Modifier.padding(start = 12.dp).weight(1f)) {
                         Text(Social.friendLabel(f), color = TextC, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        val h = f.optString("handle")
+                        val h = Social.jstr(f, "handle")
                         Text(if (h.isNotEmpty()) "@$h added you" else "Added you", color = MutedC, fontSize = 12.sp,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     Button(
                         onClick = {
                             scope.launch {
-                                status = if (Social.acceptAsk(ctx, f)) "You and ${Social.friendLabel(f)} are now friends." else "Could not reach the server."
+                                status = Social.acceptAsk(ctx, f) ?: "You and ${Social.friendLabel(f)} are now friends."
                                 reload++
                             }
                         },
@@ -2349,7 +2349,7 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                                 .padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Avatar(f.optString("avatar"), f.optString("name").ifEmpty { f.optString("handle") }, 40.dp, ring = Social.friendFounder(f))
+                            Avatar(Social.jstr(f, "avatar"), Social.jstr(f, "name").ifEmpty { Social.jstr(f, "handle") }, 40.dp, ring = Social.friendFounder(f))
                             Column(Modifier.padding(start = 12.dp).weight(1f)) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -2360,7 +2360,7 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                                         modifier = Modifier.weight(1f, fill = false))
                                     if (Social.friendSup(f)) SupporterMark(mark = Social.friendMark(f))
                                 }
-                                val handle = f.optString("handle")
+                                val handle = Social.jstr(f, "handle")
                                 Text(
                                     (if (handle.isNotEmpty()) "@$handle · " else "") +
                                         if (Social.friendPending(f)) "Waiting for them to add you back" else "${prof.optJSONArray("ratings")?.length() ?: 0} rated",
@@ -2836,7 +2836,7 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit, de
             Modifier.matchParentSize().background(
                 Brush.verticalGradient(
                     0f to Color(0x8A000000), 0.22f to Color(0x1A000000),
-                    0.58f to Color(0x8A000000), 0.82f to Color(0xE0000000), 0.97f to Color(0xFF000000), 1f to Color(0xFF000000),
+                    0.58f to Color(0x8A000000), 0.82f to Color(0xE0000000), 0.97f to Bg, 1f to Bg,
                 )
             )
         )
@@ -3213,8 +3213,10 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
         // cleared mid-search: the run this key change cancelled never reached its `searching = false`,
         // and a stuck flag would hold the skeleton up in place of Discover
         if (q.isEmpty()) { st.sections = emptyList(); st.searchedFor = null; st.searching = false; return@LaunchedEffect }
-        if (q == st.searchedFor && st.sections.isNotEmpty()) return@LaunchedEffect
-        st.searching = true
+        if (q == st.searchedFor && st.sections.isNotEmpty() && !st.searching) return@LaunchedEffect
+        // the sections on screen belong to no finished query until this one ends: a refine cancelled mid-way left another
+        // query's partial rows standing under this one's name, and the early return above then kept them
+        st.searching = true; st.searchedFor = null
         val out = mutableListOf<CatRow>()
         st.sections = emptyList()
         for (a in activeAddons(ctx)) {
@@ -4350,7 +4352,7 @@ private fun DetailScreen(
                 Modifier.matchParentSize().background(
                     Brush.verticalGradient(
                         0f to Color(0x52000000), 0.32f to Color(0x1F000000),
-                        0.7f to Color(0xC7000000), 0.96f to Color(0xFF000000), 1f to Color(0xFF000000),
+                        0.7f to Color(0xC7000000), 0.96f to Bg, 1f to Bg,   // the page's colour (Graphite is not black)
                     )
                 )
             )
@@ -4896,7 +4898,9 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
             last >= 0 && last >= st.gridState.layoutInfo.totalItemsCount - 12
         }
     }
-    LaunchedEffect(reachedEnd, st.pageDone, st.paging, submitted, current, genre) {
+    // Keyed on what a page CHANGES (fetched), never on the flag it sets: keyed on `paging`, setting it cancelled the
+    // effect mid-request, the finally lowered it and the effect started over — a loop, and page 2 never arrived.
+    LaunchedEffect(reachedEnd, st.pageDone, st.fetched, submitted, current, genre) {
         if (!reachedEnd || st.pageDone || st.paging || loading) return@LaunchedEffect
         if (submitted.trim().isNotEmpty()) return@LaunchedEffect      // search results aren't paged
         val c = current ?: return@LaunchedEffect
@@ -6264,7 +6268,9 @@ private fun PlayerScreen(
             }
             if (swapOffer != null && now - swapShownAt > 60_000) swapOffer = null   // an offer nobody took lapses once playback has settled
             // Controls hide after (Settings › Playback)
-            if (chromeVisible && exo.isPlaying && !subPanelOpen && !sleepMenuOpen && !scrubbing && !trackListOpen &&
+            // (a phone on its side, paused, too: there the board and the controls cannot share the screen, and the board waits)
+            val pausedShort = Prefs.pauseBoard && !exo.isPlaying && pausedSince > 0 && context.resources.configuration.screenHeightDp < 480
+            if (chromeVisible && (exo.isPlaying || pausedShort) && !subPanelOpen && !sleepMenuOpen && !scrubbing && !trackListOpen &&
                 now - chromeTouchedAt > (Prefs.controlsHide * 1000f).toLong()) chromeVisible = false
             // Skip intro / recap: offer the pill, or take it on Auto once per segment a sitting
             // (a scrub back into the titles is taken as meant); a party viewer follows the host.
@@ -6843,9 +6849,8 @@ private fun PlayerScreen(
                     meta += (if (off != C.TIME_UNSET && off > 12_000) fmtTime(off) + " behind live" else "At the live edge") to false
                 } else if (durMs > 0) {
                     meta += (if (remain >= 60_000) "${remain / 60_000} min left" else "Under a minute left") to false
-                    val ends = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US)
-                        .format(java.util.Date(System.currentTimeMillis() + (remain / exo.playbackParameters.speed).toLong()))
-                    meta += "Ends $ends" to false
+                    // the same clock as the controls' top line (the device's 12/24-hour setting), so the two never disagree
+                    meta += "Ends " + clockAt(context, System.currentTimeMillis() + (remain / exo.playbackParameters.speed.coerceAtLeast(0.1f)).toLong()) to false
                 }
             }
             nextEpisode?.let { n ->

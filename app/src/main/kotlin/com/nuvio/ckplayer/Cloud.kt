@@ -79,10 +79,12 @@ object Cloud {
                 if (CRED_KEYS.any { p.contains(it) }) {
                     val e = c.edit()
                     CRED_KEYS.forEach { k -> if (!c.contains(k)) p.getString(k, null)?.let { e.putString(k, it) } }
-                    e.commit()
-                    val pe = p.edit()
-                    CRED_KEYS.forEach { pe.remove(it) }
-                    pe.commit()
+                    // the old copies go only once the new file is written: a failed write keeps the device signed in
+                    if (e.commit()) {
+                        val pe = p.edit()
+                        CRED_KEYS.forEach { pe.remove(it) }
+                        pe.commit()
+                    }
                 }
                 credMoved = true
             }
@@ -104,6 +106,7 @@ object Cloud {
         if (!linked(ctx)) {
             if (prefs(ctx).contains("profile")) prefs(ctx).edit().remove("profile").apply()
             profile = null
+            Social.reset(ctx)          // Friends lives with the profile: a restored, signed-out device must not show it on
             return
         }
         profile = parseProfile(runCatching { JSONObject(prefs(ctx).getString("profile", "") ?: "") }.getOrNull())
