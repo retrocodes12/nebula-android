@@ -162,18 +162,27 @@ internal fun fmtSubOffset(ms: Long): String {
     return (if (ms > 0) "+" else if (ms < 0) "−" else "") + String.format(Locale.US, "%.1f s", kotlin.math.abs(s))
 }
 
-/** "9:41 pm · Ends 11:12 pm" for the chrome's top-right; just the clock on live or while the
-    end is unknown. Follows the device's 12/24-hour setting; the end accounts for the speed. */
 /** One clock time the way the player writes them everywhere (the device's 12/24-hour setting, lower-case am/pm). */
 internal fun clockAt(ctx: Context, ms: Long): String =
     android.text.format.DateFormat.getTimeFormat(ctx).format(java.util.Date(ms)).replace("AM", "am").replace("PM", "pm")
 
+/** "9:41 pm · Ends 11:12 pm" for the chrome's top-right; just the clock on live or while the
+    end is unknown. Follows the device's 12/24-hour setting; the end accounts for the speed. */
 internal fun clockLine(ctx: Context, remainMs: Long, speed: Float, live: Boolean): String {
     fun at(ms: Long) = clockAt(ctx, ms)
     val now = System.currentTimeMillis()
     if (live || remainMs <= 0) return at(now)
     return at(now) + " · Ends " + at(now + (remainMs / speed.coerceAtLeast(0.1f)).toLong())
 }
+
+/**
+ * TalkBack, or any service that explores the screen by touch, is on. The player never lets its controls time out
+ * then: a reader walking through them one by one cannot race a fade, and a control that has faded is one it
+ * cannot find.
+ */
+internal fun touchExploring(ctx: Context): Boolean =
+    (ctx.getSystemService(Context.ACCESSIBILITY_SERVICE) as? android.view.accessibility.AccessibilityManager)
+        ?.isTouchExplorationEnabled == true
 
 /** One add-on subtitle cue: when it shows, when it goes, what it says. */
 internal class SubCue(val startUs: Long, val endUs: Long, val cues: List<Cue>)

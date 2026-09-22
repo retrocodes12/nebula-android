@@ -67,7 +67,10 @@ object Cloud {
 
     /** The sign-in alone, in a file Auto Backup and device transfer leave behind (res/xml/backup_rules.xml,
         data_extraction_rules.xml): a device token copied into a backup, or onto a new phone, is this device's
-        credential in someone else's hands. Everything else in `ckplayer` still backs up. Moved out of it once. */
+        credential in someone else's hands. Everything else in `ckplayer` still backs up. Moved out of it once — and only
+        on an in-place upgrade: a backup made by 1.78.0 or older still carries the keys in `ckplayer.xml`, and restored
+        onto another phone they are the OLD device's credential. A restore is a fresh install, so there they are dropped
+        and the phone starts signed out. */
     private const val CRED = "ckplayer_cred"
     private val CRED_KEYS = listOf("cloud_gid", "cloud_secret", "cloud_token")
     @Volatile private var credMoved = false
@@ -77,10 +80,17 @@ object Cloud {
             if (!credMoved) {
                 val p = prefs(ctx)
                 if (CRED_KEYS.any { p.contains(it) }) {
-                    val e = c.edit()
-                    CRED_KEYS.forEach { k -> if (!c.contains(k)) p.getString(k, null)?.let { e.putString(k, it) } }
-                    // the old copies go only once the new file is written: a failed write keeps the device signed in
-                    if (e.commit()) {
+                    if (upgradedInPlace(ctx)) {
+                        val e = c.edit()
+                        CRED_KEYS.forEach { k -> if (!c.contains(k)) p.getString(k, null)?.let { e.putString(k, it) } }
+                        // the old copies go only once the new file is written: a failed write keeps the device signed in
+                        if (e.commit()) {
+                            val pe = p.edit()
+                            CRED_KEYS.forEach { pe.remove(it) }
+                            pe.commit()
+                        }
+                    } else {
+                        // restored (or reinstalled over an old backup): not this device's to adopt
                         val pe = p.edit()
                         CRED_KEYS.forEach { pe.remove(it) }
                         pe.commit()
@@ -91,6 +101,14 @@ object Cloud {
         }
         return c
     }
+    /** This install has been updated since it was first installed — the only way credential keys still sitting in
+        `ckplayer.xml` can be this device's own (a restore installs fresh: first install and last update are one moment).
+        Unreadable counts as fresh: better signed out than signed in with another phone's token. */
+    @Suppress("DEPRECATION")
+    private fun upgradedInPlace(ctx: Context): Boolean = runCatching {
+        val pi = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+        pi.lastUpdateTime > pi.firstInstallTime
+    }.getOrDefault(false)
     private fun gid(ctx: Context) = cred(ctx).getString("cloud_gid", null)
     private fun secret(ctx: Context) = cred(ctx).getString("cloud_secret", null)
     private fun token(ctx: Context) = cred(ctx).getString("cloud_token", null)

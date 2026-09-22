@@ -27,6 +27,18 @@ jobs:
       - name: Assemble debug
         run: gradle assembleDebug --no-daemon --stacktrace
 
+      # JVM unit tests (app/src/test): a failing test fails the branch. The second step reads the JUnit reports so a
+      # green run that ran nothing (a test source set that stopped being picked up) fails too.
+      - name: Unit tests
+        run: gradle testDebugUnitTest --no-daemon --stacktrace
+
+      - name: Unit tests ran
+        run: |
+          DIR=app/build/test-results/testDebugUnitTest
+          N=$(cat "$DIR"/*.xml 2>/dev/null | grep -o '<testsuite [^>]*' | sed -n 's/.* tests="\([0-9]*\)".*/\1/p' | awk '{s+=$1} END {print s+0}')
+          echo "JVM unit tests in the reports: $N"
+          [ "$N" -gt 0 ] || { echo "::error::no unit tests ran"; exit 1; }
+
       # P2P streams are dead on arrival if libtorrent's native library misses the APK — it comes
       # from a plain jar's lib/<abi>/ rather than an AAR, which is easy to lose in a dependency
       # change and impossible to notice from a green compile. There is no device rig, so assert here.

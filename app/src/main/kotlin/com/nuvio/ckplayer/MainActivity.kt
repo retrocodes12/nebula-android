@@ -114,6 +114,8 @@ import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Info
@@ -155,6 +157,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.FocusRequester
@@ -191,6 +194,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.onClick as a11yClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
@@ -241,6 +246,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
@@ -638,19 +645,24 @@ private enum class PlayIntent { TAP, RESUME, START_OVER }
  * furthest mark as a position is what used to teleport it past everything
  * unwatched in between. Mirrors the shared player's seriesCursor().
  */
-private data class SeriesCursor(val upNext: Episode?, val seat: Episode)
+internal data class SeriesCursor(val upNext: Episode?, val seat: Episode)
 
 private fun seriesCursor(ctx: Context, type: String, videos: List<Episode>): SeriesCursor? {
+    val all = Progress.all(ctx)
+    return seriesCursorOf(videos) { id -> all[Progress.key(type, id)] }
+}
+
+/** [seriesCursor] over any record lookup (an episode id → its record), so the rules run on plain data in tests. */
+internal fun seriesCursorOf(videos: List<Episode>, recOf: (String) -> ProgressRec?): SeriesCursor? {
     val flat = videos.sortedWith(compareBy({ it.season == 0 }, { it.season }, { it.episode ?: 0 }))
     if (flat.isEmpty()) return null
     val last = flat.size - 1
-    val all = Progress.all(ctx)
     var played: ProgressRec? = null
     var playedIdx = -1
     var anyHand = false
     var inSpecials = false
     flat.forEachIndexed { i, e ->
-        val r = all[Progress.key(type, e.id)] ?: return@forEachIndexed
+        val r = recOf(e.id) ?: return@forEachIndexed
         if (r.dismissed) return@forEachIndexed
         if (e.season == 0) inSpecials = true            // this viewer does watch the extras
         if (r.hand) { if (r.done) anyHand = true; return@forEachIndexed }
@@ -668,7 +680,7 @@ private fun seriesCursor(ctx: Context, type: String, videos: List<Episode>): Ser
     val seat = if (hasReal) lastReal else last
     var i = if (playedIdx < 0) 0 else if (played?.done == true) playedIdx + 1 else playedIdx
     while (i <= last) {
-        val r = all[Progress.key(type, flat[i].id)]
+        val r = recOf(flat[i].id)
         if (r == null || !r.hand || !r.done) break
         i++
     }
@@ -1605,11 +1617,12 @@ internal fun RoundAction(icon: ImageVector, label: String, on: Boolean = false, 
     }
 }
 
-/** One row inside a [CardSheet]. */
+/** One row inside a [CardSheet]. A row closes the sheet, unless [keepOpen] (a retry that fills the same sheet). */
 internal data class SheetAction(
     val icon: ImageVector,
     val label: String,
     val destructive: Boolean = false,
+    val keepOpen: Boolean = false,
     val onClick: () -> Unit,
 )
 
@@ -1764,7 +1777,7 @@ internal fun CardSheet(
                         Row(
                             Modifier.fillMaxWidth()
                                 .then(if (i == 0) Modifier.focusRequester(firstFocus) else Modifier)
-                                .clickable(interactionSource = rowSrc, indication = LocalIndication.current) { close(); a.onClick() }
+                                .clickable(interactionSource = rowSrc, indication = LocalIndication.current) { if (!a.keepOpen) close(); a.onClick() }
                                 .then(rowLit(rowFocused))
                                 .padding(horizontal = 18.dp, vertical = 16.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -2070,8 +2083,15 @@ private fun RecommendSheet(type: String, item: MetaItem, scope: CoroutineScope, 
     // `scope` is the title page's: a pick closes this sheet, and the sheet's own scope would be cancelled ~190 ms
     // later, mid-request, turning a sent recommendation into "Could not send that"
     var friends by remember { mutableStateOf<List<JSONObject>?>(null) }
-    LaunchedEffect(Unit) {
+    // a list that could not be fetched is not an empty one: it says so and offers a retry, in the same sheet
+    var failed by remember { mutableStateOf(false) }
+    var tries by remember { mutableStateOf(0) }
+    var trying by remember { mutableStateOf(false) }
+    LaunchedEffect(tries) {
+        trying = true
         val fr = Social.friends(ctx)
+        trying = false
+        failed = fr == null
         friends = (0 until (fr?.length() ?: 0)).mapNotNull { i ->
             val f = fr!!.optJSONObject(i) ?: return@mapNotNull null
             // only a friendship both sides made carries a recommendation
@@ -2081,7 +2101,12 @@ private fun RecommendSheet(type: String, item: MetaItem, scope: CoroutineScope, 
     val list = friends ?: return
     CardSheet(
         title = item.name, sub = "Recommend to…", poster = item.poster, shape = item.posterShape,
-        actions = if (list.isEmpty()) listOf(
+        actions = if (failed) listOf(
+            SheetAction(Icons.Filled.CloudOff, "Could not reach Friends — check the connection") {},
+            SheetAction(Icons.Filled.Refresh, if (trying) "Trying again…" else "Try again", keepOpen = true) {
+                if (!trying) tries++
+            },
+        ) else if (list.isEmpty()) listOf(
             SheetAction(Icons.Filled.Groups, "No friends yet — add one in Friends") {},
         ) else list.take(8).map { f ->
             val fName = Social.friendLabel(f)
@@ -2149,12 +2174,17 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
     var asks by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     var openCode by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableStateOf(0) }
+    // the list could not be fetched — said as such, never as "No friends yet"
+    var friendsFailed by remember { mutableStateOf(false) }
+    // why Turn off Friends did not (shown beside it; Friends stays on until the server agrees)
+    var offErr by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(reload, Social.on) {
         if (!Social.on) return@LaunchedEffect
         Social.publishSoon(ctx)
         friends = null
         val fr = Social.friends(ctx)
+        friendsFailed = fr == null
         friends = (0 until (fr?.length() ?: 0)).mapNotNull { fr!!.optJSONObject(it) }
         val ib = Social.inbox(ctx)
         inbox = (0 until (ib?.length() ?: 0)).mapNotNull { ib!!.optJSONObject(it) }.reversed()
@@ -2329,7 +2359,18 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
         item(key = "frhead") { Text("Friends", color = TextC, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp, bottom = 8.dp)) }
         when (val fl = friends) {
             null -> item(key = "frload") { Text("Loading…", color = MutedC, fontSize = 14.sp) }
-            else -> if (fl.isEmpty()) {
+            else -> if (friendsFailed) {
+                item(key = "frfail") {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Could not reach Friends — check the connection.",
+                            color = MutedC, fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.weight(1f))
+                        Text("Try again", color = TextC, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                            modifier = Modifier.padding(start = 8.dp).focusRing(RoundedCornerShape(8.dp)).clip(RoundedCornerShape(8.dp))
+                                .clickable { reload++ }
+                                .padding(6.dp))
+                    }
+                }
+            } else if (fl.isEmpty()) {
                 item(key = "frempty") {
                     Text("No friends yet — add one by @handle and their watching shows up here.",
                         color = MutedC, fontSize = 14.sp, lineHeight = 20.sp)
@@ -2384,10 +2425,14 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                     }
                 }
                 item(key = "froff") {
-                    Text("Turn off Friends", color = MutedC, fontSize = 13.sp,
-                        modifier = Modifier.padding(top = 12.dp).focusRing(RoundedCornerShape(8.dp), landing = false).clip(RoundedCornerShape(8.dp))
-                            .clickable { scope.launch { Social.disable(ctx); reload++ } }
-                            .padding(6.dp))
+                    Column {
+                        Text("Turn off Friends", color = MutedC, fontSize = 13.sp,
+                            modifier = Modifier.padding(top = 12.dp).focusRing(RoundedCornerShape(8.dp), landing = false).clip(RoundedCornerShape(8.dp))
+                                .clickable { scope.launch { offErr = Social.disable(ctx); reload++ } }
+                                .padding(6.dp))
+                        // the Profile page's error red
+                        offErr?.let { Text(it, color = Color(0xFFFF453A), fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(start = 6.dp)) }
+                    }
                 }
             }
         }
@@ -4898,29 +4943,41 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
             last >= 0 && last >= st.gridState.layoutInfo.totalItemsCount - 12
         }
     }
-    // Keyed on what a page CHANGES (fetched), never on the flag it sets: keyed on `paging`, setting it cancelled the
-    // effect mid-request, the finally lowered it and the effect started over — a loop, and page 2 never arrived.
-    LaunchedEffect(reachedEnd, st.pageDone, st.fetched, submitted, current, genre) {
-        if (!reachedEnd || st.pageDone || st.paging || loading) return@LaunchedEffect
+    // ONE collector per (catalog, genre, query), which never cancels itself and asks for one page at a time. Keyed
+    // effects that bailed out on `paging`/`loading` (neither a key) could relaunch while a cancelled page's finally still
+    // waited on its blocking call, return early, and not ask for page 2 until reachedEnd flipped again; keyed on the
+    // flag itself, setting it cancelled the request. The flow does not say `true` twice running, so while the grid
+    // still ends here once the new page is laid out (a short page), the loop asks again itself. reachedEnd reads the
+    // LAST layout, so each check waits two frames for the grid to lay out what just landed.
+    LaunchedEffect(current, genre, submitted) {
         if (submitted.trim().isNotEmpty()) return@LaunchedEffect      // search results aren't paged
         val c = current ?: return@LaunchedEffect
-        if (items.size >= 1000) { st.pageDone = true; return@LaunchedEffect }   // ceiling for TV memory
-        st.paging = true
-        // cancelled mid-page (a new genre or query), the flag must still come down, or paging stays off for good
-        try { runCatching { Stremio.loadCatalog(addon.base, c, genre, null, st.fetched) }
-            .onSuccess { page ->
-                st.fetched += page.size
-                val seen = items.mapTo(HashSet()) { it.type + ":" + it.id }
-                val fresh = page.filter { seen.add(it.type + ":" + it.id) }
-                if (fresh.isNotEmpty()) items = items + fresh
-                st.pageDone = page.isEmpty() || fresh.isEmpty()
-                status = "${items.size} items" + (if (st.pageDone) "" else " — scroll for more")
+        snapshotFlow { reachedEnd && !st.pageDone && !st.paging && !loading }
+            .distinctUntilChanged()
+            .filter { it }
+            .collect {
+                withFrameNanos {}; withFrameNanos {}
+                while (reachedEnd && !st.pageDone && !st.paging && !loading) {
+                    if (items.size >= 1000) { st.pageDone = true; break }   // ceiling for TV memory
+                    st.paging = true
+                    // cancelled mid-page (a new genre or query), the flag must still come down, or paging stays off for good
+                    try { runCatching { Stremio.loadCatalog(addon.base, c, genre, null, st.fetched) }
+                        .onSuccess { page ->
+                            st.fetched += page.size
+                            val seen = items.mapTo(HashSet()) { it.type + ":" + it.id }
+                            val fresh = page.filter { seen.add(it.type + ":" + it.id) }
+                            if (fresh.isNotEmpty()) items = items + fresh
+                            st.pageDone = page.isEmpty() || fresh.isEmpty()
+                            status = "${items.size} items" + (if (st.pageDone) "" else " — scroll for more")
+                        }
+                        .onFailure {
+                            if (it is kotlinx.coroutines.CancellationException) throw it
+                            st.pageDone = true
+                        }
+                    } finally { st.paging = false }
+                    withFrameNanos {}; withFrameNanos {}
+                }
             }
-            .onFailure {
-                if (it is kotlinx.coroutines.CancellationException) throw it
-                st.pageDone = true
-            }
-        } finally { st.paging = false }
     }
 
     val typing = tvTyping()
@@ -6267,10 +6324,22 @@ private fun PlayerScreen(
                 if (bwTick[0] % 12 == 0) bandwidth.bitrateEstimate.let { if (it > 0) Prefs.noteBandwidth(context, it) }
             }
             if (swapOffer != null && now - swapShownAt > 60_000) swapOffer = null   // an offer nobody took lapses once playback has settled
+            // The pause board: a moment after pausing (or at the end), when nothing
+            // else is open, and only once something has actually played.
+            val resting = !exo.isPlaying && (exo.playbackState == Player.STATE_ENDED ||
+                (exo.playbackState == Player.STATE_READY && !exo.playWhenReady))
+            if (!resting) pausedSince = 0L else if (pausedSince == 0L) pausedSince = now
+            // the board's own conditions, less its two waits — read BEFORE the hide below, which depends on them
+            val boardCan = Prefs.pauseBoard && resting && !inPipMode.value && !subPanelOpen && !sleepMenuOpen &&
+                !upnextOpen && exo.currentPosition > 1000
             // Controls hide after (Settings › Playback)
-            // (a phone on its side, paused, too: there the board and the controls cannot share the screen, and the board waits)
-            val pausedShort = Prefs.pauseBoard && !exo.isPlaying && pausedSince > 0 && context.resources.configuration.screenHeightDp < 480
+            // (a phone on its side, paused, too: there the board and the controls cannot share the screen, and the board
+            // waits — but only when the board WILL come; at 0:00, in picture-in-picture or under Up next it never does,
+            // and hiding the controls there left a bare picture)
+            // Never while TalkBack explores the screen: a reader walking through the controls cannot race a fade.
+            val pausedShort = boardCan && context.resources.configuration.screenHeightDp < 480
             if (chromeVisible && (exo.isPlaying || pausedShort) && !subPanelOpen && !sleepMenuOpen && !scrubbing && !trackListOpen &&
+                !touchExploring(context) &&
                 now - chromeTouchedAt > (Prefs.controlsHide * 1000f).toLong()) chromeVisible = false
             // Skip intro / recap: offer the pill, or take it on Auto once per segment a sitting
             // (a scrub back into the titles is taken as meant); a party viewer follows the host.
@@ -6284,11 +6353,6 @@ private fun PlayerScreen(
                     skipNote = SkipSegments.note(hit.first) to now
                 }
             } else skipKind = hit.first
-            // The pause board: a moment after pausing (or at the end), when nothing
-            // else is open, and only once something has actually played.
-            val resting = !exo.isPlaying && (exo.playbackState == Player.STATE_ENDED ||
-                (exo.playbackState == Player.STATE_READY && !exo.playWhenReady))
-            if (!resting) pausedSince = 0L else if (pausedSince == 0L) pausedSince = now
             // Sleep timer: keep the pill's minutes current; pause when the time is up.
             if (sleepMode == "min") {
                 if (now >= sleepAt) {
@@ -6300,8 +6364,7 @@ private fun PlayerScreen(
                 sleepRender()
             }
             if (sleepFired && exo.isPlaying) sleepFired = false     // played on: the board reads Paused again
-            pauseBoardOn = Prefs.pauseBoard && resting && !inPipMode.value && !subPanelOpen && !sleepMenuOpen &&
-                !upnextOpen && exo.currentPosition > 1000 && now - pausedSince > 1600 && now - chromeTouchedAt > 1600
+            pauseBoardOn = boardCan && now - pausedSince > 1600 && now - chromeTouchedAt > 1600
             if (pinfoOn) infoRows = playbackInfoRows(
                 exo, bandwidth, subOffsetMs,
                 scrubStatusLine(
@@ -6682,10 +6745,17 @@ private fun PlayerScreen(
         // Touch gestures: double-tap left/right = ±10s, horizontal swipe = seek,
         // plain tap = toggle the chrome. The chrome's own controls sit above
         // this layer, so they stay tappable; remote/D-pad (TV) is unaffected.
+        // Under TalkBack the gestures are out of reach, so the layer is also one
+        // named action: a double-tap on it shows or hides the controls.
         if (!pip) {
             Box(
                 Modifier
                     .fillMaxSize()
+                    .semantics {
+                        a11yClick(label = if (chromeVisible) "Hide controls" else "Show controls") {
+                            chromeVisible = !chromeVisible; chromeTouchedAt = System.currentTimeMillis(); true
+                        }
+                    }
                     .pointerInput(Unit) {
                         detectTapGestures(
                             onTap = { pos ->

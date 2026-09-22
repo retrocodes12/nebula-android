@@ -60,7 +60,7 @@ object Social {
             code = if (on) jstr(r, "code") else ""
             handle = if (on) jstr(r, "handle") else ""
             store(ctx)
-        }
+        }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
     }
 
     fun displayName(ctx: Context): String =
@@ -76,18 +76,27 @@ object Social {
             on = true; code = jstr(r, "code"); handle = jstr(r, "handle").ifEmpty { p.handle }; store(ctx)
             publishSoon(ctx)
             null
-        }.getOrElse { Account.errorText(it) }
+        }.getOrElse {
+            if (it is kotlinx.coroutines.CancellationException) throw it
+            Account.errorText(it)
+        }
     }
 
-    suspend fun disable(ctx: Context) {
-        runCatching { Cloud.api(ctx, "POST", "/v1/social/disable", JSONObject()) }
+    /** Turns Friends off: null when the server did, else what to tell the viewer. Only a confirmed "off" is kept here —
+        switching off locally after a failed call showed Friends as off while the server went on serving the profile. */
+    suspend fun disable(ctx: Context): String? = runCatching {
+        Cloud.api(ctx, "POST", "/v1/social/disable", JSONObject())
         on = false; code = ""; handle = ""; store(ctx)
+        null
+    }.getOrElse {
+        if (it is kotlinx.coroutines.CancellationException) throw it
+        Account.errorText(it)
     }
 
-    /** `{handle}` or `{code}` for a friend card — what the server's social routes take. */
     /** A string field that may be JSON null: org.json's optString turns null into the text "null" (a friend with no
         handle became "@null", and two of them one duplicate key). */
     fun jstr(o: JSONObject, k: String): String = if (o.isNull(k)) "" else o.optString(k)
+    /** `{handle}` or `{code}` for a friend card — what the server's social routes take. */
     fun friendRef(f: JSONObject): JSONObject {
         val h = jstr(f, "handle")
         return if (h.isNotEmpty()) JSONObject().put("handle", h) else JSONObject().put("code", jstr(f, "code"))
@@ -129,9 +138,11 @@ object Social {
         }
     }
 
+    /** The friend list — empty when there are none, null when it could not be fetched, so a screen can tell "no
+        friends yet" from "could not ask". A cancelled load is rethrown, never a null that paints over a good list. */
     suspend fun friends(ctx: Context): JSONArray? = runCatching {
-        Cloud.api(ctx, "GET", "/v1/social/friends", null).optJSONArray("friends")
-    }.getOrNull()
+        Cloud.api(ctx, "GET", "/v1/social/friends", null).optJSONArray("friends") ?: JSONArray()
+    }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
 
     /** People who added you and wait for you to add them back. */
     suspend fun asks(ctx: Context): JSONArray? = runCatching {
@@ -157,12 +168,14 @@ object Social {
             .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
     }
 
+    /** Recommendations sent to you; as [friends]: empty when there are none, null when they could not be fetched. */
     suspend fun inbox(ctx: Context): JSONArray? = runCatching {
-        Cloud.api(ctx, "GET", "/v1/social/inbox", null).optJSONArray("inbox")
-    }.getOrNull()
+        Cloud.api(ctx, "GET", "/v1/social/inbox", null).optJSONArray("inbox") ?: JSONArray()
+    }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
 
     suspend fun inboxClear(ctx: Context) {
         runCatching { Cloud.api(ctx, "POST", "/v1/social/inbox_clear", JSONObject()) }
+            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
     }
 
     suspend fun recommend(ctx: Context, friend: JSONObject, type: String, m: MetaItem): Boolean = runCatching {
