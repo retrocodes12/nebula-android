@@ -62,6 +62,11 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        // app/src/test holds JVM tests of pure functions only. A framework call reached on the way (Media3's language
+        // table asks TextUtils) returns its default here instead of throwing "not mocked".
+        unitTests.isReturnDefaultValues = true
+    }
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
         // libtorrent's native library is ~16 MB per processor uncompressed. This APK is sideloaded
@@ -102,4 +107,28 @@ dependencies {
     implementation("org.libtorrent4j:libtorrent4j:$libtorrent")
     implementation("org.libtorrent4j:libtorrent4j-android-arm64:$libtorrent")
     implementation("org.libtorrent4j:libtorrent4j-android-arm:$libtorrent")
+
+    // JVM unit tests (ci.yml runs them on every branch push). android.jar's org.json is a stub that throws off a
+    // device, so the real one goes on the test classpath ahead of it.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
+}
+
+// Every test's outcome in the CI log, and one count line at the end: a green run that ran nothing must be visible.
+tasks.withType<Test>().configureEach {
+    testLogging {
+        events("passed", "skipped", "failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
+    addTestListener(object : org.gradle.api.tasks.testing.TestListener {
+        override fun beforeSuite(suite: org.gradle.api.tasks.testing.TestDescriptor) {}
+        override fun beforeTest(testDescriptor: org.gradle.api.tasks.testing.TestDescriptor) {}
+        override fun afterTest(testDescriptor: org.gradle.api.tasks.testing.TestDescriptor, result: org.gradle.api.tasks.testing.TestResult) {}
+        override fun afterSuite(suite: org.gradle.api.tasks.testing.TestDescriptor, result: org.gradle.api.tasks.testing.TestResult) {
+            if (suite.parent == null) logger.lifecycle(
+                "Unit tests: ${result.testCount} run, ${result.successfulTestCount} passed, " +
+                    "${result.failedTestCount} failed, ${result.skippedTestCount} skipped",
+            )
+        }
+    })
 }

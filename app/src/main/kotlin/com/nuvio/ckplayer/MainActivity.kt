@@ -645,19 +645,24 @@ private enum class PlayIntent { TAP, RESUME, START_OVER }
  * furthest mark as a position is what used to teleport it past everything
  * unwatched in between. Mirrors the shared player's seriesCursor().
  */
-private data class SeriesCursor(val upNext: Episode?, val seat: Episode)
+internal data class SeriesCursor(val upNext: Episode?, val seat: Episode)
 
 private fun seriesCursor(ctx: Context, type: String, videos: List<Episode>): SeriesCursor? {
+    val all = Progress.all(ctx)
+    return seriesCursorOf(videos) { id -> all[Progress.key(type, id)] }
+}
+
+/** [seriesCursor] over any record lookup (an episode id → its record), so the rules run on plain data in tests. */
+internal fun seriesCursorOf(videos: List<Episode>, recOf: (String) -> ProgressRec?): SeriesCursor? {
     val flat = videos.sortedWith(compareBy({ it.season == 0 }, { it.season }, { it.episode ?: 0 }))
     if (flat.isEmpty()) return null
     val last = flat.size - 1
-    val all = Progress.all(ctx)
     var played: ProgressRec? = null
     var playedIdx = -1
     var anyHand = false
     var inSpecials = false
     flat.forEachIndexed { i, e ->
-        val r = all[Progress.key(type, e.id)] ?: return@forEachIndexed
+        val r = recOf(e.id) ?: return@forEachIndexed
         if (r.dismissed) return@forEachIndexed
         if (e.season == 0) inSpecials = true            // this viewer does watch the extras
         if (r.hand) { if (r.done) anyHand = true; return@forEachIndexed }
@@ -675,7 +680,7 @@ private fun seriesCursor(ctx: Context, type: String, videos: List<Episode>): Ser
     val seat = if (hasReal) lastReal else last
     var i = if (playedIdx < 0) 0 else if (played?.done == true) playedIdx + 1 else playedIdx
     while (i <= last) {
-        val r = all[Progress.key(type, flat[i].id)]
+        val r = recOf(flat[i].id)
         if (r == null || !r.hand || !r.done) break
         i++
     }
