@@ -1769,7 +1769,21 @@ internal fun CardSheet(
                         }
                     }
                     Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0x14FFFFFF)))
-                    actions.forEachIndexed { i, a ->
+                    // Rows can change while the sheet is up (a keepOpen Try again that loads the list): each row is keyed by
+                    // its label, so a focused position does not silently become another row, the remote goes back to the
+                    // first row, and an OK within 400 ms of the change is not taken as a choice of what just appeared.
+                    val sig = actions.map { it.label }
+                    val firstSig = remember { sig }
+                    var changedAt by remember { mutableStateOf(0L) }
+                    LaunchedEffect(sig) {
+                        if (sig == firstSig) return@LaunchedEffect
+                        changedAt = android.os.SystemClock.uptimeMillis()
+                        if (keys) repeat(10) {
+                            withFrameNanos {}
+                            if (runCatching { firstFocus.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+                        }
+                    }
+                    actions.forEachIndexed { i, a -> key(a.label) {
                         val tint = if (a.destructive) Color(0xFFFF5A5F) else TextC
                         // the lit row reads from a sofa (Material's focus tint did not); a finger keeps its ripple
                         val rowSrc = remember { MutableInteractionSource() }
@@ -1777,7 +1791,10 @@ internal fun CardSheet(
                         Row(
                             Modifier.fillMaxWidth()
                                 .then(if (i == 0) Modifier.focusRequester(firstFocus) else Modifier)
-                                .clickable(interactionSource = rowSrc, indication = LocalIndication.current) { if (!a.keepOpen) close(); a.onClick() }
+                                .clickable(interactionSource = rowSrc, indication = LocalIndication.current) {
+                                    if (android.os.SystemClock.uptimeMillis() - changedAt < 400) return@clickable
+                                    if (!a.keepOpen) close(); a.onClick()
+                                }
                                 .then(rowLit(rowFocused))
                                 .padding(horizontal = 18.dp, vertical = 16.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -1788,7 +1805,7 @@ internal fun CardSheet(
                                 fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 15.dp),
                             )
                         }
-                    }
+                    } }
                 }
             }
         }
@@ -2122,7 +2139,6 @@ private fun RecommendSheet(type: String, item: MetaItem, scope: CoroutineScope, 
     )
 }
 
-/** Profile monogram: one of the eight Nebula colours behind the first letter of the name. */
 /** A colour's hue in degrees, for the Any colour slider (a `#RRGGBB` accent of one's own). */
 internal fun hueOf(hex: String): Float {
     val v = runCatching { hex.removePrefix("#").toLong(16) }.getOrDefault(0L)
@@ -4977,6 +4993,7 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
                         .onFailure {
                             if (it is kotlinx.coroutines.CancellationException) throw it
                             st.pageDone = true
+                            status = "${items.size} items — could not load more"   // not the "scroll for more" it no longer does
                         }
                     } finally { st.paging = false }
                     withFrameNanos {}; withFrameNanos {}
@@ -5221,6 +5238,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             try { Relay.resolve(ctx) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { }
         }
         var failures = 0
+        var streamers = 0          // add-ons whose manifest says they stream this at all
         var floored = false        // an add-on answered, and Minimum quality hid every row of it
         val pf = NextEp.picked(ctx)
         // Play the best stream by itself (Settings › Streams): decide once — when every add-on has
@@ -5266,8 +5284,11 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             launch {
                 try {
                     // origin is always asked; others only if their manifest matches
-                    if (a.manifestUrl != addon.manifestUrl &&
-                        !manifestFor(a.manifestUrl).canStream(item.type, item.id)) return@launch
+                    val can = if (a.manifestUrl != addon.manifestUrl) manifestFor(a.manifestUrl).canStream(item.type, item.id)
+                        else runCatching { manifestFor(a.manifestUrl).canStream(item.type, item.id) }
+                            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrDefault(true)
+                    if (can) streamers++
+                    if (a.manifestUrl != addon.manifestUrl && !can) return@launch
                     val raw = Stremio.loadStreams(a.base, item.type, item.id)
                     val streams = arrangeStreams(raw, item.runtime)
                     if (raw.isNotEmpty() && streams.isEmpty()) floored = true
@@ -5299,6 +5320,8 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                 order.isEmpty() -> "Every add-on is switched off."
                 failures == order.size -> "Failed to load streams."
                 floored -> "Every stream is below your minimum quality."
+                // a fresh install has only a catalogue: "right now" read as an outage, not "nothing here plays video"
+                streamers == 0 -> "None of your add-ons plays this. Add one that does in Settings › Add-ons."
                 else -> "No playable streams right now."
             }
         }
@@ -6756,6 +6779,7 @@ private fun PlayerScreen(
                 Modifier
                     .fillMaxSize()
                     .semantics {
+                        contentDescription = "Video"
                         a11yClick(label = if (chromeVisible) "Hide controls" else "Show controls") {
                             chromeVisible = !chromeVisible; chromeTouchedAt = System.currentTimeMillis(); true
                         }

@@ -86,12 +86,16 @@ object Social {
         switching off locally after a failed call showed Friends as off while the server went on serving the profile. */
     suspend fun disable(ctx: Context): String? = runCatching {
         Cloud.api(ctx, "POST", "/v1/social/disable", JSONObject())
-        on = false; code = ""; handle = ""; store(ctx)
+        offHere(ctx)
         null
     }.getOrElse {
         if (it is kotlinx.coroutines.CancellationException) throw it
-        Account.errorText(it)
+        // 400 = "friends is not enabled": it was already turned off (on the web, another device) — that is the goal
+        if ((it as? Cloud.HttpFail)?.code == 400) { offHere(ctx); null } else Account.errorText(it)
     }
+
+    /** The server says Friends is off: this device agrees (it stayed on until the next start, and read as a lost connection). */
+    private fun offHere(ctx: Context) { on = false; code = ""; handle = ""; store(ctx) }
 
     /** A string field that may be JSON null: org.json's optString turns null into the text "null" (a friend with no
         handle became "@null", and two of them one duplicate key). */
@@ -142,7 +146,11 @@ object Social {
         friends yet" from "could not ask". A cancelled load is rethrown, never a null that paints over a good list. */
     suspend fun friends(ctx: Context): JSONArray? = runCatching {
         Cloud.api(ctx, "GET", "/v1/social/friends", null).optJSONArray("friends") ?: JSONArray()
-    }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
+    }.getOrElse {
+        if (it is kotlinx.coroutines.CancellationException) throw it
+        // turned off elsewhere: an empty list, and Friends off here too (the page goes back to its pitch), not "no connection"
+        if ((it as? Cloud.HttpFail)?.code == 400) { offHere(ctx); JSONArray() } else null
+    }
 
     /** People who added you and wait for you to add them back. */
     suspend fun asks(ctx: Context): JSONArray? = runCatching {
