@@ -114,6 +114,8 @@ import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Info
@@ -1610,11 +1612,12 @@ internal fun RoundAction(icon: ImageVector, label: String, on: Boolean = false, 
     }
 }
 
-/** One row inside a [CardSheet]. */
+/** One row inside a [CardSheet]. A row closes the sheet, unless [keepOpen] (a retry that fills the same sheet). */
 internal data class SheetAction(
     val icon: ImageVector,
     val label: String,
     val destructive: Boolean = false,
+    val keepOpen: Boolean = false,
     val onClick: () -> Unit,
 )
 
@@ -1769,7 +1772,7 @@ internal fun CardSheet(
                         Row(
                             Modifier.fillMaxWidth()
                                 .then(if (i == 0) Modifier.focusRequester(firstFocus) else Modifier)
-                                .clickable(interactionSource = rowSrc, indication = LocalIndication.current) { close(); a.onClick() }
+                                .clickable(interactionSource = rowSrc, indication = LocalIndication.current) { if (!a.keepOpen) close(); a.onClick() }
                                 .then(rowLit(rowFocused))
                                 .padding(horizontal = 18.dp, vertical = 16.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -2075,8 +2078,15 @@ private fun RecommendSheet(type: String, item: MetaItem, scope: CoroutineScope, 
     // `scope` is the title page's: a pick closes this sheet, and the sheet's own scope would be cancelled ~190 ms
     // later, mid-request, turning a sent recommendation into "Could not send that"
     var friends by remember { mutableStateOf<List<JSONObject>?>(null) }
-    LaunchedEffect(Unit) {
+    // a list that could not be fetched is not an empty one: it says so and offers a retry, in the same sheet
+    var failed by remember { mutableStateOf(false) }
+    var tries by remember { mutableStateOf(0) }
+    var trying by remember { mutableStateOf(false) }
+    LaunchedEffect(tries) {
+        trying = true
         val fr = Social.friends(ctx)
+        trying = false
+        failed = fr == null
         friends = (0 until (fr?.length() ?: 0)).mapNotNull { i ->
             val f = fr!!.optJSONObject(i) ?: return@mapNotNull null
             // only a friendship both sides made carries a recommendation
@@ -2086,7 +2096,12 @@ private fun RecommendSheet(type: String, item: MetaItem, scope: CoroutineScope, 
     val list = friends ?: return
     CardSheet(
         title = item.name, sub = "Recommend to…", poster = item.poster, shape = item.posterShape,
-        actions = if (list.isEmpty()) listOf(
+        actions = if (failed) listOf(
+            SheetAction(Icons.Filled.CloudOff, "Could not reach Friends — check the connection") {},
+            SheetAction(Icons.Filled.Refresh, if (trying) "Trying again…" else "Try again", keepOpen = true) {
+                if (!trying) tries++
+            },
+        ) else if (list.isEmpty()) listOf(
             SheetAction(Icons.Filled.Groups, "No friends yet — add one in Friends") {},
         ) else list.take(8).map { f ->
             val fName = Social.friendLabel(f)
@@ -2154,12 +2169,17 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
     var asks by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     var openCode by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableStateOf(0) }
+    // the list could not be fetched — said as such, never as "No friends yet"
+    var friendsFailed by remember { mutableStateOf(false) }
+    // why Turn off Friends did not (shown beside it; Friends stays on until the server agrees)
+    var offErr by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(reload, Social.on) {
         if (!Social.on) return@LaunchedEffect
         Social.publishSoon(ctx)
         friends = null
         val fr = Social.friends(ctx)
+        friendsFailed = fr == null
         friends = (0 until (fr?.length() ?: 0)).mapNotNull { fr!!.optJSONObject(it) }
         val ib = Social.inbox(ctx)
         inbox = (0 until (ib?.length() ?: 0)).mapNotNull { ib!!.optJSONObject(it) }.reversed()
@@ -2334,7 +2354,18 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
         item(key = "frhead") { Text("Friends", color = TextC, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp, bottom = 8.dp)) }
         when (val fl = friends) {
             null -> item(key = "frload") { Text("Loading…", color = MutedC, fontSize = 14.sp) }
-            else -> if (fl.isEmpty()) {
+            else -> if (friendsFailed) {
+                item(key = "frfail") {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Could not reach Friends — check the connection.",
+                            color = MutedC, fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.weight(1f))
+                        Text("Try again", color = TextC, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                            modifier = Modifier.padding(start = 8.dp).focusRing(RoundedCornerShape(8.dp)).clip(RoundedCornerShape(8.dp))
+                                .clickable { reload++ }
+                                .padding(6.dp))
+                    }
+                }
+            } else if (fl.isEmpty()) {
                 item(key = "frempty") {
                     Text("No friends yet — add one by @handle and their watching shows up here.",
                         color = MutedC, fontSize = 14.sp, lineHeight = 20.sp)
@@ -2389,10 +2420,14 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                     }
                 }
                 item(key = "froff") {
-                    Text("Turn off Friends", color = MutedC, fontSize = 13.sp,
-                        modifier = Modifier.padding(top = 12.dp).focusRing(RoundedCornerShape(8.dp), landing = false).clip(RoundedCornerShape(8.dp))
-                            .clickable { scope.launch { Social.disable(ctx); reload++ } }
-                            .padding(6.dp))
+                    Column {
+                        Text("Turn off Friends", color = MutedC, fontSize = 13.sp,
+                            modifier = Modifier.padding(top = 12.dp).focusRing(RoundedCornerShape(8.dp), landing = false).clip(RoundedCornerShape(8.dp))
+                                .clickable { scope.launch { offErr = Social.disable(ctx); reload++ } }
+                                .padding(6.dp))
+                        // the Profile page's error red
+                        offErr?.let { Text(it, color = Color(0xFFFF453A), fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(start = 6.dp)) }
+                    }
                 }
             }
         }
