@@ -2826,7 +2826,7 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit, de
             .clickable { onOpen(from, m) }
     ) {
         // a slide change dissolves one picture into the next rather than cutting (a cut under reduced motion)
-        Crossfade(targetState = m, animationSpec = tween(if (Prefs.reducedMotion) 0 else 400), label = "heroArt", modifier = Modifier.matchParentSize().clipToBounds()) { pick ->
+        Crossfade(targetState = m, animationSpec = tween(if (Prefs.reducedMotion) 0 else 400), label = "heroArt", modifier = Modifier.matchParentSize().padding(bottom = 2.dp).clipToBounds()) { pick ->
             AsyncImage(
                 model = pick.background ?: pick.poster, contentDescription = pick.name,
                 contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
@@ -4332,11 +4332,12 @@ private fun DetailScreen(
 
     Box(Modifier.fillMaxSize()) {
         // full-bleed backdrop; the scrim exists only so type stays legible
-        // clipped, and solid black for its last few percent: the crop's bottom row of pixels drew a hairline seam
+        // The art stops 2 dp short of the scrim's solid bottom: 430 dp is a fractional pixel height, and the last row,
+        // half-covered by both layers, let the picture bleed through as a hairline seam under the header.
         Box(Modifier.fillMaxWidth().height(430.dp).clipToBounds()) {
             val art = full?.background ?: item.background ?: item.poster
             if (art != null) {
-                AsyncImage(model = art, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
+                AsyncImage(model = art, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxWidth().height(428.dp))
             }
             Box(
                 Modifier.matchParentSize().background(
