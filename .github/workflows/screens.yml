@@ -16,10 +16,18 @@ jobs:
       matrix:
         include:
           - name: phone
+            api: 34
             target: google_apis
             profile: pixel_6
             arch: x86_64
+          # the oldest the app supports well enough to matter (minSdk 26): the release build must verify there too
+          - name: phone28
+            api: 28
+            target: google_apis
+            profile: pixel_3
+            arch: x86_64
           - name: tv
+            api: 34
             target: android-tv
             profile: tv_1080p
             arch: x86
@@ -44,7 +52,7 @@ jobs:
       - name: Screens on the emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
+          api-level: ${{ matrix.api }}
           target: ${{ matrix.target }}
           arch: ${{ matrix.arch }}
           profile: ${{ matrix.profile }}

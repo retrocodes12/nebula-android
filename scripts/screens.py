@@ -1,17 +1,31 @@
-"""Walk a few screens of the debug build on an emulator and screenshot each (CI only, see screens.yml).
-Finds controls by their text through uiautomator, so a moved button still gets tapped."""
+"""Walk the RELEASE build on an emulator, screenshot each screen, and FAIL the job when the app crashes or a screen
+that must appear does not (CI only, see screens.yml). Controls are found by their text through uiautomator, so a moved
+button still gets tapped. Modes: phone (API 34), phone28 (API 28, the release build must verify on older Android too),
+tv (a 1080p Android TV, driven by D-pad only)."""
 import os, re, subprocess, sys, time
 import xml.etree.ElementTree as ET
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else 'phone'
+PHONE = MODE.startswith('phone')
 OUT = 'screens'
 os.makedirs(OUT, exist_ok=True)
 PKG = 'com.nuvio.ckplayer'
-log = open(os.path.join(OUT, 'log.txt'), 'a')
+log = open(os.path.join(OUT, MODE + '-log.txt'), 'a')
+failures = []
+# a public, clear test stream (the same one the web rigs play): the player is reached through the app's own deep link
+TEST_STREAM = 'https://storage.googleapis.com/shaka-demo-assets/angel-one/dash.mpd'
 
 
-def adb(*a):
-    return subprocess.run(['adb'] + list(a), capture_output=True, timeout=120)
+def adb(*a, timeout=120):
+    try:
+        return subprocess.run(['adb'] + list(a), capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        say('adb timed out: ' + ' '.join(a[:3]))
+        return subprocess.CompletedProcess(a, 1, b'', b'')
+
+
+def sh(*a):
+    r = adb('shell', *a); return (r.stdout + r.stderr).decode(errors='replace').strip()
 
 
 def say(m):
@@ -33,35 +47,62 @@ def nodes():
         return []
 
 
-def find(text, exact=False):
+def texts():
+    out = []
     for n in nodes():
-        t = (n.get('text') or '') + '|' + (n.get('content-desc') or '')
-        parts = [p for p in t.split('|') if p]
-        hit = any(p == text for p in parts) if exact else any(text.lower() in p.lower() for p in parts)
-        if hit:
-            x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds')))
-            return (x1 + x2) // 2, (y1 + y2) // 2
+        for k in ('text', 'content-desc'):
+            v = n.get(k) or ''
+            if v: out.append(v)
+    return out
+
+
+def find(text, exact=False, near=None):
+    """the centre of the first node whose text matches; `near`: another text that must be on screen within 400 px below"""
+    ns = nodes()
+    def hit(n, t, ex):
+        parts = [p for p in ((n.get('text') or ''), (n.get('content-desc') or '')) if p]
+        return any(p == t for p in parts) if ex else any(t.lower() in p.lower() for p in parts)
+    def centre(n):
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds'))); return (x1 + x2) // 2, (y1 + y2) // 2
+    for n in ns:
+        if not hit(n, text, exact): continue
+        c = centre(n)
+        if near:
+            if not any(hit(m, near, True) and 0 <= centre(m)[1] - c[1] < 400 and abs(centre(m)[0] - c[0]) < 400 for m in ns): continue
+        return c
     return None
 
 
-def tap(text, exact=False, wait=4):
-    xy = find(text, exact)
+def tap(text, exact=False, wait=4, near=None):
+    xy = find(text, exact, near)
     if not xy:
         say('not found: ' + text); return False
     adb('shell', 'input', 'tap', str(xy[0]), str(xy[1]))
     time.sleep(wait); return True
 
 
-def key(k, n=1, wait=0.6):
+def key(k, n=1, wait=0.8):
     for _ in range(n):
         adb('shell', 'input', 'keyevent', k); time.sleep(wait)
 
 
-# the RELEASE build is what people install; SCREENS_APK=debug looks at the debug one instead
-kind = os.environ.get('SCREENS_APK', 'release')
-apk = [os.path.join(d, f) for d, _, fs in os.walk('app/build/outputs/apk/' + kind) for f in fs if f.endswith('.apk')][0]
-def sh(*a):
-    r = adb('shell', *a); return (r.stdout + r.stderr).decode(errors='replace').strip()
+def expect(label, cond, extra=''):
+    say(('PASS ' if cond else 'FAIL ') + label + (' (' + extra + ')' if extra else ''))
+    if not cond: failures.append(label)
+
+
+def on_screen(*want, tries=6):
+    """True once every text is on screen (polled: lists arrive from the network)"""
+    for _ in range(tries):
+        t = ' | '.join(texts())
+        if all(w.lower() in t.lower() for w in want): return True
+        time.sleep(3)
+    return False
+
+
+def crashed():
+    lc = adb('logcat', '-d', '-v', 'brief', timeout=60).stdout.decode(errors='replace')
+    return [l for l in lc.splitlines() if 'FATAL EXCEPTION' in l or 'VerifyError' in l or ('AndroidRuntime' in l and PKG in l)]
 
 
 # let the system finish booting and settle, and clear any "isn't responding" dialog a slow boot leaves
@@ -70,61 +111,96 @@ for _ in range(60):
     time.sleep(2)
 time.sleep(25)
 sh('am', 'broadcast', '-a', 'android.intent.action.CLOSE_SYSTEM_DIALOGS')
+kind = os.environ.get('SCREENS_APK', 'release')
+apk = [os.path.join(d, f) for d, _, fs in os.walk('app/build/outputs/apk/' + kind) for f in fs if f.endswith('.apk')][0]
 say('install ' + apk + ' ' + adb('install', '-r', '-g', apk).stdout.decode(errors='replace').strip())
 adb('logcat', '-c')
 cat = 'android.intent.category.LEANBACK_LAUNCHER' if MODE == 'tv' else 'android.intent.category.LAUNCHER'
-say('launch: ' + sh('monkey', '-p', PKG, '-c', cat, '1'))
-time.sleep(40)
-sh('am', 'broadcast', '-a', 'android.intent.action.CLOSE_SYSTEM_DIALOGS')
-say('focus: ' + sh('dumpsys', 'window', '|', 'grep', '-E', 'mCurrentFocus|mFocusedApp'))
-shot('01-home')
+
 
 def front():
-    """bring the app back to the front on its Home (a relaunch lands where the task was)"""
     sh('monkey', '-p', PKG, '-c', cat, '1'); time.sleep(6)
 
 
-if MODE == 'phone':
+say('launch: ' + (sh('monkey', '-p', PKG, '-c', cat, '1').splitlines() or [''])[-1])
+time.sleep(40)
+sh('am', 'broadcast', '-a', 'android.intent.action.CLOSE_SYSTEM_DIALOGS')
+shot('01-home')
+expect('Home is up (a catalogue row and the nav)', on_screen('See all', 'Home'), '')
+
+if PHONE:
     adb('shell', 'input', 'swipe', '540', '1900', '540', '700', '400'); time.sleep(3)
     shot('02-home-rows')
     adb('shell', 'input', 'swipe', '540', '700', '540', '1900', '300'); time.sleep(2)
     if tap('Search', exact=True):
-        adb('shell', 'input', 'text', 'severance'); key('KEYCODE_ENTER', wait=8)
-        key('KEYCODE_BACK', wait=2)                    # the keyboard down
+        adb('shell', 'input', 'text', 'slow%shorses'); key('KEYCODE_ENTER', wait=8)
+        key('KEYCODE_BACK', wait=2)                     # the keyboard down
         shot('03-search')
-        if tap('Severance', exact=True, wait=10):
+        expect('Search finds the series', on_screen('Slow Horses'))
+        if tap('Slow Horses', exact=True, wait=10):
             shot('04-title')
+            expect('a series title page: Play and seasons', on_screen('Play', 'Season 1'))
             adb('shell', 'input', 'swipe', '540', '1900', '540', '500', '400'); time.sleep(3)
-            shot('05-title-episodes')
+            shot('05-title-scrolled')
             adb('shell', 'input', 'swipe', '540', '1900', '540', '500', '400'); time.sleep(3)
-            shot('05b-title-episodes-more')
-            if tap('Good News About Hell', wait=12): shot('06-streams')
-    for tab, name in (('Library', '07-library'), ('Settings', '08-settings')):
+            shot('05b-title-episodes')
+            if tap("Failure's Contagious", wait=14) or tap('Episode 1', wait=14):
+                shot('06-streams')
+                expect('an episode opens its streams page', on_screen('stream') or on_screen('add-on'))
+    # the player, through the app's own deep link, with a clear test stream
+    key('KEYCODE_BACK', 3, wait=1.5)
+    sh('am', 'start', '-a', 'android.intent.action.VIEW', '-d', "'nebula://play?mpd=" + TEST_STREAM + "&t=Angel%20One'", PKG)
+    time.sleep(18)
+    adb('shell', 'input', 'tap', '540', '1200'); time.sleep(1.5)
+    shot('07-player')
+    expect('the player shows its title', on_screen('Angel One', tries=3))
+    key('KEYCODE_MEDIA_PAUSE', wait=6)
+    shot('08-paused')
+    expect('paused: the pause board', on_screen('Paused', tries=3))
+    # on its side: the controls step aside after a moment and the board shows (1.79 fix)
+    sh('settings', 'put', 'system', 'accelerometer_rotation', '0'); sh('settings', 'put', 'system', 'user_rotation', '1')
+    time.sleep(3); adb('shell', 'input', 'tap', '1200', '540'); time.sleep(8)
+    shot('09-paused-landscape')
+    expect('landscape, paused: the pause board shows', on_screen('Paused', tries=3))
+    sh('settings', 'put', 'system', 'user_rotation', '0'); time.sleep(3)
+    key('KEYCODE_BACK', 3, wait=1.5)
+    for tab, name in (('Library', '10-library'), ('Settings', '11-settings')):
         key('KEYCODE_BACK', 2, wait=1.5); front()
         if tap(tab, exact=True): shot(name)
-    if tap('Appearance'): shot('09-appearance'); key('KEYCODE_BACK', wait=2)
-    if tap('Playback'): shot('09b-playback'); key('KEYCODE_BACK', wait=2)
-    adb('shell', 'input', 'swipe', '540', '1900', '540', '600', '400'); time.sleep(2)
-    shot('08b-settings-lower')
+    expect('Settings opens', on_screen('Appearance', 'Playback'))
+    if tap('Playback'): shot('12-playback'); key('KEYCODE_BACK', wait=2)
     key('KEYCODE_BACK', 2, wait=1.5); front()
-    if tap('Profile', exact=True): shot('10-profile')
+    if tap('Profile', exact=True): shot('13-profile')
     adb('shell', 'settings', 'put', 'system', 'font_scale', '1.3'); time.sleep(3)
     key('KEYCODE_BACK', 2, wait=1.5); front()
-    if tap('Home', exact=True, wait=6): shot('11-home-large-text')
+    if tap('Home', exact=True, wait=6): shot('14-home-large-text')
 else:
-    key('KEYCODE_DPAD_DOWN'); key('KEYCODE_DPAD_DOWN'); time.sleep(2)
-    shot('02-home-rows')
-    key('KEYCODE_DPAD_UP', 3); key('KEYCODE_DPAD_CENTER', wait=10)
-    shot('03-title')
-    key('KEYCODE_DPAD_DOWN', 4); time.sleep(2)
-    shot('04-title-lower')
-    key('KEYCODE_BACK', wait=3)
-    shot('05-back-home')
-    key('KEYCODE_DPAD_LEFT', 2); time.sleep(2)
+    # a TV lands on View Details (the hero's button): OK opens that title page
+    key('KEYCODE_DPAD_CENTER', wait=10)
+    shot('02-title')
+    expect('OK on View Details opens a title page', on_screen('Play', tries=4))
+    key('KEYCODE_DPAD_DOWN', 3); time.sleep(2)
+    shot('03-title-lower')
+    key('KEYCODE_BACK', wait=4)
+    shot('04-back-home')
+    expect('Back returns to Home', on_screen('See all', tries=3))
+    key('KEYCODE_DPAD_DOWN', 2); time.sleep(2)
+    shot('05-home-rows')
+    key('KEYCODE_DPAD_LEFT', 3); time.sleep(2)
     shot('06-rail')
-    key('KEYCODE_DPAD_DOWN', 4); key('KEYCODE_DPAD_CENTER', wait=5)
-    shot('07-rail-pick')
-lc = adb('logcat', '-d', '-v', 'brief').stdout.decode(errors='replace')
-open(os.path.join(OUT, MODE + '-logcat.txt'), 'w').write('\n'.join(l for l in lc.splitlines()
+    # the player on a TV, through the deep link: the remote's Pause brings the board
+    sh('am', 'start', '-a', 'android.intent.action.VIEW', '-d', "'nebula://play?mpd=" + TEST_STREAM + "&t=Angel%20One'", PKG)
+    time.sleep(18)
+    key('KEYCODE_DPAD_CENTER', wait=2)
+    shot('07-player')
+    key('KEYCODE_MEDIA_PAUSE', wait=6)
+    shot('08-paused')
+    expect('TV paused: the pause board', on_screen('Paused', tries=3))
+
+bad = crashed()
+open(os.path.join(OUT, MODE + '-logcat.txt'), 'w').write('\n'.join(
+    l for l in adb('logcat', '-d', '-v', 'brief', timeout=60).stdout.decode(errors='replace').splitlines()
     if re.search(r'AndroidRuntime|FATAL|ckplayer|Nebula|System.err', l))[-400000:])
-say('done')
+expect('no crash in the log', not bad, (bad[0][:160] if bad else ''))
+say('done: %d failed' % len(failures) + (' — ' + '; '.join(failures) if failures else ''))
+sys.exit(1 if failures else 0)
