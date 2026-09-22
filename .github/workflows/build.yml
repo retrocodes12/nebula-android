@@ -49,9 +49,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.76.0.apk
+          cp "$APK" Nebula-1.77.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.76.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.76.0 Nebula-1.76.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.76.0" \
-            --notes "Android TV, a full pass over the remote. Back returns you to the card, row or episode you left, and the title page to the season you were on. Add-ons can be switched off, reordered and removed with the remote. Text fields open the keyboard only when you press OK. Every screen lands somewhere visible, and focus is clearly lit everywhere. Playback pauses when you press Home or the TV sleeps, the screen stays on while playing, a live channel that falls behind rejoins the edge, and protected sports streams start without an extra manifest read. Back from the player reopens the streams list at once."
+          gh release delete v1.77.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.77.0 Nebula-1.77.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.77.0" \
+            --notes "The update card now shows how big the download is, and an info button opens the release notes: what changed in the new version, in full. On a TV the notes scroll with the remote."
