@@ -39,12 +39,19 @@ def shot(name):
 
 
 def nodes():
-    adb('shell', 'uiautomator', 'dump', '/sdcard/ui.xml')
-    x = adb('exec-out', 'cat', '/sdcard/ui.xml').stdout
-    try:
-        return list(ET.fromstring(x).iter('node'))
-    except Exception:
-        return []
+    # uiautomator's full dump crashes on some screens (a null child in its "not accessibility friendly" check), which
+    # read as "nothing on screen": the compressed dump skips that check; a failed one is tried again
+    for flag in (['--compressed'], ['--compressed'], []):
+        adb('shell', 'rm', '-f', '/sdcard/ui.xml')
+        adb('shell', 'uiautomator', 'dump', *flag, '/sdcard/ui.xml')
+        x = adb('exec-out', 'cat', '/sdcard/ui.xml').stdout
+        try:
+            ns = list(ET.fromstring(x).iter('node'))
+            if ns: return ns
+        except Exception:
+            pass
+        time.sleep(1)
+    return []
 
 
 def texts():
@@ -101,8 +108,13 @@ def on_screen(*want, tries=6):
 
 
 def crashed():
-    lc = adb('logcat', '-d', '-v', 'brief', timeout=60).stdout.decode(errors='replace')
-    return [l for l in lc.splitlines() if 'FATAL EXCEPTION' in l or 'VerifyError' in l or ('AndroidRuntime' in l and PKG in l)]
+    """the app's own crashes only (uiautomator, a system tool, crashes too and is not ours)"""
+    lines = adb('logcat', '-d', '-v', 'brief', timeout=60).stdout.decode(errors='replace').splitlines()
+    out = []
+    for i, l in enumerate(lines):
+        if 'FATAL EXCEPTION' in l and any(('Process: ' + PKG) in m for m in lines[i + 1:i + 4]): out.append(' '.join(lines[i:i + 4]))
+        elif 'VerifyError' in l and PKG in l: out.append(l)
+    return out
 
 
 # let the system finish booting and settle, and clear any "isn't responding" dialog a slow boot leaves
@@ -111,6 +123,7 @@ for _ in range(60):
     time.sleep(2)
 time.sleep(25)
 sh('am', 'broadcast', '-a', 'android.intent.action.CLOSE_SYSTEM_DIALOGS')
+sh('settings', 'put', 'secure', 'immersive_mode_confirmations', 'confirmed')   # the one-time "Viewing full screen" hint
 kind = os.environ.get('SCREENS_APK', 'release')
 apk = [os.path.join(d, f) for d, _, fs in os.walk('app/build/outputs/apk/' + kind) for f in fs if f.endswith('.apk')][0]
 say('install ' + apk + ' ' + adb('install', '-r', '-g', apk).stdout.decode(errors='replace').strip())
@@ -139,9 +152,10 @@ if PHONE:
         expect('Search finds the series', on_screen('Slow Horses'))
         if tap('Slow Horses', exact=True, wait=10):
             shot('04-title')
-            expect('a series title page: Play and seasons', on_screen('Play', 'Season 1'))
+            expect('a series title page with its Play button', on_screen('Play', 'Slow Horses'))
             adb('shell', 'input', 'swipe', '540', '1900', '540', '500', '400'); time.sleep(3)
             shot('05-title-scrolled')
+            expect('the seasons below', on_screen('Season 1'))
             adb('shell', 'input', 'swipe', '540', '1900', '540', '500', '400'); time.sleep(3)
             shot('05b-title-episodes')
             if tap("Failure's Contagious", wait=14) or tap('Episode 1', wait=14):
