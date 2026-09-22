@@ -5449,8 +5449,8 @@ private suspend fun subText(st: SubTrack): String? {
         Stremio.httpGetBytes(st.url)
     } catch (e: kotlinx.coroutines.CancellationException) {
         throw e
-    } catch (e: Exception) {
-        return null
+    } catch (e: Throwable) {
+        return null                              // an address that fails, or serves something far too big to hold
     }
     var text = String(raw, Charsets.UTF_8)
     if (text.isBlank() || text.contains('\uFFFD')) text = String(raw, charset("windows-1252"))
@@ -5540,7 +5540,8 @@ private fun PlayerScreen(
     var subsTitle by remember { mutableStateOf<String?>(null) }                 // the title the subtitle state belongs to
     var autoSubTry by remember { mutableStateOf(0) }                            // bumped when an autoload file would not load
     val autoSubFailed = remember { mutableSetOf<String>() }                     // files that would not load, not tried again
-    val autoSubBusy = remember { BooleanArray(1) }                              // an autoload download is under way
+    val autoSubBusy = remember { arrayOfNulls<String>(1) }                      // the address an autoload download is for
+    val textOwed = remember { BooleanArray(1) }                                 // the stream's tracks are to come back on
     // Scrub preview (ScrubPreview.kt): a second, silent reader of a progressive file hands the tip its frames;
     // rebuilt per URL, released with the player. While a preview is up the chrome stays awake.
     val scrubPreview = remember(url) { if (ScrubPreview.eligible(url)) ScrubPreview(url, context) else null }
@@ -5769,7 +5770,8 @@ private fun PlayerScreen(
         val sameTitle = contentId != null && contentId == subsTitle
         subsTitle = contentId
         tracksFor = null
-        val textBack = !sameTitle && overlayCues != null
+        // owed until the new item is set — a hop cancelled during the relay lookup must not lose it
+        if (!sameTitle && overlayCues != null) textOwed[0] = true
         if (!sameTitle) {
             pickSerial[0]++; subBusy = false
             activeAddonSub = null; overlayCues = null; subOffsetMs = 0L
@@ -5830,8 +5832,11 @@ private fun PlayerScreen(
             // the add-on subtitle had the stream's own tracks off; the new title has them back as the settings say (on, in
             // the hand-picked language first, after a pick) — now, as the item changes, not while the last one still
             // plays through a slow relay lookup
-            if (textBack) exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
-                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, Prefs.subStart == "off" && pickLang == null).build()
+            if (textOwed[0]) {
+                textOwed[0] = false
+                exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, Prefs.subStart == "off" && pickLang == null).build()
+            }
             if (resume > 0) exo.setMediaItem(b.build(), resume) else exo.setMediaItem(b.build())
             exo.prepare()
             // the pill is drawn inside the app now, so it stays quiet inside a picture-in-picture window
@@ -6223,7 +6228,7 @@ private fun PlayerScreen(
         if (cues == null) return false
         // and the stream's tracks, when they come back (Off, a stream track, the next title), prefer a hand-picked
         // language, then the settings' (the pick's raw code used to replace them: "pob" matched nothing)
-        val prefer = (listOf(subLangKey(st.lang).ifEmpty { st.lang }) + prefLangs()).distinct()
+        val prefer = (listOf(subLangKey(st.lang).ifEmpty { st.lang }) + (if (Prefs.subStart != "off") prefLangs() else emptyList())).distinct()
         exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
             .clearOverridesOfType(C.TRACK_TYPE_TEXT)
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
@@ -6258,7 +6263,7 @@ private fun PlayerScreen(
     // the next. Always, with nothing in a preferred language and no text in the stream at all: the first add-on file.
     // Once per address, never over a choice made by hand for this title.
     LaunchedEffect(url, addonSubs, tracksFor, subSearching, autoSubTry) {
-        if (autoSubBusy[0] || tracksFor != url || autoSubDone == url || contentId == null || subChosenFor == contentId || overlayCues != null) return@LaunchedEffect
+        if (autoSubBusy[0] == url || tracksFor != url || autoSubDone == url || contentId == null || subChosenFor == contentId || overlayCues != null) return@LaunchedEffect
         val langs = (listOfNotNull(pickLang) + (if (Prefs.subStart != "off") prefLangs() else emptyList()))
             .map { subLangKey(it) }.filter { it.isNotEmpty() }.distinct()
         // off in the settings, or turned off by hand on an earlier title (the stream's tracks stay off too)
@@ -6276,11 +6281,11 @@ private fun PlayerScreen(
         }
         if (pick == null && Prefs.subStart == "always" && embeddedSubs.isEmpty()) pick = addonSubs.firstOrNull { it.track.url !in autoSubFailed }
         val p = pick ?: run { if (!subSearching) autoSubDone = url; return@LaunchedEffect }
-        autoSubBusy[0] = true
         val cid = contentId
         val u = url
+        autoSubBusy[0] = u                                      // a download left over from the last title blocks nothing here
         scope.launch {
-            val r = try { if (subChosenFor == cid) null else loadPick(p.track, auto = true) } finally { autoSubBusy[0] = false }
+            val r = try { if (subChosenFor == cid) null else loadPick(p.track, auto = true) } finally { if (autoSubBusy[0] == u) autoSubBusy[0] = null }
             if (r == true) autoSubDone = u
             else {
                 if (r == false) autoSubFailed += p.track.url

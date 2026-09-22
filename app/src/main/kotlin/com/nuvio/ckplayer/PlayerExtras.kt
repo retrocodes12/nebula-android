@@ -183,9 +183,10 @@ internal class SubCue(val startUs: Long, val endUs: Long, val cues: List<Cue>)
  */
 @UnstableApi
 internal fun parseSubCues(text: String): List<SubCue>? = runCatching {
-    val parser: SubtitleParser = if (text.trimStart().startsWith("WEBVTT")) WebvttParser() else SubripParser()
+    val body = text.trimStart()                  // a WebVTT file with blank lines before its header still reads as one
+    val parser: SubtitleParser = if (body.startsWith("WEBVTT")) WebvttParser() else SubripParser()
     val out = ArrayList<SubCue>()
-    parser.parse(text.toByteArray(Charsets.UTF_8), SubtitleParser.OutputOptions.allCues()) { c ->
+    parser.parse(body.toByteArray(Charsets.UTF_8), SubtitleParser.OutputOptions.allCues()) { c ->
         if (c.cues.isEmpty()) return@parse
         val start = if (c.startTimeUs == C.TIME_UNSET) 0L else c.startTimeUs
         val end = if (c.durationUs == C.TIME_UNSET) start + 5_000_000L else start + c.durationUs
