@@ -28,7 +28,9 @@ object Updates {
     private const val ASSET_PREFIX = "https://github.com/retrocodes12/nebula-android/releases/download/"
     private const val TIMEOUT_MS = 10_000
 
-    data class Release(val version: String, val notes: String, val apkUrl: String)
+    /** [notes] = the release's whole text (the card shows its first line, the ⓘ sheet all of it); [size] = the APK's
+        bytes, 0 when the feed did not say. */
+    data class Release(val version: String, val notes: String, val apkUrl: String, val size: Long = 0L)
 
     suspend fun latest(): Release? = withContext(Dispatchers.IO) {
         try {
@@ -47,13 +49,16 @@ object Updates {
             val version = cleanVersion(a.optString("version").ifEmpty { a.optString("tag") })
             if (version.isEmpty()) return null
             var apk = APK_URL
+            var size = 0L
             val assets = a.optJSONArray("assets")
             if (assets != null) for (i in 0 until assets.length()) {
                 val o = assets.optJSONObject(i) ?: continue
                 val u = o.optString("url")
-                if (o.optString("name") == "Nebula.apk" && u.startsWith(ASSET_PREFIX)) { apk = u; break }
+                if (o.optString("name") == "Nebula.apk" && u.startsWith(ASSET_PREFIX)) { apk = u; size = o.optLong("size"); break }
             }
-            Release(version, "", apk)
+            // the feed carries the release's text since 09-22 (it used to carry none, so the card only ever said
+            // "A new version is available"); an older cloud without it gives an empty string
+            Release(version, cleanNotes(a.optString("notes")), apk, size)
         } catch (e: Exception) {
             null
         }
@@ -65,15 +70,37 @@ object Updates {
             val j = JSONObject(getText(LATEST_API))
             val version = cleanVersion(j.optString("tag_name"))
             if (version.isEmpty()) return null
-            // First non-empty line of the release notes, trimmed to a card-friendly length.
-            val notes = j.optString("body")
-                .lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }
-                ?.take(140).orEmpty()
-            Release(version, notes, APK_URL)
+            var size = 0L
+            val assets = j.optJSONArray("assets")
+            if (assets != null) for (i in 0 until assets.length()) {
+                val o = assets.optJSONObject(i) ?: continue
+                if (o.optString("name") == "Nebula.apk") { size = o.optLong("size"); break }
+            }
+            Release(version, cleanNotes(j.optString("body").take(4000)), APK_URL, size)
         } catch (e: Exception) {
             null
         }
     }
+
+    /**
+     * A release's text made readable as plain text: GitHub keeps Markdown, and a link printed raw read as
+     * "[i18n(nb): …](https://github.com/…)" in the sheet (Nuvio shows exactly that). Links keep their words, emphasis
+     * and heading marks go, list dashes become bullets, and runs of blank lines fold to one.
+     */
+    fun cleanNotes(raw: String): String = raw.replace("\r\n", "\n").replace('\r', '\n')
+        .replace(Regex("""!\[[^\]]*]\([^)]*\)"""), "")                 // images
+        .replace(Regex("""\[([^\]]+)]\((?:[^)]*)\)"""), "$1")          // [words](url) → words
+        .replace(Regex("""(\*\*|__|`)"""), "")
+        .lines().joinToString("\n") { line ->
+            val t = line.trimEnd()
+            when {
+                Regex("""^\s*#{1,6}\s+""").containsMatchIn(t) -> t.replace(Regex("""^\s*#{1,6}\s+"""), "")
+                Regex("""^\s*[-*]\s+""").containsMatchIn(t) -> t.replace(Regex("""^\s*[-*]\s+"""), "• ")
+                else -> t
+            }
+        }
+        .replace(Regex("""\n{3,}"""), "\n\n")
+        .trim()
 
     /** "v1.55.0" → "1.55.0"; anything that is not dotted digits is rejected as empty. */
     private fun cleanVersion(raw: String): String {

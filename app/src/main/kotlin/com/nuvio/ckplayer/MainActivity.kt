@@ -50,6 +50,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -2540,11 +2541,18 @@ internal fun typeLabel(type: String): String = when (type) {
 /**
  * "Update available" banner shown on Home. Auto-downloads the APK in the
  * background as soon as it appears (cached per version), then Install is one tap.
+ * The version line carries the download's size, and ⓘ opens the release's whole text
+ * (the card itself has room for its first line only) — the Founder, 09-22, pointing at
+ * Nuvio's update bar: "our player don't show this so add it".
  */
 @Composable
-private fun UpdateCard(version: String, notes: String, apkUrl: String = Updates.APK_URL, onDismiss: () -> Unit) {
+private fun UpdateCard(version: String, notes: String, apkUrl: String = Updates.APK_URL, size: Long = 0L, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+    var notesOpen by remember { mutableStateOf(false) }
+    if (notesOpen) ReleaseNotesSheet(version, notes) { notesOpen = false }
+    val firstLine = remember(notes) { notes.lineSequence().map { it.trim().removePrefix("• ") }.firstOrNull { it.isNotEmpty() }?.take(140).orEmpty() }
+    val mb = if (size > 0) " · " + (size / 1_000_000.0).roundToInt() + " MB" else ""
     var progress by remember { mutableStateOf(0) }
     var apk by remember { mutableStateOf<File?>(null) }
     var phase by remember { mutableStateOf("idle") } // idle · downloading · ready · failed
@@ -2569,12 +2577,12 @@ private fun UpdateCard(version: String, notes: String, apkUrl: String = Updates.
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Text("Update available · v$version", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            Text("Update available · v$version$mb", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
             Text(
                 message ?: when (phase) {
                     "downloading" -> "Downloading… $progress%"
                     "ready" -> "Ready — tap Install."
-                    else -> notes.ifEmpty { "A new version is available." }
+                    else -> firstLine.ifEmpty { "A new version is available." }
                 },
                 color = Color(0xFFFFE0E0), fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 2.dp),
@@ -2601,8 +2609,73 @@ private fun UpdateCard(version: String, notes: String, apkUrl: String = Updates.
                 fontWeight = FontWeight.Bold,
             )
         }
+        // the whole of what changed, one press away (nothing to show when the release carries no text)
+        if (notes.isNotBlank()) IconButton(onClick = { notesOpen = true }, modifier = Modifier.focusRing(CircleShape, landing = false)) {
+            Icon(Icons.Filled.Info, contentDescription = "Release notes", tint = Color.White)
+        }
         IconButton(onClick = onDismiss, modifier = Modifier.focusRing(CircleShape, landing = false)) {
             Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = Color(0xFFFFD9D9))
+        }
+    }
+}
+
+/**
+ * "Release notes": a centred card (Nuvio's layout, the Founder's reference) in the sheets' own material — the title,
+ * the version in the mono register, a hairline, then the release's text, scrolling when long. Under a remote the text
+ * takes focus and ↑/↓ scroll it (a plain scrolled Text is nothing the D-pad can reach), ↑ at the top moves to the close
+ * button, and Back closes as it does any sheet.
+ */
+@Composable
+private fun ReleaseNotesSheet(version: String, notes: String, onDismiss: () -> Unit) {
+    val remote = remoteMode()
+    val scroll = rememberScrollState()
+    val scope = rememberCoroutineScope()
+    val textFocus = remember { FocusRequester() }
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.fillMaxSize().clickable(
+            interactionSource = remember { MutableInteractionSource() }, indication = null,
+        ) { onDismiss() }, contentAlignment = Alignment.Center) {
+            val card = RoundedCornerShape(24.dp)
+            Column(
+                Modifier.fillMaxWidth(0.88f).widthIn(max = 480.dp)
+                    .clip(card).background(Color(0xFF141418)).border(1.dp, Color(0x14FFFFFF), card)
+                    // a tap inside stays inside
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
+                    .padding(start = 24.dp, end = 12.dp, top = 20.dp, bottom = 24.dp),
+            ) {
+                if (remote) LaunchedEffect(Unit) {
+                    repeat(10) {
+                        withFrameNanos {}
+                        if (runCatching { textFocus.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+                    }
+                }
+                Row(verticalAlignment = Alignment.Top) {
+                    Column(Modifier.weight(1f).padding(top = 4.dp)) {
+                        Text("Release notes", color = TextC, fontSize = 20.sp, fontFamily = Sans, fontWeight = FontWeight.Bold, letterSpacing = (-0.3).sp)
+                        Text(version, color = MutedC, fontFamily = Mono, fontSize = 13.sp, letterSpacing = 0.6.sp, modifier = Modifier.padding(top = 4.dp))
+                    }
+                    IconButton(onClick = onDismiss, modifier = Modifier.focusRing(CircleShape, landing = false)) {
+                        Icon(Icons.Filled.Close, contentDescription = "Close", tint = TextC)
+                    }
+                }
+                Box(Modifier.padding(top = 16.dp, bottom = 16.dp, end = 12.dp).fillMaxWidth().height(1.dp).background(LineC))
+                Text(
+                    notes, color = Color(0xCCEBEBF5), fontSize = 15.sp, lineHeight = 22.sp,
+                    modifier = Modifier.padding(end = 12.dp).heightIn(max = 380.dp)
+                        .then(if (remote) Modifier.focusRing(RoundedCornerShape(8.dp), landing = false)
+                            .focusRequester(textFocus)
+                            .onKeyEvent { e ->
+                                if (e.type != KeyEventType.KeyDown) return@onKeyEvent false
+                                when (e.key) {
+                                    Key.DirectionDown -> { if (scroll.canScrollForward) scope.launch { scroll.animateScrollBy(220f) }; true }
+                                    Key.DirectionUp -> if (scroll.canScrollBackward) { scope.launch { scroll.animateScrollBy(-220f) }; true } else false
+                                    else -> false
+                                }
+                            }
+                            .focusable() else Modifier)
+                        .verticalScroll(scroll),
+                )
+            }
         }
     }
 }
@@ -2865,6 +2938,7 @@ private fun HomeScreen(
                 version = rel.version,
                 notes = rel.notes,
                 apkUrl = rel.apkUrl,
+                size = rel.size,
                 onDismiss = {
                     ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                         .putString("updateDismissed", rel.version).apply()
