@@ -50,6 +50,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,6 +64,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 
 /**
  * Search › Discover: browse one add-on catalog by type, catalog and genre
@@ -260,24 +263,36 @@ internal fun DiscoverSection(
             last >= 0 && last >= st.gridState.layoutInfo.totalItemsCount - 12
         }
     }
-    // keyed on `fetched`, never on `paging`: setting the flag it was keyed on cancelled the request, and with nothing
-    // to lower it again `paging` stuck true — Discover never loaded a second page
-    LaunchedEffect(reachedEnd, st.pageDone, st.fetched, current, st.genre) {
-        if (!reachedEnd || st.pageDone || st.paging || st.loading) return@LaunchedEffect
+    // ONE collector per pick, which never cancels itself and asks for one page at a time (CatalogScreen's, which says
+    // why): keyed effects that bailed out on `paging`/`loading` could relaunch while a cancelled page still held the
+    // flag, return early, and not ask for page 2 until reachedEnd flipped again. The flow does not say `true` twice
+    // running, so while the grid still ends here once a page is laid out, the loop asks again itself; reachedEnd reads
+    // the LAST layout, so each check waits two frames first.
+    LaunchedEffect(current, st.genre) {
         val c = current ?: return@LaunchedEffect
-        if (st.items.size >= 1000) { st.pageDone = true; return@LaunchedEffect }
-        st.paging = true
-        try {
-            runCatching { Stremio.loadCatalog(c.addon.base, c.catalog, st.genre, null, st.fetched) }
-                .onSuccess { page ->
-                    val seen = st.items.mapTo(HashSet()) { it.type + ":" + it.id }
-                    val fresh = page.filter { seen.add(it.type + ":" + it.id) }
-                    if (fresh.isNotEmpty()) st.items = st.items + fresh
-                    st.pageDone = page.isEmpty() || fresh.isEmpty()
-                    st.fetched += page.size
+        val genre = st.genre
+        snapshotFlow { reachedEnd && !st.pageDone && !st.paging && !st.loading }
+            .distinctUntilChanged()
+            .filter { it }
+            .collect {
+                withFrameNanos {}; withFrameNanos {}
+                while (reachedEnd && !st.pageDone && !st.paging && !st.loading) {
+                    if (st.items.size >= 1000) { st.pageDone = true; break }   // ceiling for TV memory
+                    st.paging = true
+                    try {
+                        runCatching { Stremio.loadCatalog(c.addon.base, c.catalog, genre, null, st.fetched) }
+                            .onSuccess { page ->
+                                val seen = st.items.mapTo(HashSet()) { it.type + ":" + it.id }
+                                val fresh = page.filter { seen.add(it.type + ":" + it.id) }
+                                if (fresh.isNotEmpty()) st.items = st.items + fresh
+                                st.pageDone = page.isEmpty() || fresh.isEmpty()
+                                st.fetched += page.size
+                            }
+                            .onFailure { if (it is CancellationException) throw it; st.pageDone = true }
+                    } finally { st.paging = false }
+                    withFrameNanos {}; withFrameNanos {}
                 }
-                .onFailure { if (it is CancellationException) throw it; st.pageDone = true }
-        } finally { st.paging = false }
+            }
     }
 
     var picker by remember { mutableStateOf<String?>(null) }     // "type" | "catalog" | "genre"

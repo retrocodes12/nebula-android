@@ -155,6 +155,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.FocusRequester
@@ -243,6 +244,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
@@ -4900,29 +4903,41 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
             last >= 0 && last >= st.gridState.layoutInfo.totalItemsCount - 12
         }
     }
-    // Keyed on what a page CHANGES (fetched), never on the flag it sets: keyed on `paging`, setting it cancelled the
-    // effect mid-request, the finally lowered it and the effect started over — a loop, and page 2 never arrived.
-    LaunchedEffect(reachedEnd, st.pageDone, st.fetched, submitted, current, genre) {
-        if (!reachedEnd || st.pageDone || st.paging || loading) return@LaunchedEffect
+    // ONE collector per (catalog, genre, query), which never cancels itself and asks for one page at a time. Keyed
+    // effects that bailed out on `paging`/`loading` (neither a key) could relaunch while a cancelled page's finally still
+    // waited on its blocking call, return early, and not ask for page 2 until reachedEnd flipped again; keyed on the
+    // flag itself, setting it cancelled the request. The flow does not say `true` twice running, so while the grid
+    // still ends here once the new page is laid out (a short page), the loop asks again itself. reachedEnd reads the
+    // LAST layout, so each check waits two frames for the grid to lay out what just landed.
+    LaunchedEffect(current, genre, submitted) {
         if (submitted.trim().isNotEmpty()) return@LaunchedEffect      // search results aren't paged
         val c = current ?: return@LaunchedEffect
-        if (items.size >= 1000) { st.pageDone = true; return@LaunchedEffect }   // ceiling for TV memory
-        st.paging = true
-        // cancelled mid-page (a new genre or query), the flag must still come down, or paging stays off for good
-        try { runCatching { Stremio.loadCatalog(addon.base, c, genre, null, st.fetched) }
-            .onSuccess { page ->
-                st.fetched += page.size
-                val seen = items.mapTo(HashSet()) { it.type + ":" + it.id }
-                val fresh = page.filter { seen.add(it.type + ":" + it.id) }
-                if (fresh.isNotEmpty()) items = items + fresh
-                st.pageDone = page.isEmpty() || fresh.isEmpty()
-                status = "${items.size} items" + (if (st.pageDone) "" else " — scroll for more")
+        snapshotFlow { reachedEnd && !st.pageDone && !st.paging && !loading }
+            .distinctUntilChanged()
+            .filter { it }
+            .collect {
+                withFrameNanos {}; withFrameNanos {}
+                while (reachedEnd && !st.pageDone && !st.paging && !loading) {
+                    if (items.size >= 1000) { st.pageDone = true; break }   // ceiling for TV memory
+                    st.paging = true
+                    // cancelled mid-page (a new genre or query), the flag must still come down, or paging stays off for good
+                    try { runCatching { Stremio.loadCatalog(addon.base, c, genre, null, st.fetched) }
+                        .onSuccess { page ->
+                            st.fetched += page.size
+                            val seen = items.mapTo(HashSet()) { it.type + ":" + it.id }
+                            val fresh = page.filter { seen.add(it.type + ":" + it.id) }
+                            if (fresh.isNotEmpty()) items = items + fresh
+                            st.pageDone = page.isEmpty() || fresh.isEmpty()
+                            status = "${items.size} items" + (if (st.pageDone) "" else " — scroll for more")
+                        }
+                        .onFailure {
+                            if (it is kotlinx.coroutines.CancellationException) throw it
+                            st.pageDone = true
+                        }
+                    } finally { st.paging = false }
+                    withFrameNanos {}; withFrameNanos {}
+                }
             }
-            .onFailure {
-                if (it is kotlinx.coroutines.CancellationException) throw it
-                st.pageDone = true
-            }
-        } finally { st.paging = false }
     }
 
     val typing = tvTyping()
