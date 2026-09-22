@@ -96,6 +96,7 @@ import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkRemove
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
@@ -166,6 +167,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
@@ -2543,7 +2545,7 @@ private fun SideRail(current: Screen, onTab: (Screen) -> Unit) {
     }
 }
 
-/** The nav's last item: the signed-in profile's initial on the accent, a "?" when nobody is. */
+/** The nav's last item: the signed-in profile's initial on the accent, a person glyph when nobody is. */
 @Composable
 private fun ProfileTab(on: Boolean, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
@@ -2565,9 +2567,11 @@ private fun ProfileTab(on: Boolean, onClick: () -> Unit) {
                 .background(if (p != null) Red else Surface2, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                p?.let { it.name.ifEmpty { it.handle } }?.trim()?.removePrefix("@")?.take(1)?.uppercase()?.ifEmpty { "?" } ?: "?",
-                color = if (p != null) OnAccent else MutedC, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = Sans,
+            // signed out: a person glyph, not a "?" (read as an error on the rail and the pill)
+            if (p == null) Icon(Icons.Filled.Person, contentDescription = null, tint = MutedC, modifier = Modifier.size(18.dp))
+            else Text(
+                p.name.ifEmpty { p.handle }.trim().removePrefix("@").take(1).uppercase().ifEmpty { "?" },
+                color = OnAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = Sans,
             )
         }
         // one line whatever the font scale: squeezed, a label wrapped a letter at a time down the pill
@@ -2822,7 +2826,7 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit, de
             .clickable { onOpen(from, m) }
     ) {
         // a slide change dissolves one picture into the next rather than cutting (a cut under reduced motion)
-        Crossfade(targetState = m, animationSpec = tween(if (Prefs.reducedMotion) 0 else 400), label = "heroArt", modifier = Modifier.matchParentSize()) { pick ->
+        Crossfade(targetState = m, animationSpec = tween(if (Prefs.reducedMotion) 0 else 400), label = "heroArt", modifier = Modifier.matchParentSize().clipToBounds()) { pick ->
             AsyncImage(
                 model = pick.background ?: pick.poster, contentDescription = pick.name,
                 contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
@@ -2832,7 +2836,7 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit, de
             Modifier.matchParentSize().background(
                 Brush.verticalGradient(
                     0f to Color(0x8A000000), 0.22f to Color(0x1A000000),
-                    0.58f to Color(0x8A000000), 0.82f to Color(0xE0000000), 1f to Color(0xFF000000),
+                    0.58f to Color(0x8A000000), 0.82f to Color(0xE0000000), 0.97f to Color(0xFF000000), 1f to Color(0xFF000000),
                 )
             )
         )
@@ -4328,7 +4332,8 @@ private fun DetailScreen(
 
     Box(Modifier.fillMaxSize()) {
         // full-bleed backdrop; the scrim exists only so type stays legible
-        Box(Modifier.fillMaxWidth().height(430.dp)) {
+        // clipped, and solid black for its last few percent: the crop's bottom row of pixels drew a hairline seam
+        Box(Modifier.fillMaxWidth().height(430.dp).clipToBounds()) {
             val art = full?.background ?: item.background ?: item.poster
             if (art != null) {
                 AsyncImage(model = art, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
@@ -4337,7 +4342,7 @@ private fun DetailScreen(
                 Modifier.matchParentSize().background(
                     Brush.verticalGradient(
                         0f to Color(0x52000000), 0.32f to Color(0x1F000000),
-                        0.7f to Color(0xC7000000), 1f to Color(0xFF000000),
+                        0.7f to Color(0xC7000000), 0.96f to Color(0xFF000000), 1f to Color(0xFF000000),
                     )
                 )
             )
@@ -4443,10 +4448,6 @@ private fun DetailScreen(
         full?.genres?.takeIf { it.isNotEmpty() && Prefs.detailGenres }?.let { gs ->
             NamePills(gs.take(6), TextC, Color(0x38FFFFFF), detailTv, Modifier.padding(top = 14.dp), FontWeight.Medium)
         }
-        full?.cast?.takeIf { it.isNotEmpty() && Prefs.detailCast }?.let { cast ->
-            Eyebrow("Cast", Modifier.padding(top = 16.dp, bottom = 8.dp))
-            NamePills(cast.take(8), MutedC, LineC, detailTv)
-        }
         // The Play pill and the round buttons share one height and one geometry
         // (a full pill beside full circles, as the Home hero's pill is): a 40dp
         // 12dp-cornered button beside 48dp circles read as a different control
@@ -4523,6 +4524,11 @@ private fun DetailScreen(
             ) { inList = Library.toggle(ctx, item.type, item, addon.manifestUrl) }
             val pool = if (item.type == "series") surprisePool(episodes) else emptyList()
             if (pool.size >= 2 || Social.on) RoundAction(Icons.Filled.MoreVert, "More") { moreOpen = true }
+        }
+        // the cast comes AFTER the actions: above them it pushed Play under the floating nav pill on a 360 dp phone
+        full?.cast?.takeIf { it.isNotEmpty() && Prefs.detailCast }?.let { cast ->
+            Eyebrow("Cast", Modifier.padding(top = 4.dp, bottom = 8.dp))
+            NamePills(cast.take(8), MutedC, LineC, detailTv, Modifier.padding(bottom = 16.dp))
         }
         if (moreOpen) {
             val pool = if (item.type == "series") surprisePool(episodes) else emptyList()
