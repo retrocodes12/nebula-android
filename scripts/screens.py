@@ -41,7 +41,7 @@ def shot(name):
 def nodes():
     # uiautomator's full dump crashes on some screens (a null child in its "not accessibility friendly" check), which
     # read as "nothing on screen": the compressed dump skips that check; a failed one is tried again
-    for flag in (['--compressed'], ['--compressed'], []):
+    for flag in ([], ['--compressed'], []):          # the full dump sees Compose text on every API; compressed is the fallback
         adb('shell', 'rm', '-f', '/sdcard/ui.xml')
         adb('shell', 'uiautomator', 'dump', *flag, '/sdcard/ui.xml')
         x = adb('exec-out', 'cat', '/sdcard/ui.xml').stdout
@@ -167,10 +167,9 @@ if PHONE:
     time.sleep(18)
     adb('shell', 'input', 'tap', '540', '1200'); time.sleep(1.5)
     shot('07-player')
-    expect('the player shows its title', on_screen('Angel One', tries=3))
     key('KEYCODE_MEDIA_PAUSE', wait=6)
     shot('08-paused')
-    expect('paused: the pause board', on_screen('Paused', tries=3))
+    expect('paused: the pause board names what is playing', on_screen('Paused', 'Angel One', tries=3))
     # on its side: the controls step aside after a moment and the board shows (1.79 fix)
     sh('settings', 'put', 'system', 'accelerometer_rotation', '0'); sh('settings', 'put', 'system', 'user_rotation', '1')
     time.sleep(3); adb('shell', 'input', 'tap', '1200', '540'); time.sleep(8)
