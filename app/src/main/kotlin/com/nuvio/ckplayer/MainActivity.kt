@@ -2072,7 +2072,8 @@ private fun RecommendSheet(type: String, item: MetaItem, scope: CoroutineScope, 
         val fr = Social.friends(ctx)
         friends = (0 until (fr?.length() ?: 0)).mapNotNull { i ->
             val f = fr!!.optJSONObject(i) ?: return@mapNotNull null
-            if (Social.friendKey(f).isEmpty()) null else f
+            // only a friendship both sides made carries a recommendation
+            if (Social.friendKey(f).isEmpty() || Social.friendPending(f)) null else f
         }
     }
     val list = friends ?: return
@@ -2143,6 +2144,7 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
     var codeIn by remember { mutableStateOf("") }
     var friends by remember { mutableStateOf<List<JSONObject>?>(null) }
     var inbox by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
+    var asks by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     var openCode by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableStateOf(0) }
 
@@ -2154,6 +2156,9 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
         friends = (0 until (fr?.length() ?: 0)).mapNotNull { fr!!.optJSONObject(it) }
         val ib = Social.inbox(ctx)
         inbox = (0 until (ib?.length() ?: 0)).mapNotNull { ib!!.optJSONObject(it) }.reversed()
+        val ak = Social.asks(ctx)
+        asks = (0 until (ak?.length() ?: 0)).mapNotNull { ak!!.optJSONObject(it) }
+            .filter { Social.friendKey(it).isNotEmpty() }.distinctBy { Social.friendKey(it) }
     }
 
     LazyColumn(
@@ -2176,7 +2181,7 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                     Text(
                         "Rate what you watch, see what your friends are watching, and trade " +
                             "recommendations. Turning it on shares your ratings, recent watches and " +
-                            "My List — with friends you add by @handle, and no one else.",
+                            "My List with your friends — people you add by @handle who add you back — and no one else.",
                         color = MutedC, fontSize = 14.sp, lineHeight = 21.sp,
                         modifier = Modifier.padding(top = 8.dp, bottom = 14.dp),
                     )
@@ -2209,7 +2214,8 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
             fun addFriend() {
                 scope.launch {
                     val (name, err) = Social.addFriend(ctx, codeIn)
-                    status = err ?: "You and $name are now friends."
+                    status = err ?: if (Social.lastAddPending) "Asked $name. Once they add you back, you see each other’s watching."
+                        else "You and $name are now friends."
                     if (err == null) { codeIn = ""; reload++ }
                 }
             }
@@ -2233,6 +2239,47 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.padding(start = 10.dp).focusRing(RoundedCornerShape(12.dp)),
                 ) { Text("Add", fontWeight = FontWeight.SemiBold) }
+            }
+        }
+        if (asks.isNotEmpty()) {
+            item(key = "askshead") {
+                Text("Want to be friends", color = TextC, fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 8.dp))
+            }
+            items(asks.take(20), key = { "ask/" + Social.friendKey(it) }) { f ->
+                Row(
+                    Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                        .background(SurfaceC, RoundedCornerShape(14.dp))
+                        .border(1.dp, LineC, RoundedCornerShape(14.dp))
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Avatar(f.optString("avatar"), f.optString("name").ifEmpty { f.optString("handle") }, 40.dp, ring = Social.friendFounder(f))
+                    Column(Modifier.padding(start = 12.dp).weight(1f)) {
+                        Text(Social.friendLabel(f), color = TextC, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        val h = f.optString("handle")
+                        Text(if (h.isNotEmpty()) "@$h added you" else "Added you", color = MutedC, fontSize = 12.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                status = if (Social.acceptAsk(ctx, f)) "You and ${Social.friendLabel(f)} are now friends." else "Could not reach the server."
+                                reload++
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
+                        shape = RoundedCornerShape(50),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                        modifier = Modifier.padding(start = 8.dp).focusRing(RoundedCornerShape(50)),
+                    ) { Text("Add back", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 1) }
+                    Text("Dismiss", color = MutedC, fontSize = 13.sp, maxLines = 1,
+                        modifier = Modifier.padding(start = 4.dp).focusRing(RoundedCornerShape(8.dp), landing = false)
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { scope.launch { Social.dismissAsk(ctx, f); reload++ } }
+                            .padding(8.dp))
+                }
             }
         }
         if (inbox.isNotEmpty()) {
@@ -2313,13 +2360,17 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                                 }
                                 val handle = f.optString("handle")
                                 Text(
-                                    (if (handle.isNotEmpty()) "@$handle · " else "") + "${prof.optJSONArray("ratings")?.length() ?: 0} rated",
+                                    (if (handle.isNotEmpty()) "@$handle · " else "") +
+                                        if (Social.friendPending(f)) "Waiting for them to add you back" else "${prof.optJSONArray("ratings")?.length() ?: 0} rated",
                                     color = MutedC, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 )
                             }
                             Text(if (openCode == fCode) "Hide" else "View", color = MutedC, fontSize = 13.sp)
                         }
-                        if (openCode == fCode) {
+                        if (openCode == fCode && Social.friendPending(f)) {
+                            Text("They have not added you back yet — once they do, you see each other’s watching here.",
+                                color = MutedC, fontSize = 13.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
+                        } else if (openCode == fCode) {
                             FriendRow("Watched recently", profItems(prof.optJSONArray("recent")).map { r ->
                                 if (r.optString("type") == "series")
                                     JSONObject(r.toString()).put("id", seriesIdOf(r.optString("id")))

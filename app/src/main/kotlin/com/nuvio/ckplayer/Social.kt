@@ -96,8 +96,15 @@ object Social {
     fun friendMark(f: JSONObject): String = Support.cleanMark(f.optString("mark"))
     fun friendFounder(f: JSONObject): Boolean = f.optString("tier") == "founder"
 
-    /** Add a friend by @handle (or one of the old 7-character codes). Returns (their label, null) or (null, error). */
+    /** Friends are mutual (server, 09-23): an add is an ASK until they add back, and nothing is shared before that. */
+    fun friendPending(f: JSONObject): Boolean = f.optBoolean("pending")
+
+    /** Add a friend by @handle (or one of the old 7-character codes). Returns (their label, null) or (null, error);
+        the label comes back with [lastAddPending] set when it is only an ask so far. */
+    @Volatile var lastAddPending = false
+        private set
     suspend fun addFriend(ctx: Context, raw: String): Pair<String?, String?> {
+        lastAddPending = false
         val typed = raw.replace(Regex("\\s"), "")
         val ref = if (OLD_CODE.matches(typed)) JSONObject().put("code", typed)
         else {
@@ -107,8 +114,10 @@ object Social {
         }
         return runCatching {
             val r = Cloud.api(ctx, "POST", "/v1/social/friend", ref)
+            lastAddPending = friendPending(r)
             friendLabel(r) to null
         }.getOrElse {
+            if (it is kotlinx.coroutines.CancellationException) throw it
             null to when ((it as? Cloud.HttpFail)?.code) {
                 409 -> "They have a profile, but Friends is off on their side."
                 404 -> "No one has that handle."
@@ -120,6 +129,22 @@ object Social {
     suspend fun friends(ctx: Context): JSONArray? = runCatching {
         Cloud.api(ctx, "GET", "/v1/social/friends", null).optJSONArray("friends")
     }.getOrNull()
+
+    /** People who added you and wait for you to add them back. */
+    suspend fun asks(ctx: Context): JSONArray? = runCatching {
+        Cloud.api(ctx, "GET", "/v1/social/asks", null).optJSONArray("asks")
+    }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
+
+    /** Adding back is the yes (true when it worked). */
+    suspend fun acceptAsk(ctx: Context, f: JSONObject): Boolean = runCatching {
+        Cloud.api(ctx, "POST", "/v1/social/friend", friendRef(f)); true
+    }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrDefault(false)
+
+    /** Clears the ask from your list (the asker is not told). */
+    suspend fun dismissAsk(ctx: Context, f: JSONObject) {
+        runCatching { Cloud.api(ctx, "POST", "/v1/social/ask_dismiss", friendRef(f)) }
+            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+    }
 
     suspend fun inbox(ctx: Context): JSONArray? = runCatching {
         Cloud.api(ctx, "GET", "/v1/social/inbox", null).optJSONArray("inbox")
