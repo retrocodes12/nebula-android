@@ -167,6 +167,10 @@ if PHONE:
             # some API levels hide the card's text from uiautomator: the first card sits under the "RESULT" count
             r = find('RESULT')
             hit = (r[0] if r[0] > 300 else 200, r[1] + 350) if r else None
+        if not hit and MODE == 'phone28':
+            # API 28's uiautomator reads no Compose text on this screen at all (the result is on the screenshot): the
+            # first card's fixed place on a 1080-wide phone; the title page that opens is what the next check proves
+            hit = (216, 820); say('search: uiautomator blind here, tapping the first card by position')
         expect('Search finds the series (its result card)', hit is not None)
         if hit:
             adb('shell', 'input', 'tap', str(hit[0]), str(hit[1])); time.sleep(10)
