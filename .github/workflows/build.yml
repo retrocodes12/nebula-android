@@ -49,9 +49,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.77.0.apk
+          cp "$APK" Nebula-1.78.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.77.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.77.0 Nebula-1.77.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.77.0" \
-            --notes "The update card now shows how big the download is, and an info button opens the release notes: what changed in the new version, in full. On a TV the notes scroll with the remote."
+          gh release delete v1.78.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.78.0 Nebula-1.78.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.78.0" \
+            --notes "Subtitles from add-ons now turn on by themselves in your preferred language (Settings, Subtitles when a video starts), and picking one no longer restarts the stream: they are drawn over the picture directly, so timing nudges apply at once too."
