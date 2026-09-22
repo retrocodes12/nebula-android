@@ -97,6 +97,8 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkRemove
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.MoreVert
@@ -2517,7 +2519,8 @@ private fun ProfileTab(on: Boolean, onClick: () -> Unit) {
                 color = if (p != null) OnAccent else MutedC, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = Sans,
             )
         }
-        Text("Profile", color = tint, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 2.dp))
+        // one line whatever the font scale: squeezed, a label wrapped a letter at a time down the pill
+        Text("Profile", color = tint, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false, modifier = Modifier.padding(top = 2.dp))
     }
 }
 
@@ -2538,7 +2541,8 @@ private fun TabItem(label: String, icon: androidx.compose.ui.graphics.vector.Ima
             Modifier.size(32.dp).background(if (on) Surface2 else Color.Transparent, CircleShape),
             contentAlignment = Alignment.Center,
         ) { Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp)) }
-        Text(label, color = tint, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 2.dp))
+        // one line whatever the font scale (the pill and the TV rail both use this): squeezed, it wrapped a letter at a time
+        Text(label, color = tint, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false, modifier = Modifier.padding(top = 2.dp))
     }
 }
 
@@ -3278,6 +3282,7 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
     var url by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
     var statusErr by remember { mutableStateOf(false) }
+    var statusDone by remember { mutableStateOf(false) }     // "Added X": wears a check
 
     // ---- ranking ----
     // Rows are a fixed height, so a drag is just "how many rows have I passed",
@@ -3298,15 +3303,15 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
         // a stremio:// install link is the manifest address behind a scheme only Stremio registers
         val u = url.trim().replace(Regex("^stremio://", RegexOption.IGNORE_CASE), "https://")
         if (!Regex("manifest\\.json").containsMatchIn(u)) {
-            status = "Enter a manifest URL (…/manifest.json)"; statusErr = true; return
+            status = "Enter a manifest URL (…/manifest.json)"; statusErr = true; statusDone = false; return
         }
-        status = "Adding…"; statusErr = false
+        status = "Adding…"; statusErr = false; statusDone = false
         scope.launch {
             runCatching { Stremio.loadManifest(u).addon }.onSuccess { a ->
                 val list = (addons.filterNot { it.manifestUrl == a.manifestUrl } + a)
                 saveAddons(ctx, list); addons = list; url = ""; onAddonsChanged()
-                status = "Added ${a.name}"; statusErr = false
-            }.onFailure { status = "Could not load: ${it.message}"; statusErr = true }
+                status = "Added ${a.name}"; statusErr = false; statusDone = true
+            }.onFailure { status = "Could not load: ${it.message}"; statusErr = true; statusDone = false }
         }
     }
     /** Move an add-on and persist the new ranking. Returns where it landed. */
@@ -3369,7 +3374,11 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                     ) { Text("Add add-on", fontWeight = FontWeight.SemiBold) }
                 }
                 if (status.isNotEmpty()) {
-                    Text(status, color = if (statusErr) Color(0xFFFF6B6B) else Color(0xFF7CFC7C), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+                    // the palette's own ink and a check, not an off-palette green
+                    Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (statusDone) Icon(Icons.Filled.Check, contentDescription = null, tint = TextC, modifier = Modifier.padding(end = 6.dp).size(16.dp))
+                        Text(status, color = when { statusErr -> Color(0xFFFF6B6B); statusDone -> TextC; else -> MutedC }, fontSize = 13.sp)
+                    }
                 }
             }
         }
@@ -4651,7 +4660,7 @@ private fun EpisodeRow(
                             Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp)
                                 .background(Color(0xD10B0B0F), CircleShape),
                             contentAlignment = Alignment.Center,
-                        ) { Text("✓", color = Color(0xFF46D369), fontSize = 11.sp, fontWeight = FontWeight.Black) }
+                        ) { Icon(Icons.Filled.Check, contentDescription = "Watched", tint = TextC, modifier = Modifier.size(13.dp)) }
                     } else if (pr != null && pr.pos > 0 && pr.dur > 0) {
                         Box(Modifier.align(Alignment.BottomStart).width(112.dp).height(4.dp).background(Color(0x8C000000))) {
                             Box(Modifier.fillMaxWidth((pr.pos.toFloat() / pr.dur).coerceIn(0f, 1f)).fillMaxSize().background(Red))
@@ -5474,7 +5483,7 @@ private fun SubMenuRow(label: String, active: Boolean, modifier: Modifier = Modi
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, color = TextC, fontSize = 14.sp, fontWeight = if (active) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.weight(1f))
-        if (active) Text("✓", color = Color(0xFF46D369), fontSize = 13.sp, fontWeight = FontWeight.Black)
+        if (active) Icon(Icons.Filled.Check, contentDescription = "Selected", tint = TextC, modifier = Modifier.size(16.dp))
     }
 }
 
@@ -6562,6 +6571,14 @@ private fun PlayerScreen(
     // scrubber, so the cards that float above the chrome (Skip, Up next) start higher there.
     val shortScreen = LocalConfiguration.current.screenHeightDp < 480
     val aboveChrome = if (!chromeVisible) 40.dp else if (shortScreen) 150.dp else 214.dp
+    // A phone turned on its side is watching: the status and navigation bars go (a swipe shows them for a moment)
+    // without a trip to the Fullscreen button, and come back upright; leaving the player restores them (onDispose).
+    // The button still locks landscape. Not on a TV (no bars to hide) and not in picture-in-picture.
+    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    LaunchedEffect(landscape, isFullscreen, pip) {
+        if (tvBox || pip) return@LaunchedEffect
+        activity?.let { setImmersive(it, isFullscreen || landscape) }
+    }
     // a phone on its side has no room for both: the board would sit over the centre transport, so while the
     // controls are up there it steps aside (with its scrim and the title it hides), and comes back when they fade
     val boardUp = pauseBoardOn && !(shortScreen && chromeVisible)
@@ -6884,7 +6901,9 @@ private fun PlayerScreen(
                     .padding(end = 20.dp, bottom = if (chromeVisible) aboveChrome else 150.dp)
                     .onFocusChanged { upnextHasFocus = it.hasFocus }
                     .width(300.dp)
-                    .background(Color(0xE62C2C2E), RoundedCornerShape(16.dp))
+                    // the player's glass (the pills' and the info panel's material) with its 1 dp hairline
+                    .background(BarGlass, RoundedCornerShape(16.dp))
+                    .border(1.dp, Hairline, RoundedCornerShape(16.dp))
                     .padding(18.dp),
             ) {
                 Text(if (stillAsk) "Still watching?" else "Up next", color = Color(0xA8EBEBF5), fontSize = 13.sp, fontWeight = FontWeight.Medium)
@@ -6934,15 +6953,22 @@ private fun PlayerScreen(
             }
         }
         // Hold-to-speed chip: shown for exactly as long as the finger is down.
-        if (heldSpeed != null) Text(
-            "▶▶ ${if (Prefs.holdRate % 1f == 0f) Prefs.holdRate.toInt().toString() else Prefs.holdRate.toString()}×",
-            color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold,
-            modifier = Modifier
+        // (an icon, not "▶▶": emoji draw in the font's own colours and size, and §9 says SVG icons)
+        if (heldSpeed != null) Row(
+            Modifier
                 .align(Alignment.TopCenter)
                 .padding(top = 54.dp)
                 .background(Color(0x8C000000), RoundedCornerShape(50))
                 .padding(horizontal = 16.dp, vertical = 8.dp),
-        )
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Filled.FastForward, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+            Text(
+                "${if (Prefs.holdRate % 1f == 0f) Prefs.holdRate.toInt().toString() else Prefs.holdRate.toString()}×",
+                color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(start = 6.dp),
+            )
+        }
         // A word after a skip, where the hold-to-speed chip sits.
         skipNote?.let { n ->
             Text(
@@ -6956,15 +6982,23 @@ private fun PlayerScreen(
         }
         // Transient ±10s indicator on the tapped side.
         skipFlash?.let { f ->
-            Text(
-                (if (f.first > 0) "⏩ " else "⏪ ") + "${f.second}s",
-                color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold,
-                modifier = Modifier
+            Row(
+                Modifier
                     .align(if (f.first > 0) Alignment.CenterEnd else Alignment.CenterStart)
                     .padding(horizontal = 44.dp)
                     .background(Color(0x8C000000), RoundedCornerShape(12.dp))
-                    .padding(horizontal = 16.dp, vertical = 10.dp)
-            )
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    if (f.first > 0) Icons.Filled.FastForward else Icons.Filled.FastRewind,
+                    contentDescription = null, tint = Color.White, modifier = Modifier.size(24.dp),
+                )
+                Text(
+                    "${f.second}s", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(start = 6.dp),
+                )
+            }
         }
         // Live seek preview while swiping: target position + signed delta.
         dragSeek?.let { d ->

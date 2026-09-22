@@ -426,9 +426,10 @@ internal fun TitleCardChrome(
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                     )
                 }
+                // the app's one accent (Settings › Appearance) and its own ink, not a fixed Netflix red
                 if (isLive) Text(
-                    "LIVE", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(end = 12.dp).background(Color(0xFFE50914), Pill).padding(horizontal = 12.dp, vertical = 6.dp),
+                    "LIVE", color = OnAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(end = 12.dp).background(Red, Pill).padding(horizontal = 12.dp, vertical = 6.dp),
                 )
                 GlassCircle(Icons.Outlined.Info, "Playback info", on = infoOn, onClick = onInfo)
                 if (canPip) {

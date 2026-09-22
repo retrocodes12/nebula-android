@@ -387,6 +387,9 @@ internal fun ScrubTip(
     }
 }
 
+/** The scrubber's touch band (see Scrubber): about a fingertip, centred on the 9–12 dp bar. */
+private val RAIL_BAND = 38.dp
+
 /**
  * The Apple TV scrubber (thick, fully rounded, brighter under focus) with the scrub preview on it.
  * A finger on the rail moves a ghost knob and the tip above it and seeks on release, as before.
@@ -467,7 +470,15 @@ internal fun Scrubber(
 
     Box(modifier.fillMaxWidth()) {
         Box(
-            Modifier.fillMaxWidth().height(26.dp).padding(top = 12.dp)
+            Modifier.fillMaxWidth().height(26.dp)
+                // The finger's band is 38 dp centred on the bar; the chrome still lays out 26 dp and the bar draws where
+                // it did. It used to be the 14 dp left under the top padding, so a thumb a little high fell through to
+                // the swipe-to-seek layer behind. The overhang (12 dp below) sits under the time pills, which are
+                // later siblings and so still take their own taps first.
+                .layout { m, c ->
+                    val p = m.measure(c.copy(minHeight = RAIL_BAND.roundToPx(), maxHeight = RAIL_BAND.roundToPx()))
+                    layout(p.width, c.maxHeight) { p.place(0, 0) }
+                }
                 .onSizeChanged { trackWidth = it.width.coerceAtLeast(1) }
                 .focusRequester(railFocus)
                 .focusable(interactionSource = seekInteraction)
@@ -527,7 +538,8 @@ internal fun Scrubber(
                         },
                         onDragCancel = { dragFrac = null; onScrubNow(null) },
                     )
-                },
+                }
+                .padding(top = 12.dp, bottom = 12.dp),       // the drawn rail: 14 dp, 12 dp down, as before
         ) {
             val h = if (seekFocused || active) 12.dp else 9.dp
             Box(Modifier.align(Alignment.CenterStart).fillMaxWidth().height(h).background(Color(0x3DFFFFFF), Pill))
