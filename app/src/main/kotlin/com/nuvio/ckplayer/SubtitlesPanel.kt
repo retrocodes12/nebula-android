@@ -110,7 +110,6 @@ internal fun SubtitlesPanel(
     embedded.forEach { e ->
         val f = e.format
         val id = f.id ?: ""
-        if (id == "addon-pick") return@forEach                 // the add-on card below stands for it
         val lang = langLabel(f.language ?: "und")
         var label = f.label?.takeIf { it.isNotBlank() } ?: lang
         if ((f.roleFlags and C.ROLE_FLAG_DESCRIBES_MUSIC_AND_SOUND) != 0) label += " · SDH"

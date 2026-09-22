@@ -1,21 +1,25 @@
 package com.nuvio.ckplayer
 
 import android.content.Context
-import android.net.Uri
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.text.Cue
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.util.Util
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
+import androidx.media3.extractor.text.SubtitleParser
+import androidx.media3.extractor.text.subrip.SubripParser
+import androidx.media3.extractor.text.webvtt.WebvttParser
 import java.io.File
 import java.util.Locale
 
 /**
  * The bits of the player that are plain functions: the playback-info rows,
- * codec names people recognise, and subtitle timing. Mirrors the shared web
+ * codec names people recognise, and add-on subtitle cues. Mirrors the shared web
  * player's pinfoRender / codecName / applySubOffset.
  */
 
@@ -169,35 +173,52 @@ internal fun clockLine(ctx: Context, remainMs: Long, speed: Float, live: Boolean
     return at(now) + " · Ends " + at(now + (remainMs / speed.coerceAtLeast(0.1f)).toLong())
 }
 
-private val SUB_TIME = Regex("(\\d{1,2}):(\\d{2}):(\\d{2})([,.])(\\d{3})|(\\d{1,2}):(\\d{2})\\.(\\d{3})")
+/** One add-on subtitle cue: when it shows, when it goes, what it says. */
+internal class SubCue(val startUs: Long, val endUs: Long, val cues: List<Cue>)
 
 /**
- * Writes a copy of an SRT/VTT file with every cue moved by offsetMs (never below
- * zero) and returns it. Media3 has no live offset for text, so the shifted
- * file is fed back as the subtitle source instead.
+ * The cues of a downloaded add-on subtitle (the UTF-8 SRT/VTT file cachedSubFile wrote), in time order.
+ * The player draws them over the video itself (the overlay in PlayerScreen), so a pick or a timing nudge
+ * never rebuilds the stream around a side-loaded file — that re-prepare was issue #1's "restarts the stream".
  */
-internal fun shiftedSubFile(ctx: Context, src: Uri, offsetMs: Long): Uri? = runCatching {
-    val path = src.path ?: return@runCatching null
-    val text = File(path).readText()
-    val out = StringBuilder(text.length + 64)
-    for (line in text.split("\n")) {
-        if (line.contains("-->")) {
-            out.append(SUB_TIME.replace(line) { m ->
-                val g = m.groupValues
-                val (ms, sep, long) = if (g[1].isNotEmpty()) {
-                    Triple(g[1].toLong() * 3_600_000 + g[2].toLong() * 60_000 + g[3].toLong() * 1000 + g[5].toLong(), g[4], true)
-                } else {
-                    Triple(g[6].toLong() * 60_000 + g[7].toLong() * 1000 + g[8].toLong(), ".", false)
-                }
-                val t = (ms + offsetMs).coerceAtLeast(0L)
-                if (long || t >= 3_600_000) String.format(
-                    Locale.US, "%02d:%02d:%02d%s%03d", t / 3_600_000, (t / 60_000) % 60, (t / 1000) % 60, sep, t % 1000,
-                ) else String.format(Locale.US, "%02d:%02d.%03d", t / 60_000, (t / 1000) % 60, t % 1000)
-            })
-        } else out.append(line)
-        out.append('\n')
+@UnstableApi
+internal fun parseSubCues(file: File, mime: String): List<SubCue>? = runCatching {
+    val parser: SubtitleParser = if (mime == MimeTypes.TEXT_VTT) WebvttParser() else SubripParser()
+    val out = ArrayList<SubCue>()
+    parser.parse(file.readBytes(), SubtitleParser.OutputOptions.allCues()) { c ->
+        if (c.cues.isEmpty()) return@parse
+        val start = if (c.startTimeUs == C.TIME_UNSET) 0L else c.startTimeUs
+        val end = if (c.durationUs == C.TIME_UNSET) start + 5_000_000L else start + c.durationUs
+        out += SubCue(start, end, c.cues)
     }
-    val f = File(ctx.cacheDir, File(path).nameWithoutExtension + "-shift" + offsetMs + "." + File(path).extension)
-    f.writeText(out.toString())
-    Uri.fromFile(f)
+    out.sortedBy { it.startUs }.takeIf { it.isNotEmpty() }
 }.getOrNull()
+
+/** Every cue on at timeUs (overlapping cues show together, as the SRT/VTT parsers mean them to). */
+internal fun cuesAt(all: List<SubCue>, timeUs: Long, into: MutableList<Int>) {
+    into.clear()
+    for (i in all.indices) {
+        val c = all[i]
+        if (c.startUs > timeUs) break
+        if (timeUs < c.endUs) into += i
+    }
+}
+
+/**
+ * A subtitle language as one comparable key: add-ons say "eng", "en", "en-US", "pob" or "English"; the
+ * settings say "en". The key is the two-letter code where there is one.
+ */
+@UnstableApi
+internal fun subLangKey(code: String?): String {
+    val c = (code ?: "").trim().lowercase(Locale.ROOT).replace('_', '-')
+    if (c.isEmpty() || c == "und") return ""
+    when (c) {
+        "pob", "pb", "pt-br" -> return "pt"          // OpenSubtitles' Brazilian Portuguese
+        "scc" -> return "sr"
+        "scr" -> return "hr"
+    }
+    val main = (Util.normalizeLanguageCode(c) ?: c).substringBefore('-')
+    if (main.length == 2) return main
+    // a name rather than a code
+    return Prefs.LANGS.firstOrNull { it.second.lowercase(Locale.ROOT) == c }?.first?.takeIf { it.isNotEmpty() } ?: main
+}
