@@ -191,6 +191,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.onClick as a11yClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
@@ -6267,10 +6269,22 @@ private fun PlayerScreen(
                 if (bwTick[0] % 12 == 0) bandwidth.bitrateEstimate.let { if (it > 0) Prefs.noteBandwidth(context, it) }
             }
             if (swapOffer != null && now - swapShownAt > 60_000) swapOffer = null   // an offer nobody took lapses once playback has settled
+            // The pause board: a moment after pausing (or at the end), when nothing
+            // else is open, and only once something has actually played.
+            val resting = !exo.isPlaying && (exo.playbackState == Player.STATE_ENDED ||
+                (exo.playbackState == Player.STATE_READY && !exo.playWhenReady))
+            if (!resting) pausedSince = 0L else if (pausedSince == 0L) pausedSince = now
+            // the board's own conditions, less its two waits — read BEFORE the hide below, which depends on them
+            val boardCan = Prefs.pauseBoard && resting && !inPipMode.value && !subPanelOpen && !sleepMenuOpen &&
+                !upnextOpen && exo.currentPosition > 1000
             // Controls hide after (Settings › Playback)
-            // (a phone on its side, paused, too: there the board and the controls cannot share the screen, and the board waits)
-            val pausedShort = Prefs.pauseBoard && !exo.isPlaying && pausedSince > 0 && context.resources.configuration.screenHeightDp < 480
+            // (a phone on its side, paused, too: there the board and the controls cannot share the screen, and the board
+            // waits — but only when the board WILL come; at 0:00, in picture-in-picture or under Up next it never does,
+            // and hiding the controls there left a bare picture)
+            // Never while TalkBack explores the screen: a reader walking through the controls cannot race a fade.
+            val pausedShort = boardCan && context.resources.configuration.screenHeightDp < 480
             if (chromeVisible && (exo.isPlaying || pausedShort) && !subPanelOpen && !sleepMenuOpen && !scrubbing && !trackListOpen &&
+                !touchExploring(context) &&
                 now - chromeTouchedAt > (Prefs.controlsHide * 1000f).toLong()) chromeVisible = false
             // Skip intro / recap: offer the pill, or take it on Auto once per segment a sitting
             // (a scrub back into the titles is taken as meant); a party viewer follows the host.
@@ -6284,11 +6298,6 @@ private fun PlayerScreen(
                     skipNote = SkipSegments.note(hit.first) to now
                 }
             } else skipKind = hit.first
-            // The pause board: a moment after pausing (or at the end), when nothing
-            // else is open, and only once something has actually played.
-            val resting = !exo.isPlaying && (exo.playbackState == Player.STATE_ENDED ||
-                (exo.playbackState == Player.STATE_READY && !exo.playWhenReady))
-            if (!resting) pausedSince = 0L else if (pausedSince == 0L) pausedSince = now
             // Sleep timer: keep the pill's minutes current; pause when the time is up.
             if (sleepMode == "min") {
                 if (now >= sleepAt) {
@@ -6300,8 +6309,7 @@ private fun PlayerScreen(
                 sleepRender()
             }
             if (sleepFired && exo.isPlaying) sleepFired = false     // played on: the board reads Paused again
-            pauseBoardOn = Prefs.pauseBoard && resting && !inPipMode.value && !subPanelOpen && !sleepMenuOpen &&
-                !upnextOpen && exo.currentPosition > 1000 && now - pausedSince > 1600 && now - chromeTouchedAt > 1600
+            pauseBoardOn = boardCan && now - pausedSince > 1600 && now - chromeTouchedAt > 1600
             if (pinfoOn) infoRows = playbackInfoRows(
                 exo, bandwidth, subOffsetMs,
                 scrubStatusLine(
@@ -6682,10 +6690,17 @@ private fun PlayerScreen(
         // Touch gestures: double-tap left/right = ±10s, horizontal swipe = seek,
         // plain tap = toggle the chrome. The chrome's own controls sit above
         // this layer, so they stay tappable; remote/D-pad (TV) is unaffected.
+        // Under TalkBack the gestures are out of reach, so the layer is also one
+        // named action: a double-tap on it shows or hides the controls.
         if (!pip) {
             Box(
                 Modifier
                     .fillMaxSize()
+                    .semantics {
+                        a11yClick(label = if (chromeVisible) "Hide controls" else "Show controls") {
+                            chromeVisible = !chromeVisible; chromeTouchedAt = System.currentTimeMillis(); true
+                        }
+                    }
                     .pointerInput(Unit) {
                         detectTapGestures(
                             onTap = { pos ->

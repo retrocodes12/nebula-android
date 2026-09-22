@@ -175,6 +175,15 @@ internal fun clockLine(ctx: Context, remainMs: Long, speed: Float, live: Boolean
     return at(now) + " · Ends " + at(now + (remainMs / speed.coerceAtLeast(0.1f)).toLong())
 }
 
+/**
+ * TalkBack, or any service that explores the screen by touch, is on. The player never lets its controls time out
+ * then: a reader walking through them one by one cannot race a fade, and a control that has faded is one it
+ * cannot find.
+ */
+internal fun touchExploring(ctx: Context): Boolean =
+    (ctx.getSystemService(Context.ACCESSIBILITY_SERVICE) as? android.view.accessibility.AccessibilityManager)
+        ?.isTouchExplorationEnabled == true
+
 /** One add-on subtitle cue: when it shows, when it goes, what it says. */
 internal class SubCue(val startUs: Long, val endUs: Long, val cues: List<Cue>)
 
