@@ -80,10 +80,12 @@ def find(text, exact=False, near=None):
     return None
 
 
-def tap(text, exact=False, wait=4, near=None):
+def tap(text, exact=False, wait=4, near=None, must=True):
     xy = find(text, exact, near)
     if not xy:
-        say('not found: ' + text); return False
+        say('not found: ' + text)
+        if must: failures.append('control not found: ' + text)   # a step that cannot run is a failure, not a skip
+        return False
     adb('shell', 'input', 'tap', str(xy[0]), str(xy[1]))
     time.sleep(wait); return True
 
@@ -107,9 +109,19 @@ def on_screen(*want, tries=6):
     return False
 
 
+def focused_x():
+    """the left edge of the focused node, or None"""
+    for n in nodes():
+        if n.get('focused') == 'true':
+            return int(re.findall(r'\d+', n.get('bounds'))[0])
+    return None
+
+
 def crashed():
-    """the app's own crashes only (uiautomator, a system tool, crashes too and is not ours)"""
+    """the app's own crashes only (uiautomator, a system tool, crashes too and is not ours); an unreadable log is a
+    failure too — "no crash" must be something the log said, not something it could not say"""
     lines = adb('logcat', '-d', '-v', 'brief', timeout=60).stdout.decode(errors='replace').splitlines()
+    if not lines: return ['the log could not be read']
     out = []
     for i, l in enumerate(lines):
         if 'FATAL EXCEPTION' in l and any(('Process: ' + PKG) in m for m in lines[i + 1:i + 4]): out.append(' '.join(lines[i:i + 4]))
@@ -149,8 +161,15 @@ if PHONE:
         adb('shell', 'input', 'text', 'slow%shorses'); key('KEYCODE_ENTER', wait=8)
         key('KEYCODE_BACK', wait=2)                     # the keyboard down
         shot('03-search')
-        expect('Search finds the series', on_screen('Slow Horses'))
-        if tap('Slow Horses', exact=True, wait=10):
+        # the result card, not the typed query: its title with its year beside it
+        hit = find('Slow Horses', exact=True, near='2022-') or find('2022-', exact=True)
+        if not hit:
+            # some API levels hide the card's text from uiautomator: the first card sits under the "RESULT" count
+            r = find('RESULT')
+            hit = (r[0] if r[0] > 300 else 200, r[1] + 350) if r else None
+        expect('Search finds the series (its result card)', hit is not None)
+        if hit:
+            adb('shell', 'input', 'tap', str(hit[0]), str(hit[1])); time.sleep(10)
             shot('04-title')
             expect('a series title page with its Play button', on_screen('Play', 'Slow Horses'))
             adb('shell', 'input', 'swipe', '540', '1900', '540', '500', '400'); time.sleep(3)
@@ -158,7 +177,7 @@ if PHONE:
             expect('the seasons below', on_screen('Season 1'))
             adb('shell', 'input', 'swipe', '540', '1900', '540', '500', '400'); time.sleep(3)
             shot('05b-title-episodes')
-            if tap("Failure's Contagious", wait=14) or tap('Episode 1', wait=14):
+            if tap("Failure's Contagious", wait=14, must=False) or tap('Episode 1', wait=14):
                 shot('06-streams')
                 expect('an episode opens its streams page', on_screen('stream') or on_screen('add-on'))
     # the player, through the app's own deep link, with a clear test stream
@@ -199,8 +218,10 @@ else:
     expect('Back returns to Home', on_screen('See all', tries=3))
     key('KEYCODE_DPAD_DOWN', 2); time.sleep(2)
     shot('05-home-rows')
-    key('KEYCODE_DPAD_LEFT', 3); time.sleep(2)
+    key('KEYCODE_DPAD_LEFT', 6); time.sleep(2)
     shot('06-rail')
+    fx = focused_x()
+    expect('Left from a row reaches the rail', fx is not None and fx < 260, 'focused x=' + str(fx))
     # the player on a TV, through the deep link: the remote's Pause brings the board
     sh('am', 'start', '-a', 'android.intent.action.VIEW', '-d', "'nebula://play?mpd=" + TEST_STREAM + "&t=Angel%20One'", PKG)
     time.sleep(18)

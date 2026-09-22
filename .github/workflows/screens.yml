@@ -1,7 +1,7 @@
 name: Screens
 
-# Renders the app on an emulator and keeps the screenshots as an artifact — the only way anyone
-# here sees the Android UI (there is no device). Runs on the `screens` branch only; builds debug,
+# Renders the RELEASE build on emulators, asserts what must appear, and keeps the screenshots — the only way anyone
+# here sees the Android UI (there is no device). Runs on the `screens` branch only; builds release (debug-signed),
 # publishes nothing.
 on:
   push:
