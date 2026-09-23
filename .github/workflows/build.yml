@@ -43,6 +43,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Launch gate on an emulator
+        timeout-minutes: 25
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -50,6 +51,8 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
+          ram-size: 3072M
+          heap-size: 512M
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: python3 scripts/launch-gate.py ${{ runner.temp }}/gate.apk
 

@@ -1,8 +1,9 @@
 """The release's launch gate (build.yml): install a release build on an emulator, open it, and play a clear test stream
 through the app's own deep link. The app crashing, a verifier error (ART rejecting a class — the debug build's
 PlayerScreen already fails that way, and a release that tipped over would crash every install at launch, updater
-included) or Home never appearing fails the release. The player step is reported but only a crash there blocks: the
-test stream lives on the network, and a network hiccup must not hold a release.
+included), Home never appearing or the player screen never opening fails the release. The picture itself (the pause
+board over a playing stream) is reported but does not block: the test stream lives on the network, and a network
+hiccup must not hold a release.
 Usage: python3 scripts/launch-gate.py <apk>"""
 import re, subprocess, sys, time
 import xml.etree.ElementTree as ET
@@ -23,16 +24,20 @@ def sh(*a):
     r = adb('shell', *a); return (r.stdout + r.stderr).decode(errors='replace').strip()
 
 
-def texts():
+def nodes():
     for flag in ([], ['--compressed'], []):
         adb('shell', 'rm', '-f', '/sdcard/ui.xml'); adb('shell', 'uiautomator', 'dump', *flag, '/sdcard/ui.xml')
         try:
             ns = list(ET.fromstring(adb('exec-out', 'cat', '/sdcard/ui.xml').stdout).iter('node'))
-            if ns: return ' | '.join((n.get('text') or '') + ' ' + (n.get('content-desc') or '') for n in ns)
+            if ns: return ns
         except Exception:
             pass
         time.sleep(1)
-    return ''
+    return []
+
+
+def texts():
+    return ' | '.join((n.get('text') or '') + ' ' + (n.get('content-desc') or '') for n in nodes())
 
 
 def crashes():
@@ -65,9 +70,25 @@ for _ in range(12):                       # up to ~60 s for Home (a cold emulato
 print('home:', home, flush=True)
 if not home: fail.append('Home never appeared')
 sh('am', 'start', '-a', 'android.intent.action.VIEW', '-d', "'nebula://play?mpd=" + STREAM + "&t=Gate'", PKG)
-time.sleep(20)
-adb('shell', 'input', 'keyevent', 'KEYCODE_MEDIA_PAUSE'); time.sleep(6)
-played = 'Paused' in texts()
+# the player itself (its picture area is named "Video") needs no network, so it blocks: a release whose player screen
+# never opens is not shipped. Polled — a cold emulator takes a while to compose it.
+video = False
+for _ in range(14):                       # up to ~42 s
+    time.sleep(3)
+    if any(n.get('content-desc') == 'Video' for n in nodes()): video = True; break   # the label exactly, not a title
+print('player: screen', 'open' if video else 'NEVER OPENED', flush=True)
+if not video: fail.append('the player screen never opened')
+# the picture needs the test stream (the network), so the pause board is reported, never blocking — also polled, after
+# a tap in the middle wakes the controls the way a viewer would
+size = re.search(r'(\d+)x(\d+)', sh('wm', 'size'))
+w, h = (int(size.group(1)), int(size.group(2))) if size else (1080, 2400)
+time.sleep(8)
+adb('shell', 'input', 'tap', str(w // 2), str(h // 2)); time.sleep(1.5)
+adb('shell', 'input', 'keyevent', 'KEYCODE_MEDIA_PAUSE')
+played = False
+for _ in range(6):                        # up to ~18 s
+    time.sleep(3)
+    if 'Paused' in texts(): played = True; break
 print('player: paused board', 'seen' if played else 'NOT seen (network? — reported, not blocking)', flush=True)
 bad = crashes()
 for b in bad: print('CRASH:', b[:300], flush=True)

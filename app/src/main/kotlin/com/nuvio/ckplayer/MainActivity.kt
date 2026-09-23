@@ -2237,6 +2237,27 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
             .filter { Social.friendKey(it).isNotEmpty() }.distinctBy { Social.friendKey(it) }
     }
 
+    // A success takes the focused row away (Turn off → the pitch, Turn on → the add row, Try again → the list), and
+    // the screen's landing only covers its first seconds: a remote is handed to the control that replaced it.
+    val remote = remoteMode()
+    val addReq = remember { FocusRequester() }
+    val onReq = remember { FocusRequester() }
+    var was by remember { mutableStateOf(friendsFailed to Social.on) }
+    LaunchedEffect(friendsFailed, Social.on, friends) {
+        val now = friendsFailed to Social.on
+        val target = when {
+            was.second && !now.second -> onReq
+            !was.second && now.second -> addReq
+            was.first && !now.first && friends != null -> addReq
+            else -> null
+        }
+        was = now
+        if (target != null && remote) repeat(10) {
+            withFrameNanos {}
+            if (runCatching { target.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+        }
+    }
+
     LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 110.dp),
@@ -2274,7 +2295,7 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
                         shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.focusRing(RoundedCornerShape(12.dp)),
+                        modifier = Modifier.focusRequester(onReq).focusRing(RoundedCornerShape(12.dp)),
                     ) { Text(if (hasProfile) "Turn on Friends" else "Sign in to use Friends", fontWeight = FontWeight.SemiBold) }
                     if (!hasProfile) Text(
                         "Friends find each other by @handle, so Friends needs a Nebula Profile.",
@@ -2313,7 +2334,7 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                     onClick = { addFriend() },
                     colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.padding(start = 10.dp).focusRing(RoundedCornerShape(12.dp)),
+                    modifier = Modifier.padding(start = 10.dp).focusRequester(addReq).focusRing(RoundedCornerShape(12.dp)),
                 ) { Text("Add", fontWeight = FontWeight.SemiBold) }
             }
         }
@@ -5386,8 +5407,9 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             status = why.line
             emptyWhy = why
         }
-        // nothing installed and on streams this (or every add-on is off): the way to fix it sits beside ↻
-        noStreamer = sections.isEmpty() && streamers == 0
+        // nothing installed and on streams this (or every add-on is off): the way to fix it sits beside ↻ — read from
+        // the page's own reason, so an offline page (manifests unread, "Failed to load") never offers Add-ons
+        noStreamer = sections.isEmpty() && (emptyWhy == StreamsEmpty.NONE || emptyWhy == StreamsEmpty.OFF)
         answered = true
         if (sections.isNotEmpty()) {
             streamsMemo[memoKey] = StreamsMemo(System.currentTimeMillis(), sections, status, usualUrl)
@@ -5409,6 +5431,16 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
         repeat(10) {
             withFrameNanos {}
             if (runCatching { firstRow.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+        }
+    }
+    // an empty answer has no row to land on: a remote lands on the page's way out (Add-ons when nothing streams this,
+    // else ↻) instead of on nothing
+    val chipLand = remember { FocusRequester() }
+    LaunchedEffect(answered, sections.isEmpty(), noStreamer) {
+        if (!remote || !answered || sections.isNotEmpty() || KeyWatch.lastDownAt > openedAt) return@LaunchedEffect
+        repeat(10) {
+            withFrameNanos {}
+            if (runCatching { chipLand.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
         }
     }
     Column(Modifier.fillMaxSize()) {
@@ -5484,10 +5516,11 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 ) {
                     item(key = "reload") {
-                        StreamFilterChip("↻", false, Modifier.semantics { contentDescription = "Reload streams" }) { filter = null; reload++ }
+                        StreamFilterChip("↻", false, Modifier.semantics { contentDescription = "Reload streams" }
+                            .then(if (!noStreamer) Modifier.focusRequester(chipLand) else Modifier)) { filter = null; reload++ }
                     }
                     // nothing installed and on plays this: the way out, beside the retry that would only say so again
-                    if (noStreamer && sections.isEmpty()) item(key = "addons") { StreamFilterChip("Add-ons", false) { onAddons() } }
+                    if (noStreamer && sections.isEmpty()) item(key = "addons") { StreamFilterChip("Add-ons", false, Modifier.focusRequester(chipLand)) { onAddons() } }
                     if (sections.size > 1) {
                         item { StreamFilterChip("All", filter == null) { filter = null } }
                         items(sections.size) { i ->
