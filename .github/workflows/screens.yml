@@ -45,6 +45,16 @@ jobs:
             profile: tv_1080p
             arch: x86
             ram: 2048M
+          # the same TV walk on the app of 9268ef6 (the last whose TV walk passed): is a TV emulator death the app's
+          # doing or the emulator's? Its new checks are expected to fail; only whether the emulator lives matters
+          - name: tv
+            label: tv-base
+            app_ref: 9268ef640c7f9cab34bcf957e4d7425b54fe1eb0
+            api: 34
+            target: android-tv
+            profile: tv_1080p
+            arch: x86
+            ram: 2048M
     steps:
       - uses: actions/checkout@v4
       - name: Set up JDK 17
@@ -56,6 +66,11 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
+      - name: The app of an earlier commit (tv-base only)
+        if: matrix.app_ref
+        run: |
+          git fetch --depth 1 origin ${{ matrix.app_ref }}
+          git checkout ${{ matrix.app_ref }} -- app/
       - name: Assemble release (debug-signed without the keystore) and debug
         run: gradle assembleRelease assembleDebug --no-daemon -PemulatorAbis
       - name: Free the build's memory for the emulator (Gradle and the Kotlin compile daemon outlive --no-daemon builds)
@@ -88,10 +103,10 @@ jobs:
           mkdir -p screens/diag
           free -m > screens/diag/free.txt || true
           sudo dmesg -T | grep -iE 'killed process|out of memory|oom|qemu|emulator' | tail -60 > screens/diag/dmesg.txt || true
-          cp /tmp/android-runner/emu-crash-* screens/diag/ 2>/dev/null || true
+          cp -r /tmp/android-runner/emu-crash-* screens/diag/ 2>/dev/null || true
           ls -la ~/.android/ /tmp/android-runner/ > screens/diag/ls.txt 2>&1 || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: screens-${{ matrix.name }}
+          name: screens-${{ matrix.label || matrix.name }}
           path: screens/
