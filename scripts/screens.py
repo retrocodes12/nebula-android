@@ -113,6 +113,14 @@ def on_screen(*want, tries=6):
     return False
 
 
+def find_class(cls):
+    """the centre of the first node of that class (a Compose text field is an android.widget.EditText)"""
+    for n in nodes():
+        if n.get('class') == cls:
+            x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds'))); return (x1 + x2) // 2, (y1 + y2) // 2
+    return None
+
+
 def focused_x():
     """the left edge of the focused node, or None"""
     for n in nodes():
@@ -160,7 +168,10 @@ expect('Home is up (a catalogue row and the nav)', on_screen('See all', 'Home'),
 if PHONE:
     # a stream add-on served by the runner (scripts/rig-addon.py): the walk plays a REAL stream row, not only a deep link
     if tap('Settings', exact=True) and tap('Add-ons', wait=4):
-        if tap('manifest.json', wait=2):
+        field = find_class('android.widget.EditText')
+        if field: adb('shell', 'input', 'tap', str(field[0]), str(field[1])); time.sleep(2)
+        else: failures.append('control not found: the add-on address field')
+        if field:
             adb('shell', 'input', 'text', "'http://10.0.2.2:8799/manifest.json'"); time.sleep(1)
             key('KEYCODE_BACK', wait=1)                                     # the keyboard down
             tap('Add add-on', exact=True, wait=6)

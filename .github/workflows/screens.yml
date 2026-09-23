@@ -65,6 +65,8 @@ jobs:
           arch: ${{ matrix.arch }}
           profile: ${{ matrix.profile }}
           disable-animations: true
+          ram-size: 3072M
+          heap-size: 512M
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: python3 scripts/screens.py ${{ matrix.name }}
       - uses: actions/upload-artifact@v4

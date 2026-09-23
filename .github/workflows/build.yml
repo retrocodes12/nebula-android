@@ -26,6 +26,33 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
+      # ---- the launch gate: no release until a release build has opened on an emulator ----
+      # The debug build of this app fails ART verification (PlayerScreen is one very large method); the release build
+      # passes only because D8 packs its registers differently. If that ever tips over, every install would crash at
+      # launch, the in-app updater with it — so a release build must first install, reach Home and play a test stream
+      # on an emulator (scripts/launch-gate.py). The emulator copy is the same code and dex plus x86 libraries.
+      - name: Build the emulator copy (release, debug-signed, x86 libraries in)
+        run: |
+          gradle assembleRelease --no-daemon -PemulatorAbis
+          cp "$(find app/build/outputs/apk/release -name '*.apk' | head -1)" "$RUNNER_TEMP/gate.apk"
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Launch gate on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: python3 scripts/launch-gate.py ${{ runner.temp }}/gate.apk
+
       - name: Decode signing keystore
         env:
           KS_B64: ${{ secrets.NEBULA_KEYSTORE_B64 }}
