@@ -1575,7 +1575,9 @@ internal fun tvFirstFocus(ready: Boolean = true, key: Any? = Unit): FocusRequest
     var claimed by remember(key) { mutableStateOf(false) }
     LaunchedEffect(tv || keys, ready, key) {
         if (!(tv || keys) || !ready || claimed) return@LaunchedEffect
-        if (KeyWatch.lastDownAt > openedAt) { claimed = true; return@LaunchedEffect }
+        // a key pressed here, or a letter typed into a field here (TextFocus — typing on a physical keyboard is what
+        // turned `keys` on), is the viewer already somewhere: never pull focus out from under them
+        if (KeyWatch.lastDownAt > openedAt || TextFocus.typingIn(entry)) { claimed = true; return@LaunchedEffect }
         // Back returned here: the item the viewer left takes focus instead (Modifier.returnTo); this lands only if
         // that never happens
         if (yieldToReturn(entry)) { claimed = true; return@LaunchedEffect }
@@ -1586,6 +1588,7 @@ internal fun tvFirstFocus(ready: Boolean = true, key: Any? = Unit): FocusRequest
         // which is the whole defect being fixed.
         repeat(10) {
             withFrameNanos {}
+            if (TextFocus.typingIn(entry)) { claimed = true; return@LaunchedEffect }
             if (runCatching { req.requestFocus() }.getOrDefault(false)) { claimed = true; return@LaunchedEffect }
         }
     }
@@ -2242,13 +2245,15 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
     val remote = remoteMode()
     val addReq = remember { FocusRequester() }
     val onReq = remember { FocusRequester() }
+    val firstFriend = remember { FocusRequester() }
     var was by remember { mutableStateOf(friendsFailed to Social.on) }
     LaunchedEffect(friendsFailed, Social.on, friends) {
         val now = friendsFailed to Social.on
         val target = when {
             was.second && !now.second -> onReq
             !was.second && now.second -> addReq
-            was.first && !now.first && friends != null -> addReq
+            // the list takes the failed row's place, so its first row is on screen; Add may have scrolled away
+            was.first && !now.first && friends != null -> if (friends!!.isNotEmpty()) firstFriend else addReq
             else -> null
         }
         was = now
@@ -2444,10 +2449,12 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
             } else {
                 items(fl, key = { Social.friendKey(it) }) { f ->
                     val fCode = Social.friendKey(f)
+                    val first = f === fl.first()
                     val prof = runCatching { JSONObject(f.optString("profile").ifEmpty { "{}" }) }.getOrDefault(JSONObject())
                     Column(Modifier.padding(bottom = 10.dp)) {
                         Row(
                             Modifier.fillMaxWidth()
+                                .then(if (first) Modifier.focusRequester(firstFriend) else Modifier)
                                 .focusRing(RoundedCornerShape(14.dp))
                                 .background(SurfaceC, RoundedCornerShape(14.dp))
                                 .border(1.dp, if (openCode == fCode) Line2 else LineC, RoundedCornerShape(14.dp))
@@ -2501,7 +2508,20 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                             // Social.disable turns Friends off here on success, which alone takes the page back to its pitch.
                             // A failure (offline) keeps this row and says why beside it: reloading then took the focused
                             // row away (the list went to Loading…) and left the remote on nothing.
-                            .clickable { scope.launch { val e = Social.disable(ctx); offErr = e; if (e == null) reload++ } }
+                            .clickable {
+                                scope.launch {
+                                    val e = Social.disable(ctx); offErr = e
+                                    if (e == null) {
+                                        reload++
+                                        // handed from here: the page's watcher is restarted by the list going away and
+                                        // cancelled before it can ask; this scope outlives that recomposition
+                                        if (remote) repeat(10) {
+                                            withFrameNanos {}
+                                            if (runCatching { onReq.requestFocus() }.getOrDefault(false)) return@launch
+                                        }
+                                    }
+                                }
+                            }
                             .padding(6.dp))
                     // the Profile page's error red
                     offErr?.let { Text(it, color = Color(0xFFFF453A), fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(start = 6.dp)) }

@@ -221,15 +221,40 @@ internal object TypingCarry {
     fun next() { until = android.os.SystemClock.uptimeMillis() + 800 }
 }
 
+/** A text field has focus. The first letter typed on a physical keyboard (a tablet's, a Chromebook's, a phone's on a
+    dock) takes Android out of touch mode, which woke `tvFirstFocus` — a letter is not a key [KeyWatch] counts — and it
+    pulled focus onto the first add-on row after ONE character (the Add-ons address field kept only its "h"; found by
+    the Screens walk). No landing ([LandingFallback] included) moves focus on a screen while someone types in it. Per screen ([LocalScreenEntry]): Back from a
+    focused field must not stop the screen underneath from landing while the old one fades out. */
+internal object TextFocus {
+    private val none = Any()
+    private var on: Any? = null
+    /** a text field on the screen [entry] has focus */
+    fun typingIn(entry: Any?): Boolean = on != null && on == (entry ?: none)
+    fun note(entry: Any?, focused: Boolean) {
+        val k = entry ?: none
+        if (focused) on = k else if (on == k) on = null
+    }
+}
+
+private fun Modifier.notesTextFocus(): Modifier = composed {
+    val entry = LocalScreenEntry.current
+    var mine by remember { mutableStateOf(false) }
+    // a field that leaves while focused (its screen popped) must not leave the flag up for good
+    DisposableEffect(entry) { onDispose { if (mine) TextFocus.note(entry, false) } }
+    this.onFocusChanged { mine = it.hasFocus; TextFocus.note(entry, it.hasFocus) }
+}
+
 @Composable
 internal fun tvTyping(): TvTyping {
     val ctx = LocalContext.current
     val tv = remember(ctx) { Account.isTv(ctx) }
     var editing by remember { mutableStateOf(false) }
-    if (!tv) return TvTyping(false, Modifier)
+    if (!tv) return TvTyping(false, Modifier.notesTextFocus())
     return TvTyping(
         readOnly = !editing,
         modifier = Modifier
+            .notesTextFocus()
             .onFocusChanged {
                 if (!it.hasFocus) editing = false
                 else if (!editing && android.os.SystemClock.uptimeMillis() < TypingCarry.until) { TypingCarry.until = 0L; editing = true }
@@ -306,12 +331,12 @@ internal fun LandingFallback(slot: LandingSlot, entry: Any?) {
         fun standDown() { if (entry != null && ReturnFocus.returningTo == entry) ReturnFocus.clear() }
         repeat(40) {
             withFrameNanos {}
-            if (slot.hasFocus || RailFocus.has) { standDown(); return@LaunchedEffect }
+            if (slot.hasFocus || RailFocus.has || TextFocus.typingIn(entry)) { standDown(); return@LaunchedEffect }
         }
         standDown()
         repeat(360) {
-            // the viewer on the rail (picking a tab, walking it) is never pulled into the page
-            if (slot.hasFocus || RailFocus.has) return@LaunchedEffect
+            // the viewer on the rail (picking a tab, walking it) is never pulled into the page, nor out of a text field
+            if (slot.hasFocus || RailFocus.has || TextFocus.typingIn(entry)) return@LaunchedEffect
             if (slot.taken && runCatching { slot.req.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
             withFrameNanos {}
         }

@@ -56,6 +56,21 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: python3 scripts/launch-gate.py ${{ runner.temp }}/gate.apk
 
+      # the same gate on Android 9 (a TV box or an older phone): proven there by the Screens gate28 job first
+      - name: Launch gate on Android 9
+        timeout-minutes: 25
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 28
+          target: google_apis
+          arch: x86_64
+          profile: pixel_3
+          disable-animations: true
+          ram-size: 3072M
+          heap-size: 512M
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: python3 scripts/launch-gate.py ${{ runner.temp }}/gate.apk
+
       - name: Decode signing keystore
         env:
           KS_B64: ${{ secrets.NEBULA_KEYSTORE_B64 }}
@@ -79,9 +94,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.78.0.apk
+          cp "$APK" Nebula-1.79.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.78.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.78.0 Nebula-1.78.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.78.0" \
-            --notes "Subtitles from add-ons now turn on by themselves in your preferred language (Settings, Subtitles when a video starts), and picking one no longer restarts the stream: they are drawn over the picture directly, so timing nudges apply at once too."
+          gh release delete v1.79.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.79.0 Nebula-1.79.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.79.0" \
+            --notes "A full audit pass. Friends are now mutual: someone you add sees your watching only once they add you back, and asks to be friends show up for you to add back or dismiss. The next episode never starts after you press Back, long lists page smoothly, a landscape phone shows the pause board, a title page puts Play before the cast, stream names lose their emoji, a download no longer starts over, your sign-in is kept out of device backups, and on a TV the remote lands somewhere useful on an empty streams page and after a Friends action. Every release is now opened on an emulator before it ships."
