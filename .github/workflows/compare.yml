@@ -12,7 +12,7 @@ jobs:
   compare:
     name: ${{ matrix.job }}
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 58
     strategy:
       fail-fast: false
       matrix:
@@ -78,7 +78,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
       - name: The journey on the emulator
         # the x86 TV emulator is slow: past this the step stops and whatever was shot is still uploaded
-        timeout-minutes: 30
+        timeout-minutes: 38
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api }}

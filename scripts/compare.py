@@ -28,7 +28,7 @@ L = {
                   add=['Install', 'Add', 'Install Addon', 'Install addon', 'Add Addon', 'Add addon', 'Confirm', 'OK'],
                   playback=['Playback', 'Player', 'Video Player', 'Video'], cw=['Continue Watching', 'Continue watching'],
                   tracks=['Subtitles', 'Subtitle', 'Audio', 'Tracks', 'Audio & Subtitles', 'CC'],
-                  movierow=['Popular Movies', 'Popular · Movies', 'Trending Movies', 'Movies'],
+                  movierow=['Popular - Movie', 'Popular Movies', 'Popular · Movies', 'Trending Movies', 'Movies'],
                   account=['Account', 'Profile', 'Profiles', 'Sign in', 'Login']),
 }[APP]
 PAST = ['Skip', 'Skip for now', 'Continue without account', 'Continue as guest', 'Continue as Guest', 'Use without account',
@@ -327,6 +327,10 @@ def to_home():
     for i in range(5):
         if not foreground(): say('app not in front: launching'); launch()
         ns = nodes()
+        if find_any(PICKER, ns=ns)[0]:   # a relaunch may open on Nuvio's "Who's watching?" again
+            if PHONE: profile_picker(ns)
+            else: key('DPAD_CENTER', wait=5)
+            ns = nodes()
         if PHONE and find_any(L['homenav'], True, (H * 0.82, H), ns)[0]:
             tap_any(L['homenav'], True, 4, (H * 0.82, H), ns); return True
         if not PHONE and tv_nav(L['homenav']): return True
@@ -369,12 +373,28 @@ def tv_settings(cands, exact=True, enter=True):
     return seek(cands, ('UP', 'DOWN'), 11, exact, enter)
 
 
+def hide_keyboard():
+    """the on-screen keyboard showed even with every IME disabled (Nuvio's Add Profile, run 35828495510) and covered
+    the lower half of the page: Back folds it away, pressed only while it is up"""
+    d = sh('dumpsys input_method | grep -E "mInputShown=|mIsInputViewShown="')
+    if 'mInputShown=true' in d or 'mIsInputViewShown=true' in d: say('keyboard up: Back'); key('BACK', wait=2)
+
+
+SAVE = ['Save', 'Save Profile', 'Save profile', 'Save changes', 'Create', 'Create Profile', 'Create profile', 'Add Profile',
+        'Add profile', 'Done', 'Continue', 'Confirm', 'OK']
+
+
 def profile_picker(ns):
-    """Nuvio's "Who's watching?" (a fresh local account showed no profile at all): the first tile, else make one"""
+    """Nuvio's "Who's watching?" (a fresh local account shows no profile at all): the Guest tile made earlier, else
+    the first tile, else make one — Manage Profiles → Add Profile → a name → the page's save button (below the avatar
+    grid, under the keyboard) → back on the picker, out of its manage mode (Done)"""
     time.sleep(8); ns = nodes()   # the tiles may come a moment after the title
+    if find_any(['Done'], True, ns=ns)[0] and find_any(['Add Profile', 'Add profile'], True, ns=ns)[0]:
+        tap_any(['Done'], True, 4, ns=ns); ns = nodes()   # the picker in its manage mode
+    if tap_any(['Guest'], True, 6, ns=ns): return 'profile Guest'
     heads = [n for n in ns if any(hit(n, p, False) for p in PICKER)]
     xy = card_below(box(heads[0])[3] if heads else H // 4, ns, 700)
-    if xy and not find_any(['Manage Profiles'], True, ns=[n for n in ns if mid(n) == xy])[0]:
+    if xy and not find_any(['Manage Profiles', 'Add Profile'], True, ns=[n for n in ns if mid(n) == xy])[0]:
         tap_xy(*xy, wait=5); return 'profile tile'
     if not tap_any(['Manage Profiles', 'Manage profiles'], True, 5): return None
     shot('01-first-run-profiles-manage')
@@ -384,12 +404,21 @@ def profile_picker(ns):
     shot('01-first-run-profiles-add')
     f = edit_field()
     if f is not None: tap_xy(*mid(f), wait=2); type_text('Guest'); time.sleep(1)
-    tap_any(['Save', 'Create', 'Done', 'Continue', 'OK', 'Add', 'Confirm'], True, 5)
+    hide_keyboard()
+    saved = None
+    for i in range(6):
+        saved = tap_any(SAVE, True, 6, region=(450, H - 60), maxlen=30)   # below the page's own 'Add Profile' title
+        if saved: break
+        if i < 5: swipe_up(2)
+    if not saved and f is not None:
+        say('no save button: Enter in the name field'); tap_xy(*mid(f), wait=1); key('ENTER', wait=5)
     ns = shot('01-first-run-profiles-saved')
-    for _ in range(3):
-        if find_any(PICKER, ns=ns)[0]: break
-        if find_any(['Guest'], True, ns=ns)[0] and not find_any(['Manage Profiles'], True, ns=ns)[0]: break
-        key('BACK', wait=3); ns = nodes()
+    for _ in range(4):
+        if find_any(PICKER, ns=ns)[0]:
+            if find_any(['Done'], True, ns=ns)[0]: tap_any(['Done'], True, 4, ns=ns); ns = nodes(); continue
+            break
+        if is_home(ns): return 'home'
+        hide_keyboard(); key('BACK', wait=3); ns = nodes()
     return tap_any(['Guest'], True, 6) or 'profile made'
 
 
@@ -429,14 +458,16 @@ def open_addons():
     shot('x-settings-first')
     if PHONE:
         return phone_scroll_tap(ADDONISH[:6], True, 4) or phone_scroll_tap(ADDONISH, False, 0, maxlen=24)
-    if tv_settings(L['addons']): return 'row'
+    if APP == 'nebula' and tv_settings(L['addons']): return 'row'
     # a category list with panes (Nuvio TV): the category whose pane offers add-ons
+    # (a category's pane opens on OK, not on focus: every x-settings-* of run 35828495510 showed the same pane)
     for cat in ['Content & Discovery', 'Integrations', 'Advanced', 'Layout', 'Playback', 'Profiles', 'Appearance']:
-        if not tv_settings([cat], enter=False): continue
-        ns = shot('x-settings-' + re.sub(r'\W+', '_', cat))
+        if not tv_settings([cat], enter=True): continue
+        time.sleep(2); ns = shot('x-settings-' + re.sub(r'\W+', '_', cat))
         if find_any(ADDONISH, False, ns=ns, maxlen=30)[0]:
-            key('DPAD_RIGHT', wait=1.5)
-            if seek(ADDONISH, ('DOWN', 'UP'), 10, enter=True): return cat
+            t, n = focus()
+            if n is not None and box(n)[0] < 660: key('DPAD_RIGHT', wait=1.5)
+            if seek(ADDONISH, ('DOWN', 'UP'), 12, enter=True): return cat
     return None
 
 
@@ -444,13 +475,14 @@ if open_addons():
     time.sleep(3); shot('x-addons-before')
     for step in range(3):
         if edit_field() is not None: break
-        c = enter_on(['Add addon', 'Install addon', 'Add Addon', 'Install Addon', 'Add add-on', 'Add', 'Install', '+',
+        c = enter_on(['Add addon', 'Install addon', 'Add Addon', 'Install Addon', 'Add add-on', 'Install add-on',
+                      'Add Add-on', 'Add new addon', 'Add New Addon', 'Add Addon URL', 'Add URL', 'Add', 'Install', '+',
                       'Add from URL', 'Install from URL'], ('DOWN', 'RIGHT', 'UP'), 8, exact=True, wait=4)
         if not c: break
         shot('x-addons-open-%d' % step)
     f = edit_field()
     if f is not None:
-        if PHONE: tap_xy(*mid(f), wait=2); type_text(ADDON); tidy_field(ADDON)
+        if PHONE: tap_xy(*mid(f), wait=2); type_text(ADDON); tidy_field(ADDON); hide_keyboard()
         else: tv_type(ADDON, submit=True)
         time.sleep(3)
         say('add-on field reads: %r' % ((edit_field() or ET.Element('x')).get('text')))
@@ -467,20 +499,30 @@ if open_addons():
 else:
     missing('18-addons', 'no add-on screen found from settings')
 
-# 04-07 Search → the series
-key('BACK', 2, wait=1.5)
-to_home()
-if nav('search'):
-    time.sleep(3); shot('04-search-idle')
+def search_for(q, idle=None):
+    """Search → q in its field (whatever it held cleared) and sent; the keyboard folded away on a phone so the results
+    show; False when no search screen"""
+    if not nav('search'): return False
+    time.sleep(3)
+    if idle: shot(idle)
     f = edit_field()
     if f is None: say('search: no text field on screen')
     if PHONE:
         if f is not None and f.get('focused') != 'true': tap_xy(*mid(f), wait=3)
-        type_text('slow horses'); tidy_field('slow horses'); key('ENTER', wait=1)
+        v = ((edit_field() or ET.Element('x')).get('text') or '')
+        if v: key('MOVE_END', wait=0.3); key('DEL', len(v) + 2, wait=0.1)
+        type_text(q); tidy_field(q); key('ENTER', wait=1); hide_keyboard()
     else:
-        tv_type('slow horses')
+        tv_type(q)
     time.sleep(10)
     say('search field reads: %r' % ((edit_field() or ET.Element('x')).get('text')))
+    return True
+
+
+# 04-07 Search → the series
+key('BACK', 2, wait=1.5)
+to_home()
+if search_for('slow horses', '04-search-idle'):
     ns = shot('05-search-results')
     if PHONE:
         xy = None
@@ -541,29 +583,41 @@ if nav('search'):
 else:
     missing('04-search-idle', 'search not found')
 
-# 08 a well-known film from Home: The End of Oak Street (the first of Cinemeta's popular movies today), else the first
-# card of the first movie row
+# 08 a well-known film, the same in both: The End of Oak Street (the first of Cinemeta's popular movies today). Phone:
+# its card on Home. TV, and a phone whose Home has no such card: through Search — a TV's Home hands the focus back to
+# a lower row, so walking it opened other things (Nuvio: David; Nebula: a catalogue's See all, run 35828495510).
+# Last resort on a phone: the first card of the first movie row
 key('BACK', 3, wait=1.5)
 to_home(); time.sleep(4)
 FILM = ['The End of Oak Street']
+film = False
 if PHONE:
-    xy = None
+    for i in range(3):
+        c, xy = find_any(FILM, True)
+        if xy and xy[1] >= 600: tap_xy(*xy, wait=10); shot('08-title-movie'); film = True; break   # not the hero
+        swipe_up()
+if not film:
+    key('BACK', 2, wait=1.5)
+    to_home()
+    if search_for(FILM[0].lower()):
+        ns = shot('x-film-search')
+        if PHONE:
+            c, xy = find_any(FILM, True, (300, H), ns)
+            opened = bool(xy) and (tap_xy(*xy, wait=10) or True)
+        else:
+            opened = seek(FILM, ('DOWN', 'RIGHT', 'DOWN', 'UP'), 8, exact=True, enter=True)
+            time.sleep(6)
+        if opened: shot('08-title-movie'); film = True
+if not film and PHONE:
+    key('BACK', 2, wait=1.5); to_home(); xy = None
     for i in range(3):
         ns = nodes()
-        c, xy = find_any(FILM, True, ns=ns)
-        if xy and xy[1] < 600: xy = None   # the hero's title is not a card
-        if not xy:
-            c, hxy = find_any(L['movierow'], ns=ns)
-            if hxy: xy = card_below(hxy[1], ns, 700)
+        c, hxy = find_any(L['movierow'], ns=ns)
+        xy = card_below(hxy[1], ns, 700) if hxy else None
         if xy: break
         swipe_up()
-    if xy: tap_xy(*xy, wait=10); shot('08-title-movie')
-    else: missing('08-title-movie', 'no movie card')
-else:
-    key('DPAD_RIGHT', wait=1.5)
-    if seek(FILM, ('DOWN', 'RIGHT'), 7, enter=True): time.sleep(6); shot('08-title-movie')
-    else:
-        say('home: the film not reached, taking the focused card'); key('DPAD_CENTER', wait=10); shot('08-title-movie')
+    if xy: say('the film not found: the first card of the first movie row'); tap_xy(*xy, wait=10); shot('08-title-movie'); film = True
+if not film: missing('08-title-movie', 'the film found neither on Home nor through Search')
 
 # 14-15 Library / Continue Watching
 key('BACK', 2, wait=1.5)
@@ -593,7 +647,7 @@ else:
     missing('16-settings', 'settings not found')
 to_home()
 if nav('profile'): time.sleep(3); shot('19-profile-account')
-elif nav('settings') and (phone_scroll_tap(L['account'], True, 3) if PHONE else tv_settings(L['account'], enter=False)):
+elif nav('settings') and (phone_scroll_tap(L['account'], True, 3) if PHONE else tv_settings(L['account'])):
     time.sleep(2); shot('19-profile-account')
 else: missing('19-profile-account', 'no profile/account screen found')
 
@@ -607,7 +661,9 @@ if PHONE:
         if xy: tap_xy(*xy, wait=5); shot('x-nav-%d-%s' % (i, re.sub(r'\W+', '_', t)[:20]))
 elif APP == 'nuvio' and nav('settings'):
     for cat in ['Profiles', 'Appearance', 'Layout', 'Content & Discovery', 'Integrations', 'Tracking', 'About', 'Advanced']:
-        if tv_settings([cat], enter=False): shot('x-settings-' + re.sub(r'\W+', '_', cat))
+        name = 'x-settings-' + re.sub(r'\W+', '_', cat)
+        if os.path.exists(os.path.join(OUT, name + '.png')): continue   # already shot on the way to the add-ons
+        if tv_settings([cat]): time.sleep(2); shot(name)
 
 logcat.terminate()
 say('crashes: %s' % [l for l in open(os.path.join(OUT, 'logcat.txt'), errors='replace') if 'FATAL EXCEPTION' in l][:3])
