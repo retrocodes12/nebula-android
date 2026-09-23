@@ -310,6 +310,26 @@ internal class LandingSlot {
     val req = FocusRequester()
     var taken = false
     var hasFocus = false
+    /** a Back control of the screen ([backControl]) holds its focus */
+    var backLit = false
+}
+
+/**
+ * Has a screen landed? (android-tv-29) Focus somewhere in it counts, except on its Back control when no key has gone
+ * down since the screen opened: a page that opens gets focus seeded on its top-left control, which is Back, and OK
+ * there leaves the page. Once the viewer has pressed a key, Back is where they put it and it counts.
+ */
+internal fun screenLanded(hasFocus: Boolean, backLit: Boolean, lastKeyDownAt: Long, openedAt: Long): Boolean =
+    hasFocus && !(backLit && lastKeyDownAt <= openedAt)
+
+/** Marks a screen's Back control (a BackBar's circle, a title page's back arrow) for [LandingFallback]: focus there
+    that nobody asked for is not a landing. */
+internal fun Modifier.backControl(): Modifier = composed {
+    val slot = LocalLandingSlot.current
+    var mine by remember { mutableStateOf(false) }
+    // a Back that leaves while lit (its screen popped) must not leave the flag up for the slot
+    DisposableEffect(slot) { onDispose { if (mine) slot?.backLit = false } }
+    this.onFocusChanged { mine = it.hasFocus; slot?.backLit = it.hasFocus }
 }
 
 internal val LocalLandingSlot = staticCompositionLocalOf<LandingSlot?> { null }
@@ -326,23 +346,27 @@ internal fun Modifier.landingSlot(): Modifier = composed {
 
 /** AppRoot, per screen: if a remote is in use and after ~40 frames (0.65 s) nothing on the screen is lit — no own
     landing, no return, no press — land on the slot; a page still loading gets its first control when it arrives
-    (for up to ~6 s, and only while nothing else has taken focus). A return nobody claimed by then is given up. */
+    (for up to ~6 s, and only while nothing else has taken focus). A return nobody claimed by then is given up.
+    Back lit by the page's own focus seeding is "nothing lit" ([screenLanded]): Catalog, Friends, a pushed Profile and
+    every Settings page opened on Back, and OK there left the page (android-tv-29). */
 @Composable
 internal fun LandingFallback(slot: LandingSlot, entry: Any?) {
     val remote = remoteMode()
+    val openedAt = remember(slot) { android.os.SystemClock.uptimeMillis() }
     LaunchedEffect(slot, remote) {
         if (!remote) return@LaunchedEffect
         // whichever way this ends, a hand-back to this screen that nobody claimed by now is over — left pending it
         // would refuse the notes of what the viewer focuses next for the rest of its three seconds
         fun standDown() { if (entry != null && ReturnFocus.returningTo == entry) ReturnFocus.clear() }
+        fun landed() = screenLanded(slot.hasFocus, slot.backLit, KeyWatch.lastDownAt, openedAt)
         repeat(40) {
             withFrameNanos {}
-            if (slot.hasFocus || RailFocus.has || TextFocus.typingIn(entry)) { standDown(); return@LaunchedEffect }
+            if (landed() || RailFocus.has || TextFocus.typingIn(entry)) { standDown(); return@LaunchedEffect }
         }
         standDown()
         repeat(360) {
             // the viewer on the rail (picking a tab, walking it) is never pulled into the page, nor out of a text field
-            if (slot.hasFocus || RailFocus.has || TextFocus.typingIn(entry)) return@LaunchedEffect
+            if (landed() || RailFocus.has || TextFocus.typingIn(entry)) return@LaunchedEffect
             if (slot.taken && runCatching { slot.req.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
             withFrameNanos {}
         }

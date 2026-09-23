@@ -251,22 +251,46 @@ internal fun subLangKey(code: String?): String {
 internal fun upNextLabel(season: Int, episode: Int?, name: String): String =
     "Up next · S$season" + (episode?.let { " E$it" } ?: "") + (if (name.isNotEmpty()) " · $name" else "")
 
-/** How wide the pause board is: the whole width ([full]), or 62 % of it capped at [capDp] when that is not null. */
-internal data class BoardWidth(val full: Boolean, val capDp: Int?)
+/** The centre transport of the player chrome (TitleCardChrome's −10 · play · +10 row), in dp. The row is built from
+    these and the pause board keeps clear of them by them, so the two cannot drift apart. */
+internal object Transport {
+    const val SEEK = 56          // the −10 / +10 glass circles
+    const val SEEK_ICON = 26
+    const val PLAY = 80          // the play/pause glass circle
+    const val PLAY_ICON = 40
+    const val GAP = 34           // between the circles
+    /** half the row: the −10 circle's left edge sits this far left of the screen's centre (130) */
+    const val HALF = SEEK + GAP + PLAY / 2
+    /** a circle lit under a remote grows by this and wears a ring [RING] dp outside its glass (GlassCircle) */
+    const val LIT_SCALE = 1.06f
+    const val RING = 4
+}
+
+/** The pause board's place: [BOARD_START] from the left (and the right, on a phone), [BOARD_TOP] from the top. */
+internal const val BOARD_START = 20
+internal const val BOARD_TOP = 84
+/** how far the board keeps from the nearest transport circle — more than a lit circle's growth and ring (6 dp) */
+internal const val BOARD_CLEAR = 10
+
+/** How the pause board fits: the whole width ([full]) or 62 % of it, capped at [capDp] when that is not null, and no
+    taller than [maxHeightDp] when that is not null (its synopsis gives up lines first). */
+internal data class BoardFit(val full: Boolean, val capDp: Int?, val maxHeightDp: Int?)
 
 /**
- * The pause board's width, which keeps it off the transport (android-phone-6, android-tv-23). The board sits top-left
- * under the Back circle; the −10 / play / +10 circles sit in the middle of the screen, the −10's left edge 130 dp left
- * of the centre.
- * - Under 600 dp wide (a phone held upright) it takes the whole width — the caller keeps 20 dp at either side — so its
- *   pills sit on one or two lines well ABOVE the transport. At 62 % a 411 dp phone stacked one pill per line and the
- *   Up next pill ran into the play circle.
- * - Wider, where the board and the controls show together, it ends left of the −10 circle: half the width less 160 dp
- *   (320 dp on a 960 dp television, ending at 680 px against the circle's 700), which is always 10 dp clear.
- * - A short screen (under 480 dp tall: a phone on its side) hides the board while the controls show, so it keeps 62 %.
+ * How the pause board keeps off the transport (android-phone-6, android-tv-23), from the size of the player's box. The
+ * board sits top-left under the Back circle; the −10 / play / +10 circles sit in the middle of the box.
+ * - Short (under 480 dp tall: a phone on its side): the board hides while the controls show, so nothing is capped —
+ *   the whole width under 600 dp, as always, else 62 %.
+ * - Wider than tall (a television, a tablet or a Fold on its side): the board sits BESIDE the transport, so its width is
+ *   capped to end [BOARD_CLEAR] dp left of the −10 circle: 320 dp on a 960 dp television (ending at 680 px against the
+ *   circle's 700). Its height is free — it is left of the controls, not above them.
+ * - Taller than wide (a phone held upright; a tablet or a Fold upright): the board sits ABOVE the transport, so its
+ *   width is free (the whole width under 600 dp, where 62 % stacked one pill per line into the play circle; 62 % on a
+ *   wider screen) and its height is capped to end [BOARD_CLEAR] dp above the play circle. A width cap here would only
+ *   squeeze it: at 600 x 960 it made the board 140 dp wide, with the title cut and the Up next pill gone.
  */
-internal fun pauseBoardWidth(widthDp: Int, heightDp: Int): BoardWidth = when {
-    widthDp < 600 -> BoardWidth(full = true, capDp = null)
-    heightDp < 480 -> BoardWidth(full = false, capDp = null)
-    else -> BoardWidth(full = false, capDp = widthDp / 2 - 160)
+internal fun pauseBoardFit(widthDp: Int, heightDp: Int): BoardFit = when {
+    heightDp < 480 -> BoardFit(full = widthDp < 600, capDp = null, maxHeightDp = null)
+    widthDp > heightDp -> BoardFit(full = false, capDp = widthDp / 2 - Transport.HALF - BOARD_CLEAR - BOARD_START, maxHeightDp = null)
+    else -> BoardFit(full = widthDp < 600, capDp = null, maxHeightDp = heightDp / 2 - Transport.PLAY / 2 - BOARD_CLEAR - BOARD_TOP)
 }
