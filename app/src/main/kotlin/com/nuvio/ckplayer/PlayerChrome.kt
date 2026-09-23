@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -66,7 +67,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -75,6 +75,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInputModeManager
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -116,15 +119,19 @@ private fun GlassCircle(
     val ring = focused && LocalInputModeManager.current.inputMode == InputMode.Keyboard
     Box(
         modifier.size(size)
-            .scale(if (ring) 1.06f else 1f)
+            .scale(if (ring) Transport.LIT_SCALE else 1f)
             .then(if (ring) Modifier.drawBehind {
-                drawCircle(Color(0x80FFFFFF), radius = this.size.minDimension / 2 + 2.dp.toPx(), style = Stroke(4.dp.toPx()))
+                val w = Transport.RING.dp.toPx()
+                drawCircle(Color(0x80FFFFFF), radius = this.size.minDimension / 2 + w / 2, style = Stroke(w))
             } else Modifier)
             .background(bg, CircleShape)
-            .clickable(interactionSource = interaction, indication = null) { onClick() },
+            .clickable(interactionSource = interaction, indication = null, role = Role.Button) { onClick() }
+            // the label sits on the glass itself, not on the glyph inside it: what TalkBack outlines and what the
+            // Screens walk measures is the whole circle (the glyph is 26 dp of a 56 dp circle)
+            .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = label, tint = if (on) Color.Black else Ink, modifier = Modifier.size(iconSize))
+        Icon(icon, contentDescription = null, tint = if (on) Color.Black else Ink, modifier = Modifier.size(iconSize))
     }
 }
 
@@ -279,14 +286,17 @@ internal fun PauseBoard(
     meta: List<Pair<String, Boolean>>,   // text, isNext
     modifier: Modifier = Modifier,
 ) {
-    // kept off the transport (pauseBoardWidth, PlayerExtras.kt): the whole width on a phone held upright, else 62 %
-    // ending left of the −10 circle
-    val cfg = LocalConfiguration.current
-    val w = pauseBoardWidth(cfg.screenWidthDp, cfg.screenHeightDp)
     AnimatedVisibility(visible, enter = fadeIn(), exit = fadeOut(), modifier = modifier) {
+        // kept off the transport (pauseBoardFit, PlayerExtras.kt): beside it, ending left of the −10 circle, on a screen
+        // wider than tall; above it, ending over the play circle, on one held upright. Measured from the player's own
+        // box — the caller places the board BOARD_START / BOARD_TOP inside it, and the transport is centred in it —
+        // not from the configuration, which leaves out the bars a playing phone hides.
+        BoxWithConstraints {
+        val fit = pauseBoardFit(maxWidth.value.toInt() + 2 * BOARD_START, maxHeight.value.toInt() + BOARD_TOP)
         Column(
-            (if (w.full) Modifier.fillMaxWidth() else Modifier.fillMaxWidth(0.62f))
-                .then(if (w.capDp != null) Modifier.widthIn(max = w.capDp.dp) else Modifier),
+            (if (fit.full) Modifier.fillMaxWidth() else Modifier.fillMaxWidth(0.62f))
+                .then(if (fit.capDp != null) Modifier.widthIn(max = fit.capDp.dp) else Modifier)
+                .then(if (fit.maxHeightDp != null) Modifier.heightIn(max = fit.maxHeightDp.dp) else Modifier),
         ) {
             Text(kicker, color = DimInk, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.4.sp)
             Text(
@@ -298,9 +308,11 @@ internal fun PauseBoard(
                 sub, color = DimInk, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp),
             )
+            // weighted: measured after everything else, so on a short phone (or a large font) the synopsis gives up
+            // lines — it ellipsizes at the height it is given — before the pills below it are pushed into the controls
             if (!desc.isNullOrEmpty()) Text(
                 desc, color = Color(0xCCEBEBF5), fontSize = 13.5.sp, lineHeight = 19.sp, maxLines = 3,
-                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 10.dp),
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 10.dp).weight(1f, fill = false),
             )
             if (meta.isNotEmpty()) androidx.compose.foundation.layout.FlowRow(
                 Modifier.padding(top = 14.dp),
@@ -317,6 +329,7 @@ internal fun PauseBoard(
                     )
                 }
             }
+        }
         }
     }
 }
@@ -459,16 +472,17 @@ internal fun TitleCardChrome(
             val backIcon = when (stepS) { 5 -> Icons.Filled.Replay5; 30 -> Icons.Filled.Replay30; 10 -> Icons.Filled.Replay10; else -> Icons.Filled.FastRewind }
             val fwdIcon = when (stepS) { 5 -> Icons.Filled.Forward5; 30 -> Icons.Filled.Forward30; 10 -> Icons.Filled.Forward10; else -> Icons.Filled.FastForward }
             Row(Modifier.align(Alignment.Center), verticalAlignment = Alignment.CenterVertically) {
-                GlassCircle(backIcon, "Back $stepS seconds", size = 56.dp, iconSize = 26.dp) { onSeekBy(-seekStepMs) }
-                Spacer(Modifier.width(34.dp))
+                // sized from Transport (PlayerExtras.kt), which the pause board keeps clear of
+                GlassCircle(backIcon, "Back $stepS seconds", size = Transport.SEEK.dp, iconSize = Transport.SEEK_ICON.dp) { onSeekBy(-seekStepMs) }
+                Spacer(Modifier.width(Transport.GAP.dp))
                 GlassCircle(
                     if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    "Play/Pause", size = 80.dp, iconSize = 40.dp,
+                    "Play/Pause", size = Transport.PLAY.dp, iconSize = Transport.PLAY_ICON.dp,
                     modifier = if (playFocus != null) Modifier.focusRequester(playFocus) else Modifier,
                     onClick = onPlayPause,
                 )
-                Spacer(Modifier.width(34.dp))
-                GlassCircle(fwdIcon, "Forward $stepS seconds", size = 56.dp, iconSize = 26.dp) { onSeekBy(seekStepMs) }
+                Spacer(Modifier.width(Transport.GAP.dp))
+                GlassCircle(fwdIcon, "Forward $stepS seconds", size = Transport.SEEK.dp, iconSize = Transport.SEEK_ICON.dp) { onSeekBy(seekStepMs) }
             }
 
             // bottom: the title block (tall screens), the scrubber, the time pills, the toolbar

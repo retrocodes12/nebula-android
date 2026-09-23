@@ -1529,6 +1529,9 @@ internal fun FocusCard(
     interactionSource: MutableInteractionSource? = null,
     // may this card be the screen's fallback landing (TvFocus.kt)? Never a Back button
     landing: Boolean = true,
+    // the card draws its own white ring under a remote (MetaCard, ContinueCard, ContinuePosterCard): the reduced-motion
+    // border below would frame the whole tile in the same 2 dp band and put a second white line under the art
+    ownRing: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val own = remember { MutableInteractionSource() }
@@ -1545,7 +1548,7 @@ internal fun FocusCard(
             .then(if (landing) Modifier.landingSlot() else Modifier)
             .scale(zoom)
             .shadow(lift.dp, shape, clip = false)
-            .then(if (reduced) Modifier.border(2.dp, if (focused) Color.White else Color.Transparent, shape) else Modifier)
+            .then(if (reduced && !ownRing) Modifier.border(2.dp, if (focused) Color.White else Color.Transparent, shape) else Modifier)
             .clip(shape)
             .combinedClickable(
                 interactionSource = interaction,
@@ -1869,7 +1872,8 @@ internal fun BackBar(title: String, sub: String?, onBack: () -> Unit) {
     ) {
         // zoom = false is FocusCard's white-ring path: grown with an invisible shadow over black, a focused Back read as
         // nothing lit at all (android-tv-29)
-        FocusCard(shape = RoundedCornerShape(50), onClick = onBack, landing = false, zoom = false) {
+        // backControl: lit by the page's own focus seeding (no key pressed yet) it is not a landing (LandingFallback)
+        FocusCard(shape = RoundedCornerShape(50), modifier = Modifier.backControl(), onClick = onBack, landing = false, zoom = false) {
             Box(
                 Modifier.size(42.dp).background(Surface2, CircleShape),
                 contentAlignment = Alignment.Center,
@@ -1957,7 +1961,7 @@ internal fun MetaCard(
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val ring = focused && remoteMode()
-    FocusCard(shape = shape, modifier = modifier, onClick = onClick, onLongClick = onLongClick, interactionSource = interaction) {
+    FocusCard(shape = shape, modifier = modifier, onClick = onClick, onLongClick = onLongClick, interactionSource = interaction, ownRing = true) {
         Column(Modifier.padding(2.dp)) {
             Box(
                 Modifier.fillMaxWidth().aspectRatio(if (wide) 16f / 9f else thumbRatio(m.posterShape))
@@ -2036,7 +2040,7 @@ internal fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val ring = focused && remoteMode()
-    FocusCard(shape = shape, modifier = modifier, onClick = onClick, onLongClick = onLongClick, interactionSource = interaction) {
+    FocusCard(shape = shape, modifier = modifier, onClick = onClick, onLongClick = onLongClick, interactionSource = interaction, ownRing = true) {
         Box(
             Modifier.fillMaxWidth().aspectRatio(16f / 9f)
                 .clip(shape)
@@ -2106,7 +2110,7 @@ private fun ContinuePosterCard(
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val ring = focused && remoteMode()
-    FocusCard(shape = shape, modifier = modifier, onClick = onClick, onLongClick = onLongClick, interactionSource = interaction) {
+    FocusCard(shape = shape, modifier = modifier, onClick = onClick, onLongClick = onLongClick, interactionSource = interaction, ownRing = true) {
         Column(Modifier.padding(2.dp)) {
             Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).outerRing(ring, shape, width = 2.dp, gap = 0.dp)
                 .clip(shape).background(SurfaceC).border(1.dp, Color(0x0FFFFFFF), shape)) {
@@ -5582,7 +5586,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                         0.62f to Color(0x8A000000), 0.86f to Color(0xE6000000), 1f to Color(0xFF000000))))
                     IconButton(
                         onClick = onBack,
-                        modifier = Modifier.align(Alignment.TopStart).padding(12.dp).focusRing(CircleShape, landing = false).size(40.dp)
+                        modifier = Modifier.align(Alignment.TopStart).padding(12.dp).backControl().focusRing(CircleShape, landing = false).size(40.dp)
                             .background(Color(0x8A000000), CircleShape),
                     ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White, modifier = Modifier.size(21.dp))
@@ -7211,8 +7215,9 @@ private fun PlayerScreen(
                 sub = episodeTag,
                 desc = currentEpisode?.overview?.takeIf { it.isNotBlank() } ?: description,
                 meta = meta,
-                // end: a phone's board takes the whole width (pauseBoardWidth) and keeps the same margin at both sides
-                modifier = Modifier.align(Alignment.TopStart).padding(start = 20.dp, top = 84.dp, end = 20.dp),
+                // end: a phone's board takes the whole width (pauseBoardFit) and keeps the same margin at both sides;
+                // the board reads its box back from these, so they stay the constants
+                modifier = Modifier.align(Alignment.TopStart).padding(start = BOARD_START.dp, top = BOARD_TOP.dp, end = BOARD_START.dp),
             )
             if (pinfoOn) PlaybackInfoHud(infoRows, Modifier.align(Alignment.TopEnd).padding(end = 20.dp, top = 76.dp))
         }
