@@ -1427,6 +1427,13 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                             }
                         }
                         if (onNav && !rail) {
+                            // the rows dissolve into the page before they reach the floating nav: without it a card's
+                            // title ran straight under the pill's labels (Founder's Library screenshot, 09-23). Draws
+                            // only — no pointer input, so a touch in the fade still reaches the row under it.
+                            Box(
+                                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(116.dp)
+                                    .background(Brush.verticalGradient(0f to Color.Transparent, 0.4f to Bg.copy(alpha = 0.72f), 1f to Bg))
+                            )
                             BottomBar(current, onTab = { setTab(it) }, modifier = Modifier.align(Alignment.BottomCenter))
                         }
                     }
@@ -1601,7 +1608,7 @@ internal fun tvFirstFocus(ready: Boolean = true, key: Any? = Unit): FocusRequest
  * dead screen.
  */
 @Composable
-internal fun navPadBottom(): Dp = if (Account.isTv(LocalContext.current)) 24.dp else 104.dp
+internal fun navPadBottom(): Dp = if (Account.isTv(LocalContext.current)) 24.dp else 124.dp   // clears the nav's fade
 
 /**
  * A round icon button for the title page's action row. Four of these fit where two
@@ -2017,6 +2024,7 @@ internal fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick
                     .background(BarGlass, Pill).border(1.dp, Hairline, Pill)
                     .padding(horizontal = 10.dp, vertical = 5.dp),
             )
+            val pct = if (r.dur > 0) (r.pos.toFloat() / r.dur).coerceIn(0f, 1f) else 0f
             Column(Modifier.align(Alignment.BottomStart).padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
                 if (tag != null) Eyebrow(tag, color = Color(0xD1EBEBF5))
                 Text(
@@ -2028,12 +2036,20 @@ internal fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick
                     sub, color = Color(0xB3EBEBF5), fontSize = 12.5.sp, maxLines = 1,
                     overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 1.dp),
                 )
-            }
-            val pct = if (r.dur > 0) (r.pos.toFloat() / r.dur).coerceIn(0f, 1f) else 0f
-            Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(Color(0x66000000))) {
-                Box(Modifier.fillMaxWidth(pct).fillMaxSize().background(Red))
+                // a rounded track under the title (tvOS's own place for it): along the card's foot the rounded corner
+                // clipped the first ~5 % away, so an episode a few minutes in showed no bar at all
+                if (pct > 0f) ResumeTrack(pct, Modifier.padding(top = 9.dp))
             }
         }
+    }
+}
+
+/** How far in, as a thin rounded track: the accent over a translucent white line, never shorter than a visible nub
+    (a film two minutes in is still "started"). */
+@Composable
+private fun ResumeTrack(pct: Float, modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxWidth().height(3.dp).clip(Pill).background(Color(0x47FFFFFF))) {
+        Box(Modifier.fillMaxWidth(pct.coerceIn(0.04f, 1f)).fillMaxHeight().clip(Pill).background(Red))
     }
 }
 
@@ -2060,9 +2076,8 @@ private fun ContinuePosterCard(
                         .background(BarGlass, Pill).border(1.dp, Hairline, Pill).padding(horizontal = 7.dp, vertical = 3.dp),
                 )
                 val pct = if (r.dur > 0) (r.pos.toFloat() / r.dur).coerceIn(0f, 1f) else 0f
-                Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(Color(0x66000000))) {
-                    Box(Modifier.fillMaxWidth(pct).fillMaxSize().background(Red))
-                }
+                // inset from the rounded corners, which clipped a short bar away along the very edge
+                if (pct > 0f) ResumeTrack(pct, Modifier.align(Alignment.BottomStart).padding(8.dp))
             }
             if (tag != null) Eyebrow(tag, Modifier.padding(top = 7.dp, start = 2.dp))
             Text(

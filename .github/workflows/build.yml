@@ -94,9 +94,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.79.0.apk
+          cp "$APK" Nebula-1.79.1.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.79.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.79.0 Nebula-1.79.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.79.0" \
-            --notes "A full audit pass. Friends are now mutual: someone you add sees your watching only once they add you back, and asks to be friends show up for you to add back or dismiss. The next episode never starts after you press Back, long lists page smoothly, a landscape phone shows the pause board, a title page puts Play before the cast, stream names lose their emoji, a download no longer starts over, your sign-in is kept out of device backups, and on a TV the remote lands somewhere useful on an empty streams page and after a Friends action. Every release is now opened on an emulator before it ships."
+          gh release delete v1.79.1 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.79.1 Nebula-1.79.1.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.79.1" \
+            --notes "Continue watching shows how far in you are on every card, even a few minutes into an episode (the bar sat under the card's rounded corner), and on a phone the rows fade out before they reach the floating tabs instead of running under their labels. Also in 1.79.0: friends are mutual, the next episode never starts after Back, typing on a physical keyboard keeps its field, and every release is opened on an emulator before it ships."
