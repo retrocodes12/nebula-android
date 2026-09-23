@@ -178,9 +178,11 @@ if PHONE:
             expect('a series title page with its Play button', on_screen('Play', 'Slow Horses'))
             adb('shell', 'input', 'swipe', '540', '1900', '540', '500', '400'); time.sleep(3)
             shot('05-title-scrolled')
-            expect('the seasons below', on_screen('Season 1'))
+            seen = on_screen('Season 1', tries=2)
             adb('shell', 'input', 'swipe', '540', '1900', '540', '500', '400'); time.sleep(3)
             shot('05b-title-episodes')
+            # a shorter phone (API 28's Pixel 3) needs the second swipe before the seasons come up
+            expect('the seasons below', seen or on_screen('Season 1', tries=3))
             if tap("Failure's Contagious", wait=14, must=False) or tap('Episode 1', wait=14):
                 shot('06-streams')
                 expect('an episode opens its streams page', on_screen('stream') or on_screen('add-on'))
