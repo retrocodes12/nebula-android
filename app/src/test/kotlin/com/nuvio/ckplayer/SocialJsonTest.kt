@@ -3,6 +3,7 @@ package com.nuvio.ckplayer
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** Friend cards come from the server as JSON where any field may be JSON null. */
@@ -32,6 +33,16 @@ class SocialJsonTest {
         assertEquals("Sam", Social.friendLabel(o("""{"name":"Sam","handle":"sam"}""")))
         assertEquals("@sam", Social.friendLabel(o("""{"name":null,"handle":"sam"}""")))
         assertEquals("A friend", Social.friendLabel(o("""{"name":null,"handle":null,"code":null}""")))
+    }
+
+    @Test fun offOnServer_onlyA400MeansFriendsIsOff() {
+        // a 400 is "friends is not enabled" (turned off on another device): Friends goes off here, the list reads empty
+        assertTrue(Social.offOnServer(Cloud.HttpFail(400, "friends is not enabled")))
+        // anything else is a failure to ask — never taken as off, or a flaky connection would switch Friends off
+        assertFalse(Social.offOnServer(Cloud.HttpFail(401, "unauthorized")))
+        assertFalse(Social.offOnServer(Cloud.HttpFail(500, "server")))
+        assertFalse(Social.offOnServer(java.io.IOException("offline")))
+        assertFalse(Social.offOnServer(RuntimeException("400")))
     }
 
     @Test fun friendRef_sendsTheHandleWhenThereIsOne_elseTheCode() {
