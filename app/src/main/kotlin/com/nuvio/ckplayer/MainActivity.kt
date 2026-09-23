@@ -1329,6 +1329,8 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 is Screen.Detail -> DetailScreen(
                                     s.addon, s.item,
                                     onBack = { pop() },
+                                    // a Universe card: that title's own page on top of this one, so Back comes here
+                                    onOpenMeta = { m -> openMeta(s.addon, m) },
                                     onEpisodes = { push(Screen.Episodes(s.addon, s.item)) },
                                     onPlayMovie = {
                                         seriesChain.clear()
@@ -1946,6 +1948,7 @@ internal fun MetaCard(
     m: MetaItem,
     modifier: Modifier = Modifier,
     onLongClick: (() -> Unit)? = null,
+    kicker: String? = null,       // a mono eyebrow between the art and the title (the Universe row's "Followed by")
     onClick: () -> Unit,
 ) {
     // Wide cards everywhere (Settings › Home) turns every poster row into 16:9 art
@@ -1988,11 +1991,12 @@ internal fun MetaCard(
                     )
                 }
             }
+            if (!kicker.isNullOrEmpty()) Eyebrow(kicker, Modifier.padding(top = 7.dp, start = 2.dp, end = 2.dp), maxLines = 1)
             // Under posters (Settings › Appearance): title and year, the title alone, or nothing
             if (Prefs.posterLabels != "none") Text(
                 m.name, color = TextC, fontSize = 13.sp, fontFamily = Sans, fontWeight = FontWeight.Medium,
                 maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp,
-                modifier = Modifier.padding(top = 7.dp, start = 2.dp, end = 2.dp),
+                modifier = Modifier.padding(top = if (kicker.isNullOrEmpty()) 7.dp else 3.dp, start = 2.dp, end = 2.dp),
             )
             if (Prefs.posterLabels == "both") m.releaseInfo?.let {
                 Text(it, style = labelStyle(11, FaintC), maxLines = 1,
@@ -4529,6 +4533,7 @@ private fun DetailScreen(
     onPlayMovie: () -> Unit,
     onResumeEpisode: (ProgressRec) -> Unit,
     onPlayEpisode: (Episode, PlayIntent) -> Unit = { _, _ -> },
+    onOpenMeta: (MetaItem) -> Unit = {},
 ) {
     val ctx = LocalContext.current
     val ck = item.type + ":" + item.id
@@ -4892,6 +4897,28 @@ private fun DetailScreen(
                 )
             }
             item { Spacer(Modifier.height(24.dp)) }
+        }
+        val uniId = Universe.idOf(item.id)
+        if (uniId != null) item(key = "universe") {
+            var uni by remember(uniId) { mutableStateOf(Universe.cached(uniId)) }
+            LaunchedEffect(uniId) { if (uni == null) uni = Universe.load(uniId) }
+            val list = uni.orEmpty()
+            if (list.isNotEmpty()) Column(Modifier.padding(top = 8.dp, bottom = 32.dp)) {
+                RowHeader("Universe", null, null)
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(horizontal = chipEdge()),
+                ) {
+                    items(list.size, key = { list[it].meta.id }) { i ->
+                        val u = list[i]
+                        MetaCard(
+                            u.meta,
+                            Modifier.returnTo("uni/" + u.meta.id).width(rowCardWidth(u.meta.copy(posterShape = "poster"))),
+                            kicker = Universe.label(u.rel),
+                        ) { onOpenMeta(u.meta) }
+                    }
+                }
+            }
         }
         }
     }
