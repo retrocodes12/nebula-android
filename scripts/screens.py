@@ -254,6 +254,10 @@ if PHONE:
     for tab, name in (('Library', '10-library'), ('Settings', '11-settings')):
         key('KEYCODE_BACK', 2, wait=1.5); front()
         if tap(tab, exact=True): shot(name)
+        # the streams played above left progress behind: the Continue Watching card with its resume track (1.79.1)
+        if tab == 'Library' and tap('Continue Watching', exact=True, must=False):
+            shot('10b-library-continue')
+            expect('Continue Watching lists what was played', on_screen('left', tries=3))
     expect('Settings opens', on_screen('Appearance', 'Playback'))
     if tap('Playback'): shot('12-playback'); key('KEYCODE_BACK', wait=2)
     key('KEYCODE_BACK', 2, wait=1.5); front()
