@@ -77,6 +77,8 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: The journey on the emulator
+        # the x86 TV emulator is slow: past this the step stops and whatever was shot is still uploaded
+        timeout-minutes: 30
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api }}

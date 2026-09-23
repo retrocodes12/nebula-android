@@ -104,13 +104,13 @@ def missing(name, why):
     say('MISSING %s: %s' % (name, why))
 
 
-def find_any(cands, exact=False, region=None, ns=None, skip_edit=True):
+def find_any(cands, exact=False, region=None, ns=None, skip_edit=True, maxlen=999):
     """(label, centre) of the first candidate on screen (candidates in order of preference), or (None, None)"""
     ns = nodes() if ns is None else ns
     for c in cands:
         for n in ns:
             if skip_edit and n.get('class') == 'android.widget.EditText': continue
-            if not hit(n, c, exact): continue
+            if not hit(n, c, exact) or len(lab(n)) > maxlen: continue
             x, y = mid(n)
             if region and not (region[0] <= y <= region[1]): continue
             if x < 0 or y < 0 or x > W or y > H: continue
@@ -122,8 +122,8 @@ def tap_xy(x, y, wait=4):
     adb('shell', 'input', 'tap', str(x), str(y)); time.sleep(wait)
 
 
-def tap_any(cands, exact=False, wait=4, region=None, ns=None):
-    c, xy = find_any(cands, exact, region, ns)
+def tap_any(cands, exact=False, wait=4, region=None, ns=None, maxlen=999):
+    c, xy = find_any(cands, exact, region, ns, maxlen=maxlen)
     if not c: say('not found: %s' % cands); return None
     say('tap %r at %s' % (c, xy)); tap_xy(*xy, wait=wait); return c
 
@@ -135,6 +135,15 @@ def key(k, n=1, wait=0.8):
     src = ['dpad'] if not PHONE and 'DPAD' in k else []
     for _ in range(n):
         adb('shell', 'input', *src, 'keyevent', k); time.sleep(wait)
+
+
+def hw_dpad(d):
+    """a D-pad press through the emulator's own key device (a real input device, as a remote is): Compose's text
+    field moves the focus only for a real D-pad — `input keyevent` comes from a virtual device, which it treats as a
+    keyboard's cursor keys, so the focus could never leave a field that way (run 35826723205)"""
+    code = {'UP': 'KEY_UP', 'DOWN': 'KEY_DOWN', 'LEFT': 'KEY_LEFT', 'RIGHT': 'KEY_RIGHT'}[d]
+    r = adb('emu', 'event', 'send', code.join(['EV_KEY:', ':1']), code.join(['EV_KEY:', ':0']), timeout=20)
+    say('  hardware %s: %s' % (d, (r.stdout + r.stderr).decode(errors='replace').strip()[:80])); time.sleep(0.8)
 
 
 def on_screen(cands, tries=5, exact=False):
@@ -162,9 +171,28 @@ def edit_field(ns=None):
 def tv_type(t, submit=True):
     """TV: the focus on a text field → OK (a TV field turns writable on OK) → the letters as key presses → Enter"""
     if not seek(['<edit>'], ('UP', 'DOWN', 'RIGHT', 'LEFT'), 5): return False
-    key('DPAD_CENTER', wait=1.5); type_text(t); time.sleep(1.5)
+    key('DPAD_CENTER', wait=1.5); type_text(t); time.sleep(1.5); tidy_field(t)
+    got = (edit_field() or ET.Element('x')).get('text') or ''
+    if got.strip().lower() != t.lower():
+        say('field reads %r: clearing and typing again' % got)
+        key('KEYCODE_MOVE_END', wait=0.3); key('KEYCODE_DEL', len(got) + 2, wait=0.15); type_text(t); time.sleep(1.5)
     if submit: key('ENTER', wait=3)
     return True
+
+
+def tidy_field(t):
+    """a field that reads 'x' + t: the stray characters before t are deleted"""
+    f = edit_field(); v = (f.get('text') or '') if f is not None else ''
+    if v != t and v.endswith(t) and len(v) - len(t) < 4:
+        key('MOVE_HOME', wait=0.3); key('FORWARD_DEL', len(v) - len(t), wait=0.3)
+        say('field tidied: %r -> %r' % (v, (edit_field() or ET.Element('x')).get('text')))
+
+
+def screen():
+    for n in nodes():
+        b = box(n)
+        if b[2] > 0 and b[3] > 0: return b[2], b[3]
+    return W, H
 
 
 def type_text(t):
@@ -229,9 +257,16 @@ def seek(cands, dirs=('DOWN',), steps=8, exact=False, enter=False):
                 if enter: key('DPAD_CENTER', wait=5)
                 return c
             say('  focus[%s%d] %s' % (d, i, (t[:90] + ' @' + str(box(n))) if n is not None else '-'))
-            if last is not None and t == last[0] and n is not None and box(n) == last[1]: break   # an edge
-            last = (t, box(n) if n is not None else None)
-            if i < steps: key('DPAD_' + d, wait=0.7)
+            if last is not None and t == last[0] and n is not None and box(n) == last[1]:
+                # adb's injected arrows come from a virtual full keyboard, which a Compose text field keeps as
+                # cursor keys (a remote's D-pad is non-alphabetic and walks out): Tab moves the focus on instead
+                if n.get('class') == 'android.widget.EditText' and not last[2]:
+                    say('  (in a text field: Tab)'); key('TAB', wait=1); last = (t, box(n), True); continue
+                break   # an edge
+            last = (t, box(n) if n is not None else None, bool(last and last[2]))
+            if i < steps:
+                if n is not None and n.get('class') == 'android.widget.EditText' and '<edit>' not in cands: hw_dpad(d)
+                else: key('DPAD_' + d, wait=0.7)
     say('focus never reached %s' % cands); return None
 
 
@@ -240,8 +275,8 @@ def tv_nav(cands):
     for _ in range(6):
         t, n = focus()
         if fmatch(t, n, cands, True) or (n is not None and box(n)[0] < 120): break
-        # a text field keeps the D-pad for its cursor: Back leaves it
-        key('BACK' if n is not None and n.get('class') == 'android.widget.EditText' else 'DPAD_LEFT', wait=0.7)
+        if n is not None and n.get('class') == 'android.widget.EditText': hw_dpad('LEFT')
+        else: key('DPAD_LEFT', wait=0.7)
     return seek(cands, ('UP', 'DOWN', 'RIGHT', 'LEFT'), 7, exact=True, enter=True)
 
 
@@ -313,72 +348,127 @@ def enter_on(cands, dirs=('DOWN', 'RIGHT', 'UP'), steps=8, exact=False, wait=5):
     return seek(cands, dirs, steps, exact, enter=True)
 
 
+T0 = time.time()
+PICKER = ["Who's watching", 'Choose a profile', 'Select profile', 'Who is watching']
+ADDONISH = ['Addons', 'Add-ons', 'Manage Addons', 'Manage addons', 'Manage add-ons', 'Extensions', 'Addon', 'Add-on']
+
+
+def phone_scroll_tap(cands, exact=True, swipes=4, wait=5, maxlen=40):
+    """phone: tap the first candidate, scrolling the page down to find it"""
+    for i in range(swipes + 1):
+        c = tap_any(cands, exact, wait, maxlen=maxlen)
+        if c: return c
+        if i < swipes: swipe_up()
+    return None
+
+
+def tv_settings(cands, exact=True, enter=True):
+    """TV settings: from the pane back to the category list (a left column), then walk it"""
+    t, n = focus()
+    if n is not None and box(n)[0] > 660: key('DPAD_LEFT', wait=1)
+    return seek(cands, ('UP', 'DOWN'), 11, exact, enter)
+
+
+def profile_picker(ns):
+    """Nuvio's "Who's watching?" (a fresh local account showed no profile at all): the first tile, else make one"""
+    time.sleep(8); ns = nodes()   # the tiles may come a moment after the title
+    heads = [n for n in ns if any(hit(n, p, False) for p in PICKER)]
+    xy = card_below(box(heads[0])[3] if heads else H // 4, ns, 700)
+    if xy and not find_any(['Manage Profiles'], True, ns=[n for n in ns if mid(n) == xy])[0]:
+        tap_xy(*xy, wait=5); return 'profile tile'
+    if not tap_any(['Manage Profiles', 'Manage profiles'], True, 5): return None
+    shot('01-first-run-profiles-manage')
+    if not tap_any(['Add Profile', 'Add profile', 'Create Profile', 'Create profile', 'New Profile', 'New profile', 'Add'], True, 5) \
+            and not tap_any(['add profile', 'create', 'new profile'], False, 5, maxlen=30):
+        return None
+    shot('01-first-run-profiles-add')
+    f = edit_field()
+    if f is not None: tap_xy(*mid(f), wait=2); type_text('Guest'); time.sleep(1)
+    tap_any(['Save', 'Create', 'Done', 'Continue', 'OK', 'Add', 'Confirm'], True, 5)
+    ns = shot('01-first-run-profiles-saved')
+    for _ in range(3):
+        if find_any(PICKER, ns=ns)[0]: break
+        if find_any(['Guest'], True, ns=ns)[0] and not find_any(['Manage Profiles'], True, ns=ns)[0]: break
+        key('BACK', wait=3); ns = nodes()
+    return tap_any(['Guest'], True, 6) or 'profile made'
+
+
 # 01 first run: whatever the first launch shows, then past it the way a new user would (never signing in)
 launch(); time.sleep(20)
 ns = shot('01-first-run')
 for i in range(8):
     if is_home(ns): say('home reached after %d step(s)' % i); break
+    c = None
     if PHONE:
-        c = tap_any(PAST, True, 5, ns=ns)
-        if not c and find_any(["Who's watching", 'Choose a profile', 'Select profile', 'Who is watching'], ns=ns)[0]:
-            xy = card_below(H // 4, ns); c = xy and 'profile'; xy and tap_xy(*xy, wait=5)
+        if find_any(PICKER, ns=ns)[0]: c = profile_picker(ns)
+        else: c = tap_any(PAST, True, 5, ns=ns, maxlen=40)
     else:
-        c = seek(PAST, ('DOWN', 'RIGHT', 'UP', 'LEFT'), 5, exact=True, enter=True)
-        if not c and find_any(["Who's watching", 'Choose a profile', 'Select profile', 'Who is watching'], ns=ns)[0]:
-            c = 'profile'; key('DPAD_CENTER', wait=5)
+        if find_any(PICKER, ns=ns)[0]: c = 'profile'; key('DPAD_CENTER', wait=5)
+        else: c = seek(PAST, ('DOWN', 'RIGHT', 'UP', 'LEFT'), 5, exact=True, enter=True)
     if not c: say('first run: nothing known to press on'); break
-    time.sleep(3); ns = shot('01-first-run-' + 'bcdefghi'[i])
-time.sleep(10)
+    time.sleep(4); ns = shot('01-first-run-' + 'bcdefghi'[i])
+time.sleep(8)
 
 # 02-03 Home
 if not is_home(): to_home()
-time.sleep(8)
+time.sleep(6)
 ns = shot('02-home')
 if PHONE:
     navs = sorted({(mid(n)[0], lab(n)) for n in ns if lab(n) and mid(n)[1] > H * 0.86 and len(lab(n)) < 24})
     say('NAV (bottom): %s' % navs)
     swipe_up(); swipe_up(1); time.sleep(2)
 else:
-    key('DPAD_DOWN', 3, wait=1.2); time.sleep(2)
+    key('DPAD_RIGHT', wait=1); key('DPAD_DOWN', 3, wait=1.2); time.sleep(2)
 shot('03-home-rows')
 if PHONE: swipe_down(); swipe_down()
 
+
 # 18 add-ons: the runner's stream add-on, installed through the app's own add-on screen
-if nav('settings'):
+def open_addons():
+    if not nav('settings'): return None
     shot('x-settings-first')
-    got = enter_on(L['addons'], exact=True) or (PHONE and (swipe_up() or tap_any(L['addons'], True)))
-    if not got and PHONE: shot('x-settings-scrolled')
-    if got:
-        time.sleep(3); ns = shot('x-addons-before')
-        for step in range(4):
-            f = edit_field()
-            if f is not None: break
-            # a button that opens the address field
-            c = enter_on(['Add addon', 'Install addon', 'Add Addon', 'Install Addon', 'Add', 'Install', '+', 'Add add-on'],
-                         exact=True, wait=4)
-            if not c: break
-            shot('x-addons-open-%d' % step)
-        f = edit_field()
-        if f is not None:
-            if PHONE: tap_xy(*mid(f), wait=2); type_text(ADDON)
-            else: tv_type(ADDON, submit=True)
-            time.sleep(2)
-            say('add-on field reads: %r' % ((edit_field() or ET.Element('x')).get('text')))
-            for step in range(3):
-                if on_screen(['Gate Streams'], tries=1): break
-                c = enter_on(L['add'], exact=True, wait=6)
-                if not c: key('ENTER', wait=6)
-                shot('x-addons-after-%d' % step)
-            if PHONE: key('BACK', wait=1)   # nothing to put down (no keyboard), but a sheet may be open
-        ok = on_screen(['Gate Streams'], tries=3)
-        say('the runner\'s add-on is %s' % ('listed' if ok else 'NOT listed'))
-        shot('18-addons')
+    if PHONE:
+        return phone_scroll_tap(ADDONISH[:6], True, 4) or phone_scroll_tap(ADDONISH, False, 0, maxlen=24)
+    if tv_settings(L['addons']): return 'row'
+    # a category list with panes (Nuvio TV): the category whose pane offers add-ons
+    for cat in ['Content & Discovery', 'Integrations', 'Advanced', 'Layout', 'Playback', 'Profiles', 'Appearance']:
+        if not tv_settings([cat], enter=False): continue
+        ns = shot('x-settings-' + re.sub(r'\W+', '_', cat))
+        if find_any(ADDONISH, False, ns=ns, maxlen=30)[0]:
+            key('DPAD_RIGHT', wait=1.5)
+            if seek(ADDONISH, ('DOWN', 'UP'), 10, enter=True): return cat
+    return None
+
+
+if open_addons():
+    time.sleep(3); shot('x-addons-before')
+    for step in range(3):
+        if edit_field() is not None: break
+        c = enter_on(['Add addon', 'Install addon', 'Add Addon', 'Install Addon', 'Add add-on', 'Add', 'Install', '+',
+                      'Add from URL', 'Install from URL'], ('DOWN', 'RIGHT', 'UP'), 8, exact=True, wait=4)
+        if not c: break
+        shot('x-addons-open-%d' % step)
+    f = edit_field()
+    if f is not None:
+        if PHONE: tap_xy(*mid(f), wait=2); type_text(ADDON); tidy_field(ADDON)
+        else: tv_type(ADDON, submit=True)
+        time.sleep(3)
+        say('add-on field reads: %r' % ((edit_field() or ET.Element('x')).get('text')))
+        for step in range(3):
+            if on_screen(['Gate Streams'], tries=1): break
+            c = enter_on(L['add'], ('DOWN', 'RIGHT', 'UP'), 6, exact=True, wait=6)
+            if not c and step == 0: key('ENTER', wait=6)
+            shot('x-addons-after-%d' % step)
     else:
-        missing('18-addons', 'no add-on entry found in settings')
+        say('add-ons: no address field reached')
+    ok = on_screen(['Gate Streams'], tries=3)
+    say('the runner\'s add-on is %s' % ('listed' if ok else 'NOT listed'))
+    shot('18-addons')
 else:
-    missing('18-addons', 'settings not found')
+    missing('18-addons', 'no add-on screen found from settings')
 
 # 04-07 Search → the series
+key('BACK', 2, wait=1.5)
 to_home()
 if nav('search'):
     time.sleep(3); shot('04-search-idle')
@@ -386,58 +476,62 @@ if nav('search'):
     if f is None: say('search: no text field on screen')
     if PHONE:
         if f is not None and f.get('focused') != 'true': tap_xy(*mid(f), wait=3)
-        type_text('slow horses')
+        type_text('slow horses'); tidy_field('slow horses'); key('ENTER', wait=1)
     else:
         tv_type('slow horses')
     time.sleep(10)
     say('search field reads: %r' % ((edit_field() or ET.Element('x')).get('text')))
     ns = shot('05-search-results')
     if PHONE:
-        c, xy = find_any(['Slow Horses'], True, ns=ns)
-        if not xy:
-            f = edit_field(ns); xy = card_below(box(f)[3] if f is not None else 300, ns)
-        opened = bool(xy) and (tap_xy(*xy, wait=10) or True)
+        xy = None
+        for i in range(4):
+            c, xy = find_any(['Slow Horses'], True, ns=ns)
+            if xy: break
+            swipe_up(); ns = nodes()
+        opened = bool(xy) and (tap_xy(*xy, wait=12) or True)
     else:
-        key('DPAD_DOWN', wait=1)
-        opened = seek(['Slow Horses'], ('DOWN', 'RIGHT', 'UP'), 6, enter=True)
-        time.sleep(6)
+        opened = seek(['Slow Horses'], ('DOWN', 'RIGHT', 'DOWN', 'UP'), 8, exact=True, enter=True)
+        time.sleep(8)
     if opened:
         shot('06-title-series')
-        seen = None
-        for i in range(4):
-            if PHONE:
-                seen = find_any(EPISODE, True)[0] or find_any(EPISODE[:2])[0]
-                if seen: break
+        if PHONE:
+            for i in range(5):
+                if find_any(EPISODE[:1], True)[0] or find_any(EPISODE[1:2])[0]: break
                 swipe_up()
-            else:
-                seen = seek(EPISODE[:2], ('DOWN',), 6)
-                break
+        else:
+            seek(EPISODE[:2], ('DOWN',), 12)
         shot('07-title-series-episodes')
         # 09-13 an episode's streams → the add-on's row → the player
-        ep = enter_on(EPISODE[:2], ('DOWN', 'RIGHT'), 6, wait=14)
+        ep = tap_any(EPISODE[:1], True, 14) or tap_any(EPISODE[1:2], False, 14) if PHONE else \
+            seek(EPISODE[:2], ('DOWN', 'RIGHT'), 6, enter=True)
         if ep:
+            time.sleep(6 if PHONE else 10)
             on_screen(['Test stream'], tries=6)
             shot('09-streams')
-            if enter_on(['Test stream'], ('DOWN', 'RIGHT', 'UP'), 10, wait=18):
+            got = phone_scroll_tap(['Test stream'], False, 2, 18) if PHONE else \
+                seek(['Test stream'], ('DOWN', 'RIGHT', 'UP', 'LEFT'), 10, enter=True)
+            if got:
+                time.sleep(4 if PHONE else 10)
                 shot('x-player-first')
-                if PHONE: tap_xy(W // 2, H // 2 - 200, wait=1.2)
+                sw, shh = screen()
+                if PHONE: tap_xy(sw // 2, shh // 2 - (200 if shh > sw else 0), wait=1.2)
                 else: key('DPAD_CENTER' if APP == 'nebula' else 'DPAD_DOWN', wait=1.2)
                 shot('10-player')
                 key('MEDIA_PAUSE', wait=6)
                 ns = shot('11-player-paused')
-                c = find_any(L['tracks'], True, ns=ns)[0]
-                if not c:
-                    if PHONE: tap_xy(W // 2, H // 2 - 200, wait=1.5)
+                if not find_any(L['tracks'], True, ns=ns)[0]:
+                    if PHONE: tap_xy(sw // 2, shh // 2 - (200 if shh > sw else 0), wait=1.5)
                     else: key('DPAD_DOWN', wait=1.5)
-                if enter_on(L['tracks'], ('DOWN', 'RIGHT', 'LEFT', 'UP'), 8, exact=True, wait=3):
-                    shot('12-player-subtitles-audio'); key('BACK', wait=2)
-                else:
-                    missing('12-player-subtitles-audio', 'no subtitles/audio control found')
+                if PHONE: c = tap_any(L['tracks'], True, 3) or tap_any(['subtitle', 'audio', 'track'], False, 3, maxlen=30)
+                else: c = seek(L['tracks'], ('DOWN', 'RIGHT', 'LEFT', 'UP'), 8, exact=True, enter=True)
+                if c: time.sleep(2); shot('12-player-subtitles-audio'); key('BACK', wait=2)
+                else: missing('12-player-subtitles-audio', 'no subtitles/audio control found')
                 if PHONE:
                     sh('settings', 'put', 'system', 'user_rotation', '1'); time.sleep(4)
                     tap_xy(1200, 540, wait=1.5)
                     shot('13-player-landscape')
                     sh('settings', 'put', 'system', 'user_rotation', '0'); time.sleep(3)
+                key('BACK', 2, wait=2)
             else:
                 missing('10-player', 'no Test stream row to open')
         else:
@@ -447,27 +541,32 @@ if nav('search'):
 else:
     missing('04-search-idle', 'search not found')
 
-# 08 a well-known film from Home: the first card of the first movie row
+# 08 a well-known film from Home: The End of Oak Street (the first of Cinemeta's popular movies today), else the first
+# card of the first movie row
 key('BACK', 3, wait=1.5)
 to_home(); time.sleep(4)
+FILM = ['The End of Oak Street']
 if PHONE:
     xy = None
     for i in range(3):
         ns = nodes()
-        c, hxy = find_any(L['movierow'], ns=ns)
-        if hxy: xy = card_below(hxy[1], ns, 700)
+        c, xy = find_any(FILM, True, ns=ns)
+        if xy and xy[1] < 600: xy = None   # the hero's title is not a card
+        if not xy:
+            c, hxy = find_any(L['movierow'], ns=ns)
+            if hxy: xy = card_below(hxy[1], ns, 700)
         if xy: break
         swipe_up()
-    if not xy: xy = card_below(H // 2, nodes())
-    if xy: tap_xy(*xy, wait=10)
-    shot('08-title-movie') if xy else missing('08-title-movie', 'no movie card')
+    if xy: tap_xy(*xy, wait=10); shot('08-title-movie')
+    else: missing('08-title-movie', 'no movie card')
 else:
-    key('DPAD_RIGHT', wait=1.5); key('DPAD_DOWN', wait=1.5)
-    say('home first row focus: %s' % focus()[0][:120])
-    key('DPAD_CENTER', wait=10)
-    shot('08-title-movie')
+    key('DPAD_RIGHT', wait=1.5)
+    if seek(FILM, ('DOWN', 'RIGHT'), 7, enter=True): time.sleep(6); shot('08-title-movie')
+    else:
+        say('home: the film not reached, taking the focused card'); key('DPAD_CENTER', wait=10); shot('08-title-movie')
 
 # 14-15 Library / Continue Watching
+key('BACK', 2, wait=1.5)
 to_home()
 if nav('library'): time.sleep(3); shot('14-library')
 else: missing('14-library', 'library not found')
@@ -487,17 +586,18 @@ else: missing('15-continue-watching', 'no Continue Watching on Home or in Librar
 to_home()
 if nav('settings'):
     time.sleep(3); shot('16-settings')
-    if enter_on(L['playback'], ('DOWN', 'RIGHT'), 10, exact=True, wait=4): shot('17-settings-playback'); key('BACK', wait=2)
-    elif PHONE and (swipe_up() or enter_on(L['playback'], exact=True, wait=4)): shot('17-settings-playback'); key('BACK', wait=2)
+    got = phone_scroll_tap(L['playback'], True, 3) if PHONE else tv_settings(L['playback'])
+    if got: time.sleep(2); shot('17-settings-playback'); key('BACK', wait=2)
     else: missing('17-settings-playback', 'no playback entry')
 else:
     missing('16-settings', 'settings not found')
 to_home()
 if nav('profile'): time.sleep(3); shot('19-profile-account')
-elif nav('settings') and enter_on(L['account'], ('DOWN', 'RIGHT'), 10, exact=True, wait=4): shot('19-profile-account')
+elif nav('settings') and (phone_scroll_tap(L['account'], True, 3) if PHONE else tv_settings(L['account'], enter=False)):
+    time.sleep(2); shot('19-profile-account')
 else: missing('19-profile-account', 'no profile/account screen found')
 
-# every other destination the nav offers (for "what else does it have")
+# what else each app has: every nav destination (phone), every settings category (TV)
 to_home()
 if PHONE:
     ns = nodes()
@@ -505,11 +605,10 @@ if PHONE:
     for i, (x, t) in enumerate(navs):
         c, xy = find_any([t], True, (H * 0.82, H))
         if xy: tap_xy(*xy, wait=5); shot('x-nav-%d-%s' % (i, re.sub(r'\W+', '_', t)[:20]))
-else:
-    for _ in range(6): key('DPAD_LEFT', wait=0.6)
-    shot('x-nav-open')
-    seek(['<never>'], ('UP', 'DOWN'), 8)
+elif APP == 'nuvio' and nav('settings'):
+    for cat in ['Profiles', 'Appearance', 'Layout', 'Content & Discovery', 'Integrations', 'Tracking', 'About', 'Advanced']:
+        if tv_settings([cat], enter=False): shot('x-settings-' + re.sub(r'\W+', '_', cat))
 
 logcat.terminate()
 say('crashes: %s' % [l for l in open(os.path.join(OUT, 'logcat.txt'), errors='replace') if 'FATAL EXCEPTION' in l][:3])
-say('done')
+say('done in %d s' % (time.time() - T0))
