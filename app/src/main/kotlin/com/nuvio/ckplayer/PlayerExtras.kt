@@ -245,3 +245,28 @@ internal fun subLangKey(code: String?): String {
         .filter { c.startsWith(it.second.lowercase(Locale.ROOT)) }.maxByOrNull { it.second.length }
     return named?.first ?: main
 }
+
+/** The pause board's next-episode pill: "Up next · S1 E2 · Work Drinks", spaced as every other episode label
+    ("S1 E1 · …") — it read "S1E2". An episode with no number reads "Up next · S1", one with no name ends there. */
+internal fun upNextLabel(season: Int, episode: Int?, name: String): String =
+    "Up next · S$season" + (episode?.let { " E$it" } ?: "") + (if (name.isNotEmpty()) " · $name" else "")
+
+/** How wide the pause board is: the whole width ([full]), or 62 % of it capped at [capDp] when that is not null. */
+internal data class BoardWidth(val full: Boolean, val capDp: Int?)
+
+/**
+ * The pause board's width, which keeps it off the transport (android-phone-6, android-tv-23). The board sits top-left
+ * under the Back circle; the −10 / play / +10 circles sit in the middle of the screen, the −10's left edge 130 dp left
+ * of the centre.
+ * - Under 600 dp wide (a phone held upright) it takes the whole width — the caller keeps 20 dp at either side — so its
+ *   pills sit on one or two lines well ABOVE the transport. At 62 % a 411 dp phone stacked one pill per line and the
+ *   Up next pill ran into the play circle.
+ * - Wider, where the board and the controls show together, it ends left of the −10 circle: half the width less 160 dp
+ *   (320 dp on a 960 dp television, ending at 680 px against the circle's 700), which is always 10 dp clear.
+ * - A short screen (under 480 dp tall: a phone on its side) hides the board while the controls show, so it keeps 62 %.
+ */
+internal fun pauseBoardWidth(widthDp: Int, heightDp: Int): BoardWidth = when {
+    widthDp < 600 -> BoardWidth(full = true, capDp = null)
+    heightDp < 480 -> BoardWidth(full = false, capDp = null)
+    else -> BoardWidth(full = false, capDp = widthDp / 2 - 160)
+}

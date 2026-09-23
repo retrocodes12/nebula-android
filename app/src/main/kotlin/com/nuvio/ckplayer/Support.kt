@@ -244,6 +244,7 @@ internal fun SettingsSupportScreen(onBack: () -> Unit, onProfile: () -> Unit) {
             .padding(horizontal = 20.dp).padding(top = 20.dp, bottom = 110.dp),
     ) {
         BackBar("Support Nebula", null, onBack)
+        LandOnFirstControl()
         Text(
             "Nebula is free, with no ads and no account required. If it earns a place in your evenings, you can chip in.",
             color = MutedC, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(bottom = 16.dp),

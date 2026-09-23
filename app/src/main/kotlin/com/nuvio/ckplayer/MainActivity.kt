@@ -188,6 +188,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -1579,8 +1580,10 @@ internal fun FocusCard(
  * into a phone counts, hence the input-mode arm beside the television one.
  */
 @Composable
-internal fun tvFirstFocus(ready: Boolean = true, key: Any? = Unit): FocusRequester {
-    val req = remember { FocusRequester() }
+internal fun tvFirstFocus(ready: Boolean = true, key: Any? = Unit, target: FocusRequester? = null): FocusRequester {
+    // [target]: claim a requester that lives elsewhere (a screen's landing slot, [LandOnFirstControl])
+    val own = remember { FocusRequester() }
+    val req = target ?: own
     val ctx = LocalContext.current
     val tv = remember(ctx) { Account.isTv(ctx) }
     val keys = LocalInputModeManager.current.inputMode == InputMode.Keyboard
@@ -1610,6 +1613,20 @@ internal fun tvFirstFocus(ready: Boolean = true, key: Any? = Unit): FocusRequest
         }
     }
     return req
+}
+
+/**
+ * A Settings page lands the remote on its first control, not on its Back circle (android-tv-29). A page that opens
+ * gets focus seeded on its top-left control — the Back circle — and a lit Back made [LandingFallback] read the page as
+ * landed and stand down, so Settings › Playback opened with only Back focused and OK left the page. The page's
+ * [LandingSlot] already holds its first control (the first registrant in composition order; Back never registers —
+ * a settings row, the chosen chip of a strip, a swatch), so this claims that the way [tvFirstFocus] claims its own:
+ * once per visit, never after a press, never over Back's hand-back to the row the viewer left.
+ */
+@Composable
+internal fun LandOnFirstControl() {
+    val slot = LocalLandingSlot.current ?: return
+    tvFirstFocus(target = slot.req)
 }
 
 /**
@@ -1850,7 +1867,9 @@ internal fun BackBar(title: String, sub: String?, onBack: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        FocusCard(shape = RoundedCornerShape(50), onClick = onBack, landing = false) {
+        // zoom = false is FocusCard's white-ring path: grown with an invisible shadow over black, a focused Back read as
+        // nothing lit at all (android-tv-29)
+        FocusCard(shape = RoundedCornerShape(50), onClick = onBack, landing = false, zoom = false) {
             Box(
                 Modifier.size(42.dp).background(Surface2, CircleShape),
                 contentAlignment = Alignment.Center,
@@ -1932,10 +1951,17 @@ internal fun MetaCard(
     // Wide cards everywhere (Settings › Home) turns every poster row into 16:9 art
     val wide = Prefs.landscapeRows || m.posterShape == "landscape"
     val shape = cardShape()
-    FocusCard(shape = shape, modifier = modifier, onClick = onClick, onLongClick = onLongClick) {
+    // under a remote the focused card wears a white ring around its ART (android-tv-5): the growth alone, with a shadow
+    // nobody sees on black, was all a sofa got. Drawn just outside the art, inside the Column's 2 dp padding, so
+    // FocusCard's clip keeps it whole; the labels stay outside it, as on the web TV
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val ring = focused && remoteMode()
+    FocusCard(shape = shape, modifier = modifier, onClick = onClick, onLongClick = onLongClick, interactionSource = interaction) {
         Column(Modifier.padding(2.dp)) {
             Box(
                 Modifier.fillMaxWidth().aspectRatio(if (wide) 16f / 9f else thumbRatio(m.posterShape))
+                    .outerRing(ring, shape, width = 2.dp, gap = 0.dp)
                     .clip(shape)
                     .background(SurfaceC)
                     .border(1.dp, Color(0x0FFFFFFF), shape),
@@ -2005,12 +2031,17 @@ internal fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick
         ContinuePosterCard(r, title, tag, left, modifier, onClick, onLongClick)
         return
     }
-    FocusCard(shape = shape, modifier = modifier, onClick = onClick, onLongClick = onLongClick) {
+    // the remote's white ring (android-tv-5, as MetaCard's): here the art IS the card, edge to edge, so a ring outside
+    // it would fall under FocusCard's clip — it is the art's own hairline turned white and 2 dp, drawn over the picture
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val ring = focused && remoteMode()
+    FocusCard(shape = shape, modifier = modifier, onClick = onClick, onLongClick = onLongClick, interactionSource = interaction) {
         Box(
             Modifier.fillMaxWidth().aspectRatio(16f / 9f)
                 .clip(shape)
                 .background(SurfaceC)
-                .border(1.dp, Color(0x14FFFFFF), shape),
+                .border(if (ring) 2.dp else 1.dp, if (ring) Color.White else Color(0x14FFFFFF), shape),
         ) {
             if (r.poster != null) {
                 AsyncImage(
@@ -2071,9 +2102,14 @@ private fun ContinuePosterCard(
     modifier: Modifier, onClick: () -> Unit, onLongClick: () -> Unit,
 ) {
     val shape = cardShape()
-    FocusCard(shape = shape, modifier = modifier, onClick = onClick, onLongClick = onLongClick) {
+    // the remote's white ring around the art, as MetaCard's (android-tv-5)
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val ring = focused && remoteMode()
+    FocusCard(shape = shape, modifier = modifier, onClick = onClick, onLongClick = onLongClick, interactionSource = interaction) {
         Column(Modifier.padding(2.dp)) {
-            Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).clip(shape).background(SurfaceC).border(1.dp, Color(0x0FFFFFFF), shape)) {
+            Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).outerRing(ring, shape, width = 2.dp, gap = 0.dp)
+                .clip(shape).background(SurfaceC).border(1.dp, Color(0x0FFFFFFF), shape)) {
                 if (r.poster != null) AsyncImage(
                     model = r.poster, contentDescription = r.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
                 ) else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -2980,8 +3016,13 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit, de
     if (picks.isEmpty()) return
     var idx by remember(picks) { mutableStateOf(0) }
     val every = Prefs.heroInterval
-    LaunchedEffect(picks, every) {
-        if (every <= 0) return@LaunchedEffect                  // Featured changes every · Off
+    // View Details' focus, read up here so the carousel can hold still under it (below, the button wears it)
+    val heroBtn = remember { MutableInteractionSource() }
+    val heroFocused by heroBtn.collectIsFocusedAsState()
+    // never flips under a lit View Details (android-tv-2: with no key pressed the hero moved on, so OK opened a title
+    // the viewer was not reading — the web already skips its ticks under focus); focus leaving restarts the full wait
+    LaunchedEffect(picks, every, heroFocused) {
+        if (!heroAdvances(every, heroFocused)) return@LaunchedEffect   // Featured changes every · Off, or held
         while (true) { delay(every * 1000L); idx = (idx + 1) % picks.size }
     }
     val (from, m) = picks[idx]
@@ -3043,9 +3084,7 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit, de
             )
             // one white pill; My List lives on the title page
             // a white pill cannot wear a white focus ring, so it grows the way a card does —
-            // the remote's landing spot on Home has to be unmistakable from the couch
-            val heroBtn = remember { MutableInteractionSource() }
-            val heroFocused by heroBtn.collectIsFocusedAsState()
+            // the remote's landing spot on Home has to be unmistakable from the couch (heroBtn/heroFocused: above)
             Button(
                 onClick = { onOpen(from, m) },
                 interactionSource = heroBtn,
@@ -3073,6 +3112,10 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit, de
         }
     }
 }
+
+/** Does the Featured carousel move on by itself? Not when "Featured changes every" is Off ([everySecs] ≤ 0), and not
+    while View Details holds focus — the hero must still describe what OK will open. */
+internal fun heroAdvances(everySecs: Int, detailsFocused: Boolean): Boolean = everySecs > 0 && !detailsFocused
 
 // ---------- home (content rows, Stremio-style) ----------
 @Composable
@@ -3422,6 +3465,9 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
     val typing = tvTyping()
     val tvBox = remember(ctx) { Account.isTv(ctx) }
     val clearable = st.query.isNotEmpty() || st.submitted.isNotEmpty()
+    val keyboard = LocalSoftwareKeyboardController.current
+    // the first card of the first result row: where Down from the field goes once typing is over (android-tv-12)
+    val firstResult = remember { FocusRequester() }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
         Text("Search", color = TextC, fontSize = 34.sp, fontFamily = Sans, fontWeight = FontWeight.Bold, letterSpacing = (-1).sp, modifier = Modifier.padding(bottom = 12.dp))
         Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -3445,6 +3491,11 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
             keyboardActions = KeyboardActions(onSearch = {
                 st.submitted = st.query.trim()
                 RecentSearches.note(ctx, st.submitted)
+                // Search ends the typing (android-tv-12): the keyboard stayed over the results — five of twenty on a
+                // TV, and Down went into it — and the field stayed writable. On a phone too: the results are what the
+                // key asked for. Nothing is focused for the viewer: the add-ons are still answering.
+                keyboard?.hide()
+                typing.done()
             }),
             shape = RoundedCornerShape(12.dp),
             colors = OutlinedTextFieldDefaults.colors(
@@ -3454,7 +3505,13 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
             // the remote lands on the box the screen exists for; Down from it reaches Discover
             modifier = typing.modifier.weight(1f)
                 .returnTo("search-field")
-                .focusRequester(tvFirstFocus()),
+                .focusRequester(tvFirstFocus())
+                // a TV not typing: Down goes to result 1 — the focus search picked whichever card sat under the middle
+                // of this wide field. No results (Discover below), or result 1 not composed: the usual walk.
+                .onPreviewKeyEvent { e ->
+                    if (!typing.readOnly || e.key != Key.DirectionDown || e.type != KeyEventType.KeyDown || st.sections.isEmpty()) false
+                    else runCatching { firstResult.requestFocus() }.getOrDefault(false)
+                },
         )
         if (clearable && tvBox) IconButton(
             onClick = { st.query = ""; st.submitted = "" },
@@ -3481,6 +3538,7 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
                 )
             }
             else -> LazyColumn(state = st.listState, contentPadding = PaddingValues(bottom = navPadBottom())) {
+                val lead = st.sections.firstOrNull()
                 items(st.sections, key = { it.addon.manifestUrl + "/" + it.catalog.id }) { r ->
                     Column {
                         RowHeader(r.addon.name, "${r.items.size} result" + (if (r.items.size > 1) "s" else ""), null)
@@ -3488,8 +3546,10 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
                             state = st.rowStates.getOrPut(r.addon.manifestUrl + "/" + r.catalog.id) { LazyListState() },
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            items(r.items) { m ->
-                                MetaCard(m, Modifier.returnTo("s/${r.addon.manifestUrl}/${m.type}:${m.id}").width(rowCardWidth(m))) {
+                            itemsIndexed(r.items) { i, m ->
+                                val first = i == 0 && r === lead
+                                MetaCard(m, Modifier.returnTo("s/${r.addon.manifestUrl}/${m.type}:${m.id}").width(rowCardWidth(m))
+                                    .then(if (first) Modifier.focusRequester(firstResult) else Modifier)) {
                                     // a result opened straight from the as-you-type list counts as a search worth keeping
                                     RecentSearches.note(ctx, st.submitted)
                                     onOpen(r.addon, m)
@@ -3989,6 +4049,7 @@ private fun SettingsScreen(
 private fun SettingsSubtitlesScreen(onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().padding(20.dp)) {
         BackBar("Subtitle style", null, onBack)
+        LandOnFirstControl()
         Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.TopCenter) {
             SubStylePanel(onDone = onBack)
         }
@@ -4106,6 +4167,7 @@ private fun SettingsLayoutScreen(onBack: () -> Unit, onSupport: () -> Unit) {
             .padding(horizontal = 20.dp).padding(top = 20.dp, bottom = 110.dp),
     ) {
         BackBar("Appearance", null, onBack)
+        LandOnFirstControl()
         SettingsHeader("ACCENT", "The one colour across the app")
         SettingsGroup {
             // swatch grid: three per row, tick on the current one
@@ -4245,6 +4307,7 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
             .padding(horizontal = 20.dp).padding(top = 20.dp, bottom = 110.dp),
     ) {
         BackBar("Playback", null, onBack)
+        LandOnFirstControl()
         SettingsHeader("PLAYER", if (all) "Gestures, speed, the controls, picture quality and the buffer" else "Picture quality and the buffer")
         SettingsGroup {
             // Essential keeps Picture quality alone here; every other row is an Everything row (the brief's E marks)
@@ -4411,7 +4474,9 @@ private fun PartyPanel(onJoin: (String) -> Unit) {
                     capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Characters,
                 ),
                 keyboardActions = KeyboardActions(onDone = { onJoin(partyCode) }),
-                modifier = typing.modifier.weight(1f),
+                // the page's first control is where a remote lands, not its Back circle (android-tv-29); read-only
+                // until OK on a TV (tvTyping), so landing here does not throw the keyboard up
+                modifier = typing.modifier.weight(1f).focusRequester(tvFirstFocus()),
                 shape = RoundedCornerShape(12.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Color.White,
@@ -4666,10 +4731,17 @@ private fun DetailScreen(
                 contentPadding = PaddingValues(start = 20.dp, end = 26.dp),
                 // the remote's landing spot on a title page, and a white pill cannot wear a
                 // white focus ring — it grows the way a card does instead
+                // it grows from its LEFT edge: the row scrolls sideways and so clips there, and grown about its centre
+                // the pill's rounded start was cut flat on the first thing every title page focuses (android-tv-14);
+                // this way it grows into the 10 dp gap on its right
                 modifier = Modifier.height(48.dp)
                     .returnTo("play")
                     .focusRequester(tvFirstFocus())
-                    .scale(if (playFocused && !Prefs.reducedMotion) 1.06f else 1f),
+                    .graphicsLayer {
+                        val s = if (playFocused && !Prefs.reducedMotion) 1.06f else 1f
+                        scaleX = s; scaleY = s
+                        transformOrigin = TransformOrigin(0f, 0.5f)
+                    },
             ) {
                 Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
                 Text(
@@ -7130,10 +7202,7 @@ private fun PlayerScreen(
                     meta += "Ends " + clockAt(context, System.currentTimeMillis() + (remain / exo.playbackParameters.speed.coerceAtLeast(0.1f)).toLong()) to false
                 }
             }
-            nextEpisode?.let { n ->
-                meta += ("Up next · S${n.season}" + (n.episode?.let { "E$it" } ?: "") +
-                    (if (n.name.isNotEmpty()) " · ${n.name}" else "")) to true
-            }
+            nextEpisode?.let { n -> meta += upNextLabel(n.season, n.episode, n.name) to true }
             PauseBoard(
                 visible = boardUp,
                 kicker = (if (sleepFired) "Sleep timer · " else "") +
@@ -7142,7 +7211,8 @@ private fun PlayerScreen(
                 sub = episodeTag,
                 desc = currentEpisode?.overview?.takeIf { it.isNotBlank() } ?: description,
                 meta = meta,
-                modifier = Modifier.align(Alignment.TopStart).padding(start = 20.dp, top = 84.dp),
+                // end: a phone's board takes the whole width (pauseBoardWidth) and keeps the same margin at both sides
+                modifier = Modifier.align(Alignment.TopStart).padding(start = 20.dp, top = 84.dp, end = 20.dp),
             )
             if (pinfoOn) PlaybackInfoHud(infoRows, Modifier.align(Alignment.TopEnd).padding(end = 20.dp, top = 76.dp))
         }
