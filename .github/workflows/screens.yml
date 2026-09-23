@@ -32,6 +32,12 @@ jobs:
             target: google_apis
             profile: pixel_6
             arch: x86_64
+          # the same gate on Android 9, before build.yml runs it there too
+          - name: gate28
+            api: 28
+            target: google_apis
+            profile: pixel_3
+            arch: x86_64
           - name: tv
             api: 34
             target: android-tv

@@ -6,7 +6,7 @@ import os, re, subprocess, sys, time
 import xml.etree.ElementTree as ET
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else 'phone'
-if MODE == 'gate':
+if MODE.startswith('gate'):
     import glob
     apk0 = sorted(glob.glob('app/build/outputs/apk/release/*.apk'))[0]
     sys.exit(subprocess.run([sys.executable, 'scripts/launch-gate.py', apk0]).returncode)
@@ -167,7 +167,7 @@ expect('Home is up (a catalogue row and the nav)', on_screen('See all', 'Home'),
 
 if PHONE:
     # a stream add-on served by the runner (scripts/rig-addon.py): the walk plays a REAL stream row, not only a deep link
-    if tap('Settings', exact=True) and tap('Add-ons', wait=4):
+    if tap('Settings', exact=True) and tap('Add-ons', exact=True, wait=4):   # exact: the profile card's text says "add-ons" too
         field = find_class('android.widget.EditText')
         if field: adb('shell', 'input', 'tap', str(field[0]), str(field[1])); time.sleep(2)
         else: failures.append('control not found: the add-on address field')
