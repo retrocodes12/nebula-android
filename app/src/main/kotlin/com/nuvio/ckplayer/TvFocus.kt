@@ -212,7 +212,12 @@ internal fun rememberKeptGrid(key: String): LazyGridState {
  * field turns writable while focused), and read-only again once focus leaves; Compose's own D-pad handling still
  * walks focus out of a field. A phone is untouched.
  */
-internal class TvTyping(val readOnly: Boolean, val modifier: Modifier)
+internal class TvTyping(val readOnly: Boolean, val modifier: Modifier, private val end: () -> Unit = {}) {
+    /** The keyboard's own Search/Done was pressed: typing is over, the field is read-only again (Compose ends the input
+        session and the keyboard goes) while focus stays on it, so the D-pad walks out of it — Down to the results. OK
+        types again. A phone has nothing to end (its field is always writable; the caller hides the keyboard). */
+    fun done() = end()
+}
 
 /** A form's Next (the keyboard's own key) carries typing into the next field — it is the keyboard moving on, not the
     remote walking past, so that field opens writable and the keyboard stays up. */
@@ -253,6 +258,7 @@ internal fun tvTyping(): TvTyping {
     if (!tv) return TvTyping(false, Modifier.notesTextFocus())
     return TvTyping(
         readOnly = !editing,
+        end = { editing = false },
         modifier = Modifier
             .notesTextFocus()
             .onFocusChanged {

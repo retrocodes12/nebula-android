@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -65,6 +66,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -277,8 +279,15 @@ internal fun PauseBoard(
     meta: List<Pair<String, Boolean>>,   // text, isNext
     modifier: Modifier = Modifier,
 ) {
+    // kept off the transport (pauseBoardWidth, PlayerExtras.kt): the whole width on a phone held upright, else 62 %
+    // ending left of the −10 circle
+    val cfg = LocalConfiguration.current
+    val w = pauseBoardWidth(cfg.screenWidthDp, cfg.screenHeightDp)
     AnimatedVisibility(visible, enter = fadeIn(), exit = fadeOut(), modifier = modifier) {
-        Column(Modifier.fillMaxWidth(0.62f)) {
+        Column(
+            (if (w.full) Modifier.fillMaxWidth() else Modifier.fillMaxWidth(0.62f))
+                .then(if (w.capDp != null) Modifier.widthIn(max = w.capDp.dp) else Modifier),
+        ) {
             Text(kicker, color = DimInk, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.4.sp)
             Text(
                 title, color = Ink, fontSize = 30.sp, fontWeight = FontWeight.SemiBold, lineHeight = 34.sp,

@@ -92,6 +92,7 @@ internal fun SettingsHomeScreen(onBack: () -> Unit, onRows: () -> Unit) {
             .padding(horizontal = 20.dp).padding(top = 20.dp, bottom = 110.dp),
     ) {
         BackBar("Home", null, onBack)
+        LandOnFirstControl()
         SettingsHeader("FEATURED", "The full-bleed showcase at the top of Home")
         SettingsGroup {
             SettingsToggle("Featured carousel", "The full-bleed showcase at the top of Home", Prefs.showHero, divider = all) { Prefs.setShowHero(ctx, it) }
@@ -156,6 +157,7 @@ internal fun SettingsStreamsScreen(onBack: () -> Unit) {
             .padding(horizontal = 20.dp).padding(top = 20.dp, bottom = 110.dp),
     ) {
         BackBar("Streams", null, onBack)
+        LandOnFirstControl()
         SettingsHeader("P2P", "Torrents, played on this device")
         SettingsGroup {
             if (!P2p.available) SettingsRow(
@@ -250,6 +252,7 @@ internal fun SettingsAdvancedScreen(onBack: () -> Unit, onClearCache: () -> Unit
             .padding(horizontal = 20.dp).padding(top = 20.dp, bottom = 110.dp),
     ) {
         BackBar("Advanced", null, onBack)
+        LandOnFirstControl()
         SettingsHeader("START", "What happens when Nebula opens")
         SettingsGroup {
             SettingsToggle(
