@@ -94,9 +94,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.79.2.apk
+          cp "$APK" Nebula-1.80.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.79.2 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.79.2 Nebula-1.79.2.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.79.2" \
-            --notes "On a TV the remote always shows where it is: a white ring around the poster or card you are on, on the Back button, and on the Play button of a title page, and a settings page lands on its first control. The Home banner holds still while you are on it. Search hides the keyboard when you submit, so one press down reaches the first result. The pause screen no longer covers the playback controls, and its Up next line names the episode."
+          gh release delete v1.80.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.80.0 Nebula-1.80.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.80.0" \
+            --notes "Title pages have a Universe row: what a film or show follows, what follows it, its spin-offs and what it spun off from, and its remakes, each card labelled with how it is connected. Open one to see its page; Back brings you to the title you came from."
