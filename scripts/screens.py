@@ -172,9 +172,10 @@ if PHONE:
         if field: adb('shell', 'input', 'tap', str(field[0]), str(field[1])); time.sleep(2)
         else: failures.append('control not found: the add-on address field')
         if field:
-            adb('shell', 'input', 'text', "'http://10.0.2.2:8799/manifest.json'"); time.sleep(1)
-            key('KEYCODE_BACK', wait=1)                                     # the keyboard down
-            tap('Add add-on', exact=True, wait=6)
+            adb('shell', 'input', 'text', "'http://10.0.2.2:8799/manifest.json'"); time.sleep(1.5)
+            # the button sits beside the field, above the keyboard (Back here could leave the page); Enter as a fallback
+            if not tap('Add add-on', exact=True, wait=6, must=False):
+                key('KEYCODE_ENTER', wait=6)
             shot('01b-addons')
             expect('the runner\'s stream add-on is added', on_screen('Gate Streams'))
     key('KEYCODE_BACK', 2, wait=1.5); front()
