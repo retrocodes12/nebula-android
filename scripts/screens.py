@@ -20,12 +20,36 @@ failures = []
 TEST_STREAM = 'https://storage.googleapis.com/shaka-demo-assets/angel-one/dash.mpd'
 
 
-def adb(*a, timeout=120):
+_lost = []      # set once the emulator stayed offline through a reconnect: no more waiting after that
+
+
+def recover():
+    """the x86 TV emulator drops off adb now and then ("device offline", every later call failing): reconnect and wait
+    up to a minute for it, so a short drop costs one step instead of the rest of the walk"""
+    if _lost: return False
+    say('adb: the emulator is offline — reconnecting')
+    t0 = time.time()
+    for _ in range(12):
+        try:
+            subprocess.run(['adb', 'reconnect', 'offline'], capture_output=True, timeout=30)
+            time.sleep(5)
+            if subprocess.run(['adb', 'get-state'], capture_output=True, timeout=30).stdout.strip() == b'device':
+                say('adb: back after %d s' % (time.time() - t0)); time.sleep(3); return True
+        except subprocess.TimeoutExpired:
+            pass
+    say('adb: still offline after %d s — the emulator is gone for this run' % (time.time() - t0))
+    _lost.append(True); return False
+
+
+def adb(*a, timeout=120, again=True):
     try:
-        return subprocess.run(['adb'] + list(a), capture_output=True, timeout=timeout)
+        r = subprocess.run(['adb'] + list(a), capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         say('adb timed out: ' + ' '.join(a[:3]))
-        return subprocess.CompletedProcess(a, 1, b'', b'')
+        r = subprocess.CompletedProcess(a, 1, b'', b'device offline (timed out)')
+    if again and r.returncode != 0 and re.search(rb'device offline|no devices/emulators|device .* not found', r.stderr or b''):
+        if recover(): return adb(*a, timeout=timeout, again=False)
+    return r
 
 
 def sh(*a):
