@@ -38,11 +38,13 @@ jobs:
             target: google_apis
             profile: pixel_3
             arch: x86_64
+          # a 32-bit guest: 2 GB (it died silently, the emulator process gone, in four of five attempts at 3 GB)
           - name: tv
             api: 34
             target: android-tv
             profile: tv_1080p
             arch: x86
+            ram: 2048M
     steps:
       - uses: actions/checkout@v4
       - name: Set up JDK 17
@@ -56,6 +58,11 @@ jobs:
           gradle-version: '8.11.1'
       - name: Assemble release (debug-signed without the keystore) and debug
         run: gradle assembleRelease assembleDebug --no-daemon -PemulatorAbis
+      - name: Free the build's memory for the emulator (Gradle and the Kotlin compile daemon outlive --no-daemon builds)
+        run: |
+          gradle --stop || true
+          pkill -f '[K]otlinCompileDaemon' || true
+          free -m
       - name: The runner's stream add-on (the emulator reaches it at 10.0.2.2:8799)
         run: nohup python3 scripts/rig-addon.py > /dev/null 2>&1 &
       - name: Enable KVM
@@ -71,10 +78,18 @@ jobs:
           arch: ${{ matrix.arch }}
           profile: ${{ matrix.profile }}
           disable-animations: true
-          ram-size: 3072M
+          ram-size: ${{ matrix.ram || '3072M' }}
           heap-size: 512M
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: python3 scripts/screens.py ${{ matrix.name }}
+      - name: Why the emulator died, when a job fails (the kernel's kills, memory, the emulator's own crash reports)
+        if: failure()
+        run: |
+          mkdir -p screens/diag
+          free -m > screens/diag/free.txt || true
+          sudo dmesg -T | grep -iE 'killed process|out of memory|oom|qemu|emulator' | tail -60 > screens/diag/dmesg.txt || true
+          cp /tmp/android-runner/emu-crash-* screens/diag/ 2>/dev/null || true
+          ls -la ~/.android/ /tmp/android-runner/ > screens/diag/ls.txt 2>&1 || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
