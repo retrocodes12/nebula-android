@@ -32,7 +32,7 @@ L = {
                   account=['Account', 'Profile', 'Profiles', 'Sign in', 'Login']),
 }[APP]
 PAST = ['Skip', 'Skip for now', 'Continue without account', 'Continue as guest', 'Continue as Guest', 'Use without account',
-        'Browse as guest', 'Not now', 'Maybe later', 'Later', 'No thanks', 'Get Started', 'Get started', "Let's go",
+        'Browse as guest', 'Essential', 'Not now', 'Maybe later', 'Later', 'No thanks', 'Get Started', 'Get started', "Let's go",
         'Start', 'Continue', 'Next', 'Done', 'Got it', 'OK', 'Ok', 'Accept', 'I agree', 'Agree', 'Allow', 'Close', 'Dismiss']
 EPISODE = ["Failure's Contagious", 'Episode 1', 'E1', 'S1:E1', 'S1 E1', '1. ']
 
@@ -88,7 +88,7 @@ def texts(ns=None):
 
 def hit(n, t, exact):
     parts = [p for p in ((n.get('text') or ''), (n.get('content-desc') or '')) if p]
-    return any(p == t for p in parts) if exact else any(t.lower() in p.lower() for p in parts)
+    return any(p.lower() == t.lower() for p in parts) if exact else any(t.lower() in p.lower() for p in parts)
 
 
 def shot(name):
@@ -129,8 +129,12 @@ def tap_any(cands, exact=False, wait=4, region=None, ns=None):
 
 
 def key(k, n=1, wait=0.8):
+    """a key press; on a TV the D-pad keys come from a D-pad (a remote), not a keyboard: a text field treats a
+    keyboard's arrows as its cursor keys and keeps the focus, a remote's arrows walk out of it"""
+    k = k if k.startswith('KEYCODE') else 'KEYCODE_' + k
+    src = ['dpad'] if not PHONE and 'DPAD' in k else []
     for _ in range(n):
-        adb('shell', 'input', 'keyevent', k if k.startswith('KEYCODE') else 'KEYCODE_' + k); time.sleep(wait)
+        adb('shell', 'input', *src, 'keyevent', k); time.sleep(wait)
 
 
 def on_screen(cands, tries=5, exact=False):
@@ -155,6 +159,14 @@ def edit_field(ns=None):
     return None
 
 
+def tv_type(t, submit=True):
+    """TV: the focus on a text field → OK (a TV field turns writable on OK) → the letters as key presses → Enter"""
+    if not seek(['<edit>'], ('UP', 'DOWN', 'RIGHT', 'LEFT'), 5): return False
+    key('DPAD_CENTER', wait=1.5); type_text(t); time.sleep(1.5)
+    if submit: key('ENTER', wait=3)
+    return True
+
+
 def type_text(t):
     for i in range(0, len(t), 6):
         adb('shell', 'input', 'text', "'" + t[i:i + 6].replace(' ', '%s') + "'"); time.sleep(0.4)
@@ -173,7 +185,9 @@ def card_below(y, ns=None, maxdy=900):
 
 
 def foreground():
-    return PKG in sh('dumpsys activity activities | grep -E "topResumedActivity|mResumedActivity" | head -3')
+    w = sh('dumpsys window | grep -E "mCurrentFocus|mFocusedApp"')
+    if PKG in w: return True
+    say('not in front: ' + w.replace('\n', ' ')[:300]); return False
 
 
 # ---- TV: focus is the cursor -------------------------------------------------------------------------------------
@@ -199,7 +213,7 @@ def fmatch(t, n, cands, exact=False):
             continue
         if edit: continue
         parts = [p.strip() for p in t.replace(' / ', ' | ').split(' | ')]
-        if (any(p == c for p in parts) if exact else c.lower() in t.lower()): return c
+        if (any(p.lower() == c.lower() for p in parts) if exact else c.lower() in t.lower()): return c
     return None
 
 
@@ -226,7 +240,8 @@ def tv_nav(cands):
     for _ in range(6):
         t, n = focus()
         if fmatch(t, n, cands, True) or (n is not None and box(n)[0] < 120): break
-        key('DPAD_LEFT', wait=0.7)
+        # a text field keeps the D-pad for its cursor: Back leaves it
+        key('BACK' if n is not None and n.get('class') == 'android.widget.EditText' else 'DPAD_LEFT', wait=0.7)
     return seek(cands, ('UP', 'DOWN', 'RIGHT', 'LEFT'), 7, exact=True, enter=True)
 
 
@@ -345,9 +360,9 @@ if nav('settings'):
             shot('x-addons-open-%d' % step)
         f = edit_field()
         if f is not None:
-            if PHONE: tap_xy(*mid(f), wait=2)
-            else: seek(['<edit>'], ('UP', 'DOWN', 'RIGHT'), 6)
-            type_text(ADDON); time.sleep(2)
+            if PHONE: tap_xy(*mid(f), wait=2); type_text(ADDON)
+            else: tv_type(ADDON, submit=True)
+            time.sleep(2)
             say('add-on field reads: %r' % ((edit_field() or ET.Element('x')).get('text')))
             for step in range(3):
                 if on_screen(['Gate Streams'], tries=1): break
@@ -368,12 +383,13 @@ to_home()
 if nav('search'):
     time.sleep(3); shot('04-search-idle')
     f = edit_field()
-    if f is not None and f.get('focused') != 'true':
-        if PHONE: tap_xy(*mid(f), wait=3)
-        else: seek(['<edit>'], ('UP', 'DOWN', 'RIGHT', 'LEFT'), 6)
-    f = edit_field()
     if f is None: say('search: no text field on screen')
-    type_text('slow horses'); time.sleep(10)
+    if PHONE:
+        if f is not None and f.get('focused') != 'true': tap_xy(*mid(f), wait=3)
+        type_text('slow horses')
+    else:
+        tv_type('slow horses')
+    time.sleep(10)
     say('search field reads: %r' % ((edit_field() or ET.Element('x')).get('text')))
     ns = shot('05-search-results')
     if PHONE:
@@ -383,7 +399,7 @@ if nav('search'):
         opened = bool(xy) and (tap_xy(*xy, wait=10) or True)
     else:
         key('DPAD_DOWN', wait=1)
-        opened = seek(['Slow Horses'], ('DOWN', 'RIGHT'), 6, enter=True)
+        opened = seek(['Slow Horses'], ('DOWN', 'RIGHT', 'UP'), 6, enter=True)
         time.sleep(6)
     if opened:
         shot('06-title-series')
@@ -446,7 +462,7 @@ if PHONE:
     if xy: tap_xy(*xy, wait=10)
     shot('08-title-movie') if xy else missing('08-title-movie', 'no movie card')
 else:
-    key('DPAD_DOWN', wait=1.5)
+    key('DPAD_RIGHT', wait=1.5); key('DPAD_DOWN', wait=1.5)
     say('home first row focus: %s' % focus()[0][:120])
     key('DPAD_CENTER', wait=10)
     shot('08-title-movie')
@@ -457,13 +473,14 @@ if nav('library'): time.sleep(3); shot('14-library')
 else: missing('14-library', 'library not found')
 cw = None
 to_home()
+if not PHONE: key('DPAD_RIGHT', wait=1.5)
 for i in range(4):
     c, xy = find_any(L['cw'][:1])
     if c: cw = 'home'; break
     if PHONE: swipe_up()
     else: key('DPAD_DOWN', wait=1.5)
 if cw: shot('15-continue-watching')
-elif nav('library') and enter_on(L['cw'], ('DOWN', 'RIGHT'), 5, exact=True, wait=4): shot('15-continue-watching')
+elif nav('library') and enter_on(L['cw'], ('RIGHT', 'DOWN', 'RIGHT'), 5, exact=True, wait=4): shot('15-continue-watching')
 else: missing('15-continue-watching', 'no Continue Watching on Home or in Library')
 
 # 16-17 Settings, 19 Profile
