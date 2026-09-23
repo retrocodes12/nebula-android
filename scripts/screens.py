@@ -129,6 +129,65 @@ def focused_x():
     return None
 
 
+def box(n):
+    return tuple(map(int, re.findall(r'-?\d+', n.get('bounds') or '[0,0][0,0]')))
+
+
+def lab(n):
+    return ' | '.join(p for p in ((n.get('text') or ''), (n.get('content-desc') or '')) if p)
+
+
+def focus(ns=None):
+    """(the labels of the focused node's own subtree, the node) — ('', None) when nothing is focused"""
+    ns = nodes() if ns is None else ns
+    f = [n for n in ns if n.get('focused') == 'true']
+    if not f: return '', None
+    n = f[-1]
+    return ' | '.join(lab(m) for m in n.iter('node') if lab(m)), n
+
+
+def fdesc(t, n):
+    return (t[:90] + ' @' + str(box(n))) if n is not None else '-'
+
+
+def walk_to(pred, k, steps=6):
+    """press k until the focused node satisfies pred(text, node); the (text, node), or None — logged step by step"""
+    for i in range(steps + 1):
+        t, n = focus()
+        if n is not None and pred(t, n):
+            say('  focus on ' + fdesc(t, n)); return t, n
+        say('  focus[%s%d] %s' % (k.replace('KEYCODE_DPAD_', ''), i, fdesc(t, n)))
+        if i < steps: key(k, wait=1.0)
+    return None
+
+
+def parts(t):
+    return [p.strip() for p in t.split(' | ')]
+
+
+def ime_shown():
+    """True/False from the input-method service's own dump, None when it does not say"""
+    out = sh('dumpsys', 'input_method')
+    vals = re.findall(r'mInputShown=(true|false)', out)
+    return (vals[-1] == 'true') if vals else None
+
+
+def board_clear(label):
+    """the pause board never overlaps the −10 / play / +10 circles (android-phone-6, android-tv-23): by the nodes'
+    bounds when both are readable, else it is judged by the shot"""
+    ns = nodes()
+    def rects(pred):
+        return [box(n) for n in ns if pred(n.get('text') or '', n.get('content-desc') or '')]
+    board = rects(lambda t, d: t == 'Paused' or t.startswith('Ends ') or t.endswith(' min left')
+                  or t == 'Under a minute left' or t.startswith('Up next'))
+    ctl = rects(lambda t, d: d == 'Play/Pause' or re.match(r'^(Back|Forward) \d+ seconds$', d) is not None)
+    say('%s: board %s · transport %s' % (label, board, ctl))
+    if not board or not ctl:
+        say(label + ': the board or the transport is not readable here — judged by the shot'); return
+    hit = [(b, c) for b in board for c in ctl if b[0] < c[2] and c[0] < b[2] and b[1] < c[3] and c[1] < b[3]]
+    expect(label + ': the pause board clears the transport', not hit, str(hit[:2]))
+
+
 def crashed():
     """the app's own crashes only (uiautomator, a system tool, crashes too and is not ours); an unreadable log is a
     failure too — "no crash" must be something the log said, not something it could not say"""
@@ -204,6 +263,7 @@ if PHONE:
     if tap('Search', exact=True):
         type_text('slow horses'); time.sleep(8)          # no keyboard to put down (switched off above): Back would leave
         say('search field reads: ' + repr(field_text()))
+        key('KEYCODE_ENTER', wait=3)                     # the keyboard's Search: it hides the keyboard now (android-tv-12)
         shot('03-search')
         # the result card, not the typed query: its title with its year beside it
         hit = find('Slow Horses', exact=True, near='2022-') or find('2022-', exact=True)
@@ -244,6 +304,7 @@ if PHONE:
     key('KEYCODE_MEDIA_PAUSE', wait=6)
     shot('08-paused')
     expect('paused: the pause board names what is playing', on_screen('Paused', 'Angel One', tries=3))
+    board_clear('phone paused')
     # on its side: the controls step aside after a moment and the board shows (1.79 fix)
     sh('settings', 'put', 'system', 'accelerometer_rotation', '0'); sh('settings', 'put', 'system', 'user_rotation', '1')
     time.sleep(3); adb('shell', 'input', 'tap', '1200', '540'); time.sleep(8)
@@ -268,10 +329,29 @@ if PHONE:
     key('KEYCODE_BACK', 2, wait=1.5); front()
     if tap('Home', exact=True, wait=6): shot('14-home-large-text')
 else:
+    # the Featured hero holds still while View Details has focus (android-tv-2): 25 s with no key (a slide lasts 10 s)
+    # and the same title must still be on it
+    def hero():
+        t = texts()
+        i = t.index('View Details') if 'View Details' in t else -1
+        return ' | '.join(t[max(0, i - 2):i]) if i > 0 else ''
+    f0, h0 = focus()[0], hero()
+    time.sleep(25)
+    f1, h1 = focus()[0], hero()
+    shot('01b-home-held')
+    expect('TV Home: the hero holds still under a lit View Details',
+           'View Details' in f0 and 'View Details' in f1 and bool(h0) and h0 == h1,
+           'before %r, after %r, focus %r / %r' % (h0[:60], h1[:60], f0[:30], f1[:30]))
     # a TV lands on View Details (the hero's button): OK opens that title page
     key('KEYCODE_DPAD_CENTER', wait=10)
     shot('02-title')
     expect('OK on View Details opens a title page', on_screen('Play', tries=4))
+    # the focused Play pill grows from its left edge, so the row's clip no longer cuts it (android-tv-14: it read x=26
+    # against the page's 32 px gutter)
+    t, n = focus()
+    say('title page focus: ' + fdesc(t, n))
+    expect('title page: the lit Play pill keeps its left edge in the page', n is not None and 'Play' in parts(t) and box(n)[0] >= 30,
+           fdesc(t, n))
     key('KEYCODE_DPAD_DOWN', 3); time.sleep(2)
     shot('03-title-lower')
     key('KEYCODE_BACK', wait=4)
@@ -283,6 +363,50 @@ else:
     shot('06-rail')
     fx = focused_x()
     expect('Left from a row reaches the rail', fx is not None and fx < 260, 'focused x=' + str(fx))
+
+    def on_rail(name):
+        return lambda t, n: box(n)[0] < 260 and name in parts(t)
+    # Settings › Playback (android-tv-29): the page lands on its first control, never on its Back circle (it opened
+    # with only Back lit, and OK left the page); Up reaches Back, which wears the white ring now
+    if walk_to(on_rail('Settings'), 'KEYCODE_DPAD_DOWN', 4):
+        key('KEYCODE_DPAD_CENTER', wait=4)
+        if walk_to(lambda t, n: 'Playback' in parts(t), 'KEYCODE_DPAD_DOWN', 8):
+            key('KEYCODE_DPAD_CENTER', wait=4)
+            shot('06b-settings-playback')
+            t, n = focus()
+            expect('Settings › Playback lands on its first control, not Back',
+                   n is not None and 'Back' not in parts(t) and box(n)[1] > 160, fdesc(t, n))
+            if walk_to(lambda t, n: 'Back' in parts(t), 'KEYCODE_DPAD_UP', 8):
+                shot('06c-playback-back-ring')
+            else:
+                say('Back never took focus on Settings › Playback')
+            key('KEYCODE_BACK', wait=3)
+        else:
+            failures.append('control not found: the Playback row in Settings')
+        # Search (android-tv-12): the field → OK types → the query → the keyboard's Search (Enter): the keyboard goes,
+        # and ONE Down lands on the first result
+        key('KEYCODE_DPAD_LEFT', wait=1.5)
+        if walk_to(on_rail('Search'), 'KEYCODE_DPAD_UP', 4):
+            key('KEYCODE_DPAD_CENTER', wait=5)
+            t, n = focus()
+            say('search: the remote lands on ' + fdesc(t, n) + (' (the field)' if n is not None and n.get('class') == 'android.widget.EditText' else ''))
+            key('KEYCODE_DPAD_CENTER', wait=2)
+            say('search: keyboard after OK: ' + str(ime_shown()))
+            type_text('slow horses'); time.sleep(2)
+            say('search field reads: ' + repr(field_text()))
+            key('KEYCODE_ENTER', wait=10)
+            ime = ime_shown()
+            shot('06d-search-submitted')
+            expect('TV search: the keyboard is down after Search', ime is not True, 'shown=' + str(ime))
+            key('KEYCODE_DPAD_DOWN', wait=2.5)
+            shot('06e-search-down')
+            t, n = focus()
+            expect('TV search: one Down lands on the first result',
+                   n is not None and n.get('class') != 'android.widget.EditText' and 'Slow Horses' in t, fdesc(t, n))
+        else:
+            failures.append('control not found: Search on the rail')
+    else:
+        failures.append('control not found: Settings on the rail')
     # the player on a TV, through the deep link: the remote's Pause brings the board
     sh('am', 'start', '-a', 'android.intent.action.VIEW', '-d', "'nebula://play?mpd=" + TEST_STREAM + "&t=Angel%20One'", PKG)
     time.sleep(18)
@@ -291,6 +415,7 @@ else:
     key('KEYCODE_MEDIA_PAUSE', wait=6)
     shot('08-paused')
     expect('TV paused: the pause board', on_screen('Paused', tries=3))
+    board_clear('TV paused')
 
 bad = crashed()
 open(os.path.join(OUT, MODE + '-logcat.txt'), 'w').write('\n'.join(
