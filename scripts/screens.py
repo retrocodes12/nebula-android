@@ -6,6 +6,10 @@ import os, re, subprocess, sys, time
 import xml.etree.ElementTree as ET
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else 'phone'
+if MODE == 'gate':
+    import glob
+    apk0 = sorted(glob.glob('app/build/outputs/apk/release/*.apk'))[0]
+    sys.exit(subprocess.run([sys.executable, 'scripts/launch-gate.py', apk0]).returncode)
 PHONE = MODE.startswith('phone')
 OUT = 'screens'
 os.makedirs(OUT, exist_ok=True)
@@ -154,6 +158,15 @@ shot('01-home')
 expect('Home is up (a catalogue row and the nav)', on_screen('See all', 'Home'), '')
 
 if PHONE:
+    # a stream add-on served by the runner (scripts/rig-addon.py): the walk plays a REAL stream row, not only a deep link
+    if tap('Settings', exact=True) and tap('Add-ons', wait=4):
+        if tap('manifest.json', wait=2):
+            adb('shell', 'input', 'text', "'http://10.0.2.2:8799/manifest.json'"); time.sleep(1)
+            key('KEYCODE_BACK', wait=1)                                     # the keyboard down
+            tap('Add add-on', exact=True, wait=6)
+            shot('01b-addons')
+            expect('the runner\'s stream add-on is added', on_screen('Gate Streams'))
+    key('KEYCODE_BACK', 2, wait=1.5); front()
     adb('shell', 'input', 'swipe', '540', '1900', '540', '700', '400'); time.sleep(3)
     shot('02-home-rows')
     adb('shell', 'input', 'swipe', '540', '700', '540', '1900', '300'); time.sleep(2)
@@ -185,7 +198,12 @@ if PHONE:
             expect('the seasons below', seen or on_screen('Season 1', tries=3))
             if tap("Failure's Contagious", wait=14, must=False) or tap('Episode 1', wait=14):
                 shot('06-streams')
-                expect('an episode opens its streams page', on_screen('stream') or on_screen('add-on'))
+                expect('the episode\'s streams page lists the add-on\'s row', on_screen('Gate', 'Test stream'))
+                if tap('Test stream', wait=16):
+                    key('KEYCODE_MEDIA_PAUSE', wait=6)
+                    shot('06b-played-from-row')
+                    expect('a stream row plays (paused board over it)', on_screen('Paused', tries=3))
+                    key('KEYCODE_BACK', 3, wait=1.5)
     # the player, through the app's own deep link, with a clear test stream
     key('KEYCODE_BACK', 3, wait=1.5)
     sh('am', 'start', '-a', 'android.intent.action.VIEW', '-d', "'nebula://play?mpd=" + TEST_STREAM + "&t=Angel%20One'", PKG)
