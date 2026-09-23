@@ -148,6 +148,24 @@ for _ in range(60):
 time.sleep(25)
 sh('am', 'broadcast', '-a', 'android.intent.action.CLOSE_SYSTEM_DIALOGS')
 sh('settings', 'put', 'secure', 'immersive_mode_confirmations', 'confirmed')   # the one-time "Viewing full screen" hint
+if PHONE:
+    # typed text reaches the field as key presses, the way a hardware keyboard's does: with the on-screen keyboard up,
+    # `input text` landed one character in the add-on field and the keyboard dumped the rest into the NEXT field that
+    # took focus (Search read "slow horseshttp://10.0.2.2:8799/…" — run 35806783092)
+    for ime in sh('ime', 'list', '-s').split():
+        say('keyboard off: ' + ime + ' — ' + sh('ime', 'disable', ime))
+
+
+def type_text(t):
+    """a few characters at a time (a burst can outrun the field); spaces as %s, the way `input text` wants them"""
+    for i in range(0, len(t), 6):
+        adb('shell', 'input', 'text', "'" + t[i:i + 6].replace(' ', '%s') + "'"); time.sleep(0.4)
+
+
+def field_text():
+    for n in nodes():
+        if n.get('class') == 'android.widget.EditText': return n.get('text') or ''
+    return ''
 kind = os.environ.get('SCREENS_APK', 'release')
 apk = [os.path.join(d, f) for d, _, fs in os.walk('app/build/outputs/apk/' + kind) for f in fs if f.endswith('.apk')][0]
 say('install ' + apk + ' ' + adb('install', '-r', '-g', apk).stdout.decode(errors='replace').strip())
@@ -172,7 +190,8 @@ if PHONE:
         if field: adb('shell', 'input', 'tap', str(field[0]), str(field[1])); time.sleep(2)
         else: failures.append('control not found: the add-on address field')
         if field:
-            adb('shell', 'input', 'text', "'http://10.0.2.2:8799/manifest.json'"); time.sleep(1.5)
+            type_text('http://10.0.2.2:8799/manifest.json'); time.sleep(1.5)
+            say('add-on field reads: ' + repr(field_text()))
             # the button sits beside the field, above the keyboard (Back here could leave the page); Enter as a fallback
             if not tap('Add add-on', exact=True, wait=6, must=False):
                 key('KEYCODE_ENTER', wait=6)
@@ -183,8 +202,8 @@ if PHONE:
     shot('02-home-rows')
     adb('shell', 'input', 'swipe', '540', '700', '540', '1900', '300'); time.sleep(2)
     if tap('Search', exact=True):
-        adb('shell', 'input', 'text', 'slow%shorses'); key('KEYCODE_ENTER', wait=8)
-        key('KEYCODE_BACK', wait=2)                     # the keyboard down
+        type_text('slow horses'); time.sleep(8)          # no keyboard to put down (switched off above): Back would leave
+        say('search field reads: ' + repr(field_text()))
         shot('03-search')
         # the result card, not the typed query: its title with its year beside it
         hit = find('Slow Horses', exact=True, near='2022-') or find('2022-', exact=True)
