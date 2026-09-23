@@ -1430,11 +1430,21 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                             // the rows dissolve into the page before they reach the floating nav: without it a card's
                             // title ran straight under the pill's labels (Founder's Library screenshot, 09-23). Draws
                             // only — no pointer input, so a touch in the fade still reaches the row under it.
-                            Box(
-                                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(116.dp)
-                                    .background(Brush.verticalGradient(0f to Color.Transparent, 0.4f to Bg.copy(alpha = 0.72f), 1f to Bg))
+                            // sized from the nav as measured (text size and the gesture area move it): a fixed 116 dp
+                            // ended below a large-text pill and the titles still showed through it (Screens 09-23)
+                            var navH by remember { mutableIntStateOf(0) }
+                            val navDp = with(LocalDensity.current) { navH.toDp() }
+                            val fade = 56.dp
+                            if (navH > 0) Box(
+                                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(navDp + fade)
+                                    .background(Brush.verticalGradient(
+                                        0f to Color.Transparent,
+                                        fade / (navDp + fade) to Bg.copy(alpha = 0.86f),
+                                        1f to Bg,
+                                    ))
                             )
-                            BottomBar(current, onTab = { setTab(it) }, modifier = Modifier.align(Alignment.BottomCenter))
+                            BottomBar(current, onTab = { setTab(it) },
+                                modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged { navH = it.height })
                         }
                     }
                 }
@@ -1608,7 +1618,7 @@ internal fun tvFirstFocus(ready: Boolean = true, key: Any? = Unit): FocusRequest
  * dead screen.
  */
 @Composable
-internal fun navPadBottom(): Dp = if (Account.isTv(LocalContext.current)) 24.dp else 124.dp   // clears the nav's fade
+internal fun navPadBottom(): Dp = if (Account.isTv(LocalContext.current)) 24.dp else 140.dp   // clears the nav and its fade
 
 /**
  * A round icon button for the title page's action row. Four of these fit where two
