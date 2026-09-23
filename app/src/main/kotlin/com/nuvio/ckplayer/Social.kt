@@ -90,12 +90,16 @@ object Social {
         null
     }.getOrElse {
         if (it is kotlinx.coroutines.CancellationException) throw it
-        // 400 = "friends is not enabled": it was already turned off (on the web, another device) — that is the goal
-        if ((it as? Cloud.HttpFail)?.code == 400) { offHere(ctx); null } else Account.errorText(it)
+        // "friends is not enabled": it was already turned off (on the web, another device) — that is the goal
+        if (offOnServer(it)) { offHere(ctx); null } else Account.errorText(it)
     }
 
     /** The server says Friends is off: this device agrees (it stayed on until the next start, and read as a lost connection). */
     private fun offHere(ctx: Context) { on = false; code = ""; handle = ""; store(ctx) }
+
+    /** A social route's 400 is "friends is not enabled" — Friends is off on the server (the web, another device). Anything
+        else (no connection, a 5xx, a 401) is a failure to ask, never taken as off. */
+    internal fun offOnServer(e: Throwable): Boolean = (e as? Cloud.HttpFail)?.code == 400
 
     /** A string field that may be JSON null: org.json's optString turns null into the text "null" (a friend with no
         handle became "@null", and two of them one duplicate key). */
@@ -149,7 +153,7 @@ object Social {
     }.getOrElse {
         if (it is kotlinx.coroutines.CancellationException) throw it
         // turned off elsewhere: an empty list, and Friends off here too (the page goes back to its pitch), not "no connection"
-        if ((it as? Cloud.HttpFail)?.code == 400) { offHere(ctx); JSONArray() } else null
+        if (offOnServer(it)) { offHere(ctx); JSONArray() } else null
     }
 
     /** People who added you and wait for you to add them back. */

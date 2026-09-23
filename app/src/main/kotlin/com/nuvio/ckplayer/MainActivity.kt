@@ -246,6 +246,7 @@ import coil.compose.AsyncImage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -1381,6 +1382,8 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                     onBack = { pop() },
                                     fresh = s.startOver,
                                     decided = s.decided,
+                                    // "None of your add-ons plays this" → Settings › Add-ons (Back comes back here)
+                                    onAddons = { push(Screen.Addons) },
                                     onPlay = { st, from, byHand, fresh ->
                                         // remembered so the next episode keeps this source and quality
                                         NextEp.notePick(ctx, st, from, byHand)
@@ -1618,12 +1621,15 @@ internal fun RoundAction(icon: ImageVector, label: String, on: Boolean = false, 
     }
 }
 
-/** One row inside a [CardSheet]. A row closes the sheet, unless [keepOpen] (a retry that fills the same sheet). */
+/** One row inside a [CardSheet]. A row closes the sheet, unless [keepOpen] (a retry that fills the same sheet).
+    [id] is the row's identity (its label unless given): a row whose words change while it stays the same action
+    ("Try again" ↔ "Trying again…") keeps one id, so the node — and the remote's focus on it — survives the change. */
 internal data class SheetAction(
     val icon: ImageVector,
     val label: String,
     val destructive: Boolean = false,
     val keepOpen: Boolean = false,
+    val id: String = label,
     val onClick: () -> Unit,
 )
 
@@ -1771,20 +1777,24 @@ internal fun CardSheet(
                     }
                     Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0x14FFFFFF)))
                     // Rows can change while the sheet is up (a keepOpen Try again that loads the list): each row is keyed by
-                    // its label, so a focused position does not silently become another row, the remote goes back to the
-                    // first row, and an OK within 400 ms of the change is not taken as a choice of what just appeared.
-                    val sig = actions.map { it.label }
-                    val firstSig = remember { sig }
+                    // its id, so a focused position does not silently become another row. On EVERY change of the rows
+                    // (against the previous set, not the first — a retry that failed comes back to the first set, and the
+                    // row the remote was on may be gone) the remote goes back to the first row, and an OK within 400 ms
+                    // of the change is not taken as a choice of what just appeared. A row that only changed its words
+                    // under one id is not a change: it keeps its node and the focus on it.
+                    val sig = actions.map { it.id }
+                    var lastSig by remember { mutableStateOf(sig) }
                     var changedAt by remember { mutableStateOf(0L) }
                     LaunchedEffect(sig) {
-                        if (sig == firstSig) return@LaunchedEffect
+                        if (sig == lastSig) return@LaunchedEffect
+                        lastSig = sig
                         changedAt = android.os.SystemClock.uptimeMillis()
                         if (keys) repeat(10) {
                             withFrameNanos {}
                             if (runCatching { firstFocus.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
                         }
                     }
-                    actions.forEachIndexed { i, a -> key(a.label) {
+                    actions.forEachIndexed { i, a -> key(a.id) {
                         val tint = if (a.destructive) Color(0xFFFF5A5F) else TextC
                         // the lit row reads from a sofa (Material's focus tint did not); a finger keeps its ripple
                         val rowSrc = remember { MutableInteractionSource() }
@@ -2120,16 +2130,23 @@ private fun RecommendSheet(type: String, item: MetaItem, scope: CoroutineScope, 
     CardSheet(
         title = item.name, sub = "Recommend to…", poster = item.poster, shape = item.posterShape,
         actions = if (failed) listOf(
-            // Try again first: a remote lands on the first row, and the sentence below it can do nothing
-            SheetAction(Icons.Filled.Refresh, if (trying) "Trying again…" else "Try again", keepOpen = true) {
+            // Try again first: a remote lands on the first row, and the sentence below it can do nothing. One id for
+            // both wordings, so the row the remote is on is the same row while it tries and after it fails again.
+            SheetAction(Icons.Filled.Refresh, if (trying) "Trying again…" else "Try again", keepOpen = true, id = "retry") {
                 if (!trying) tries++
             },
             SheetAction(Icons.Filled.CloudOff, "Could not reach Friends — check the connection") {},
         ) else if (list.isEmpty()) listOf(
-            SheetAction(Icons.Filled.Groups, "No friends yet — add one in Friends") {},
+            // the server said Friends is off (a 400: turned off on another device — Social.friends turns it off here
+            // too and answers empty), which is not "no friends yet"
+            SheetAction(
+                Icons.Filled.Groups,
+                if (!Social.on) "Friends is off — turn it on in Friends" else "No friends yet — add one in Friends",
+            ) {},
         ) else list.take(8).map { f ->
             val fName = Social.friendLabel(f)
-            SheetAction(Icons.Filled.Favorite, fName) {
+            // keyed by the friend, not the name: two friends can both be called Sam
+            SheetAction(Icons.Filled.Favorite, fName, id = "friend/" + Social.friendKey(f)) {
                 scope.launch {
                     val ok = Social.recommend(ctx, f, type, item)
                     Toasts.show(if (ok) "Recommended to $fName" else "Could not send that")
@@ -2196,12 +2213,21 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
     var friendsFailed by remember { mutableStateOf(false) }
     // why Turn off Friends did not (shown beside it; Friends stays on until the server agrees)
     var offErr by remember { mutableStateOf<String?>(null) }
+    // a reload in flight — the rows on screen stay until its answer replaces them
+    var fetching by remember { mutableStateOf(false) }
 
     LaunchedEffect(reload, Social.on) {
-        if (!Social.on) return@LaunchedEffect
+        if (!Social.on) {
+            // off (here or on the server): the next time it is on starts from Loading…, not from the old session's list
+            friends = null; friendsFailed = false; offErr = null; fetching = false
+            return@LaunchedEffect
+        }
         Social.publishSoon(ctx)
-        friends = null
+        // The list on screen stays until the new one arrives: blanking it took away the row the remote was on (Turn off
+        // Friends, Try again, a friend) and left nothing lit. Only the very first load shows Loading… (friends is null).
+        fetching = true
         val fr = Social.friends(ctx)
+        fetching = false
         friendsFailed = fr == null
         friends = (0 until (fr?.length() ?: 0)).mapNotNull { fr!!.optJSONObject(it) }
         val ib = Social.inbox(ctx)
@@ -2382,9 +2408,10 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Could not reach Friends — check the connection.",
                             color = MutedC, fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.weight(1f))
-                        Text("Try again", color = TextC, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                        // the row stays while it asks (the list is no longer blanked), so it says it is asking
+                        Text(if (fetching) "Trying again…" else "Try again", color = TextC, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
                             modifier = Modifier.padding(start = 8.dp).focusRing(RoundedCornerShape(8.dp)).clip(RoundedCornerShape(8.dp))
-                                .clickable { reload++ }
+                                .clickable { if (!fetching) { offErr = null; reload++ } }
                                 .padding(6.dp))
                     }
                 }
@@ -2450,7 +2477,10 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                 Column {
                     Text("Turn off Friends", color = MutedC, fontSize = 13.sp,
                         modifier = Modifier.padding(top = 12.dp).focusRing(RoundedCornerShape(8.dp), landing = false).clip(RoundedCornerShape(8.dp))
-                            .clickable { scope.launch { offErr = Social.disable(ctx); reload++ } }
+                            // Social.disable turns Friends off here on success, which alone takes the page back to its pitch.
+                            // A failure (offline) keeps this row and says why beside it: reloading then took the focused
+                            // row away (the list went to Loading…) and left the remote on nothing.
+                            .clickable { scope.launch { val e = Social.disable(ctx); offErr = e; if (e == null) reload++ } }
                             .padding(6.dp))
                     // the Profile page's error red
                     offErr?.let { Text(it, color = Color(0xFFFF453A), fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(start = 6.dp)) }
@@ -2589,37 +2619,48 @@ private fun BottomBar(current: Screen, onTab: (Screen) -> Unit, modifier: Modifi
 private fun SideRail(current: Screen, onTab: (Screen) -> Unit) {
     // a rail taken away while it held focus (a deep link or a party replacing the stack) says so on its way out
     DisposableEffect(Unit) { onDispose { RailFocus.has = false } }
+    // Left from a screen lands on the CURRENT tab (web parity), not on whichever tab happens to sit level with the row the
+    // remote left — from the bottom of Home that was Profile, and OK there swapped the page. The rail is one focus group
+    // whose onEnter (stable in compose-ui 1.8; `enter` is the deprecated experimental form) hands focus to the current
+    // tab; the tabs' own Up/Down inside the rail are untouched.
+    val tabs = remember { listOf(Screen.Home, Screen.Search, Screen.Library, Screen.Settings, Screen.Profile) }
+    val tabFocus = remember { List(tabs.size) { FocusRequester() } }
+    val cur = tabs.indexOf(current)
     Column(
         Modifier.fillMaxHeight().width(104.dp)
             // a screen's fallback landing leaves a viewer on the rail alone (TvFocus.kt)
             .onFocusChanged { RailFocus.has = it.hasFocus }
+            .focusProperties {
+                onEnter = { if (cur >= 0) runCatching { tabFocus[cur].requestFocus() } }
+            }
+            .focusGroup()
             .background(Color(0xF014141A))
             .padding(vertical = 20.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text("◆", color = Red, fontSize = 20.sp, modifier = Modifier.padding(bottom = 28.dp))
-        TabItem("Home", Icons.Filled.Home, current == Screen.Home) { onTab(Screen.Home) }
+        TabItem("Home", Icons.Filled.Home, current == Screen.Home, Modifier.focusRequester(tabFocus[0])) { onTab(Screen.Home) }
         Spacer(Modifier.height(12.dp))
-        TabItem("Search", Icons.Filled.Search, current == Screen.Search) { onTab(Screen.Search) }
+        TabItem("Search", Icons.Filled.Search, current == Screen.Search, Modifier.focusRequester(tabFocus[1])) { onTab(Screen.Search) }
         Spacer(Modifier.height(12.dp))
-        TabItem("Library", Icons.Filled.Bookmark, current == Screen.Library) { onTab(Screen.Library) }
+        TabItem("Library", Icons.Filled.Bookmark, current == Screen.Library, Modifier.focusRequester(tabFocus[2])) { onTab(Screen.Library) }
         Spacer(Modifier.height(12.dp))
-        TabItem("Settings", Icons.Filled.Settings, current == Screen.Settings) { onTab(Screen.Settings) }
+        TabItem("Settings", Icons.Filled.Settings, current == Screen.Settings, Modifier.focusRequester(tabFocus[3])) { onTab(Screen.Settings) }
         Spacer(Modifier.height(12.dp))
-        ProfileTab(current == Screen.Profile) { onTab(Screen.Profile) }
+        ProfileTab(current == Screen.Profile, Modifier.focusRequester(tabFocus[4])) { onTab(Screen.Profile) }
     }
 }
 
 /** The nav's last item: the signed-in profile's initial on the accent, a person glyph when nobody is. */
 @Composable
-private fun ProfileTab(on: Boolean, onClick: () -> Unit) {
+private fun ProfileTab(on: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val p = Cloud.profile
     val tint = if (on || focused) Color.White else MutedC
     Column(
-        Modifier
+        modifier
             .clip(RoundedCornerShape(26.dp))
             .border(1.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(26.dp))
             .clickable(interactionSource = interaction, indication = null) { onClick() }
@@ -2646,12 +2687,12 @@ private fun ProfileTab(on: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun TabItem(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, on: Boolean, onClick: () -> Unit) {
+private fun TabItem(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, on: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val tint = if (on || focused) Color.White else MutedC
     Column(
-        Modifier
+        modifier
             .clip(RoundedCornerShape(26.dp))
             .border(1.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(26.dp))
             .clickable(interactionSource = interaction, indication = null) { onClick() }
@@ -5189,12 +5230,18 @@ private fun EpisodesScreen(
 // add-on the item came from PLUS every other installed add-on whose manifest
 // serves streams for this type/id, and show the answers grouped per add-on.
 @Composable
-private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fresh: Boolean = false, decided: Boolean = false, onPlay: (StreamItem, Addon, Boolean, Boolean) -> Unit) {
+private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fresh: Boolean = false, decided: Boolean = false, onAddons: () -> Unit, onPlay: (StreamItem, Addon, Boolean, Boolean) -> Unit) {
     var sections by remember { mutableStateOf<List<Pair<Addon, List<StreamItem>>>>(emptyList()) }
     var status by remember { mutableStateOf("Loading streams…") }
     var loading by remember { mutableStateOf(true) }
     var filter by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableStateOf(0) }
+    // why an answered page is empty (null while it asks, or when it has rows) — its sentence is the page's message
+    var emptyWhy by remember { mutableStateOf<StreamsEmpty?>(null) }
+    // the last answer found no enabled add-on that streams this title: an Add-ons chip beside ↻ (kept through a ↻)
+    var noStreamer by remember { mutableStateOf(false) }
+    // the page has answered once: ↻ (and Add-ons) stay put through a reload, so the chip the remote pressed is not taken away
+    var answered by remember { mutableStateOf(false) }
     var usualUrl by remember { mutableStateOf<String?>(null) }   // the row that matches the last pick
     val ctx = LocalContext.current
     // Start over: a one-play choice for anything already begun (web parity). "When you come back"
@@ -5240,7 +5287,10 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
         }
         var failures = 0
         var streamers = 0          // add-ons whose manifest says they stream this at all
+        var unread = 0             // add-ons whose manifest could not be read (they might have)
         var floored = false        // an add-on answered, and Minimum quality hid every row of it
+        emptyWhy = null
+        if (sections.isEmpty()) status = "Loading streams…"
         val pf = NextEp.picked(ctx)
         // Play the best stream by itself (Settings › Streams): decide once — when every add-on has
         // answered, or when the wait for slow ones runs out, whichever comes first. Guarded by id, not
@@ -5274,7 +5324,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
         val memo = if (reload == 0 && backHere) streamsMemo[memoKey]?.takeIf { System.currentTimeMillis() - it.at < 600_000 } else null
         if (memo != null) {
             sections = memo.sections; status = memo.status; usualUrl = memo.usual
-            loading = false
+            loading = false; answered = true; noStreamer = false
             return@LaunchedEffect
         }
         val timer = if (Prefs.autoPick != "off" && autoPlayedFor != item.id) launch { delay(Prefs.pickWait * 1000L); decide() } else null
@@ -5283,13 +5333,23 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
         // Each answer is still handled here on the main thread, so the counters and slots need no locking.
         order.mapIndexed { i, a ->
             launch {
+                val origin = a.manifestUrl == addon.manifestUrl
+                // The origin is always asked, and its request waits for NOTHING: the page's own add-on is the one the
+                // viewer most expects rows from, and a manifest round trip in front of it was pure latency. Its manifest
+                // only decides what an empty page says (Cinemeta answers 404 = "plays nothing", not "failed"), so the
+                // cached one is used, or — not cached yet — one read BESIDE the stream request, never before it.
+                val known = if (origin) manifestCache[a.manifestUrl] else null
+                val side = if (origin && known == null) async {
+                    try { manifestFor(a.manifestUrl) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { null }
+                } else null
                 try {
-                    // origin is always asked; others only if their manifest matches
-                    val can = if (a.manifestUrl != addon.manifestUrl) manifestFor(a.manifestUrl).canStream(item.type, item.id)
-                        else runCatching { manifestFor(a.manifestUrl).canStream(item.type, item.id) }
-                            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrDefault(true)
-                    if (can) streamers++
-                    if (a.manifestUrl != addon.manifestUrl && !can) return@launch
+                    // the others only if their manifest says they stream this; one that cannot be read cannot be asked
+                    if (!origin) {
+                        val m = try { manifestFor(a.manifestUrl) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { null }
+                        if (m == null) { unread++; failures++; return@launch }
+                        if (!m.canStream(item.type, item.id)) return@launch
+                        streamers++
+                    }
                     val raw = Stremio.loadStreams(a.base, item.type, item.id)
                     val streams = arrangeStreams(raw, item.runtime)
                     if (raw.isNotEmpty() && streams.isEmpty()) floored = true
@@ -5312,20 +5372,23 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                 } catch (e: Exception) {
                     failures++
                 }
+                // counted after its rows are on screen, whichever way its request went
+                if (origin) {
+                    val m = known ?: side?.await()
+                    if (m == null) unread++ else if (m.canStream(item.type, item.id)) streamers++
+                }
             }
         }.forEach { it.join() }
         timer?.cancel()
         decide()
         if (sections.isEmpty()) {
-            status = when {
-                order.isEmpty() -> "Every add-on is switched off."
-                failures == order.size -> "Failed to load streams."
-                floored -> "Every stream is below your minimum quality."
-                // a fresh install has only a catalogue: "right now" read as an outage, not "nothing here plays video"
-                streamers == 0 -> "None of your add-ons plays this. Add one that does in Settings › Add-ons."
-                else -> "No playable streams right now."
-            }
+            val why = streamsEmptyStatus(order.isEmpty(), streamers, unread, failures, order.size, floored)
+            status = why.line
+            emptyWhy = why
         }
+        // nothing installed and on streams this (or every add-on is off): the way to fix it sits beside ↻
+        noStreamer = sections.isEmpty() && streamers == 0
+        answered = true
         if (sections.isNotEmpty()) {
             streamsMemo[memoKey] = StreamsMemo(System.currentTimeMillis(), sections, status, usualUrl)
             while (streamsMemo.size > 24) streamsMemo.remove(streamsMemo.minByOrNull { it.value.at }!!.key)
@@ -5381,7 +5444,11 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                             letterSpacing = (-0.8).sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(top = 5.dp))
                         if (heroSub != null) Text(heroSub, color = Color(0xB8EBEBF5), fontSize = 13.sp, modifier = Modifier.padding(top = 2.dp))
-                        Text(status, color = FaintC, fontFamily = Mono, fontSize = 11.sp,
+                        // a count is a faint mono kicker; why the page is empty is the page's one message, and a sentence
+                        // telling the viewer what to do ("None of your add-ons plays this…") in faint 11 sp mono went unread
+                        if (emptyWhy != null) Text(status, color = MutedC, fontSize = 13.sp, lineHeight = 18.sp,
+                            modifier = Modifier.padding(top = 8.dp))
+                        else Text(status, color = FaintC, fontFamily = Mono, fontSize = 11.sp,
                             letterSpacing = 0.8.sp, modifier = Modifier.padding(top = 8.dp))
                     }
                 }
@@ -5410,12 +5477,17 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             }
             // ↻ whenever the page has answered, even with one add-on (a live event's rows change by the minute, and
             // that page had no way to ask again); the add-on filters only when there is more than one to choose
-            if (!loading || sections.isNotEmpty()) item(key = "filters") {
+            // (kept through a ↻ once the page has answered: taking the row away while it reloads left the remote on nothing)
+            if (answered || !loading || sections.isNotEmpty()) item(key = "filters") {
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(7.dp),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 ) {
-                    item { StreamFilterChip("↻", false) { filter = null; reload++ } }
+                    item(key = "reload") {
+                        StreamFilterChip("↻", false, Modifier.semantics { contentDescription = "Reload streams" }) { filter = null; reload++ }
+                    }
+                    // nothing installed and on plays this: the way out, beside the retry that would only say so again
+                    if (noStreamer && sections.isEmpty()) item(key = "addons") { StreamFilterChip("Add-ons", false) { onAddons() } }
                     if (sections.size > 1) {
                         item { StreamFilterChip("All", filter == null) { filter = null } }
                         items(sections.size) { i ->
@@ -5451,6 +5523,34 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
     }
 }
 
+/** Why the Streams page has no rows, once every add-on has answered. */
+internal enum class StreamsEmpty(val line: String) {
+    OFF("Every add-on is switched off."),
+    NONE("None of your add-ons plays this. Add one that does in Settings › Add-ons."),
+    FAILED("Failed to load streams."),
+    FLOORED("Every stream is below your minimum quality."),
+    NOTHING("No playable streams right now."),
+}
+
+/**
+ * The empty Streams page's reason. [streamers] = add-ons whose manifest says they stream this title, [unread] = add-ons
+ * whose manifest could not be read (so nobody knows whether they would), [failures] = add-ons that could not be asked or
+ * whose stream request failed, out of [orderSize] enabled add-ons; [floored] = one answered and Minimum quality hid it all.
+ *
+ * "None plays this" comes BEFORE "failed": the origin add-on is always asked for streams, and a catalogue-only add-on
+ * (Cinemeta) answers that with a 404 — a failure — so a fresh install whose only add-on is Cinemeta said "Failed to load
+ * streams." for every title, an outage where the truth is that nothing installed plays video. Only when every manifest
+ * was read: an unreadable one might have played it.
+ */
+internal fun streamsEmptyStatus(orderEmpty: Boolean, streamers: Int, unread: Int, failures: Int, orderSize: Int, floored: Boolean): StreamsEmpty =
+    when {
+        orderEmpty -> StreamsEmpty.OFF
+        streamers == 0 && unread == 0 -> StreamsEmpty.NONE
+        failures >= orderSize -> StreamsEmpty.FAILED
+        floored -> StreamsEmpty.FLOORED
+        else -> StreamsEmpty.NOTHING
+    }
+
 /** Settings › Streams applied to one add-on's answer: the quality floor first (rows with no
     resolution plate stay), then the order — as listed, best quality first, or smallest first. */
 internal fun arrangeStreams(raw: List<StreamItem>, runtime: String? = null): List<StreamItem> {
@@ -5480,7 +5580,7 @@ internal fun partyDisplayName(ctx: Context): String {
 
 /** Quiet outlined filter — only the active one carries fill. */
 @Composable
-private fun StreamFilterChip(label: String, on: Boolean, onClick: () -> Unit) {
+private fun StreamFilterChip(label: String, on: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     Text(
@@ -5488,7 +5588,7 @@ private fun StreamFilterChip(label: String, on: Boolean, onClick: () -> Unit) {
         color = if (on) Color.Black else if (focused) TextC else MutedC,
         fontSize = 13.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
         maxLines = 1,
-        modifier = Modifier
+        modifier = modifier
             // the active chip changed NOTHING when lit ("All", "Start over"): a ring outside it
             .outerRing(focused && on, RoundedCornerShape(50))
             .clip(RoundedCornerShape(50))
