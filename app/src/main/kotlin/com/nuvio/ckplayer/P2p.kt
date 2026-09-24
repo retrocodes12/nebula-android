@@ -253,7 +253,11 @@ object P2p {
         val l = live ?: return
         live = null
         runCatching { sm?.remove(l.handle) }
-        if (!Prefs.p2pKeep) runCatching { File(l.dir, l.root).deleteRecursively() }
+        // the torrent itself names this folder: only something really inside the download folder is ever deleted
+        if (!Prefs.p2pKeep) runCatching {
+            val d = File(l.dir, l.root)
+            if (l.root.isNotEmpty() && d.canonicalPath.startsWith(l.dir.canonicalPath + File.separator)) d.deleteRecursively()
+        }
         else runCatching { trim(dataDir(ctx), KEEP_CAP) }
     }
 

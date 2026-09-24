@@ -22,18 +22,20 @@ android {
         if (project.hasProperty("emulatorAbis")) ndk.abiFilters += listOf("x86_64", "x86")
     }
 
-    // Read signing config from Gradle -P properties (passed explicitly on the CI
-    // command line) — reliably seen by findProperty regardless of daemon/env.
-    val keystorePath = (project.findProperty("nebulaKeystore") as String?)?.takeIf { it.isNotBlank() }
+    // Signing config: a Gradle -P property, else the environment. CI passes the passwords through the environment (since
+    // 2026-09-24): as -P arguments they sat on the command line, readable in /proc by anything else running in the job.
+    fun signing(prop: String, env: String): String? =
+        (project.findProperty(prop) as String?)?.takeIf { it.isNotBlank() } ?: System.getenv(env)?.takeIf { it.isNotBlank() }
+    val keystorePath = signing("nebulaKeystore", "NEBULA_KEYSTORE_FILE")
     logger.lifecycle("Nebula release signing: keystore ${if (keystorePath != null) "PRESENT -> fixed release key" else "ABSENT -> debug fallback"}")
 
     signingConfigs {
         create("release") {
             if (keystorePath != null) {
                 storeFile = file(keystorePath)
-                storePassword = project.findProperty("nebulaStorePassword") as String?
-                keyAlias = project.findProperty("nebulaKeyAlias") as String?
-                keyPassword = project.findProperty("nebulaKeyPassword") as String?
+                storePassword = signing("nebulaStorePassword", "NEBULA_STORE_PASSWORD")
+                keyAlias = signing("nebulaKeyAlias", "NEBULA_KEY_ALIAS")
+                keyPassword = signing("nebulaKeyPassword", "NEBULA_KEY_PASSWORD")
             }
         }
     }

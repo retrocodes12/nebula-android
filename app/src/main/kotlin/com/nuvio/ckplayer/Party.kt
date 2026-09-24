@@ -146,12 +146,12 @@ class PartySession(
                         "created" -> PartyEvent.Created(m.optString("code"))
                         "joined" -> PartyEvent.Joined(
                             m.optString("code"),
-                            m.optJSONObject("stream")?.let { parseStream(it) },
+                            m.optJSONObject("stream")?.let { parseStream(it) }?.takeIf { it.url.isNotEmpty() },
                             m.optJSONObject("state")?.let { parseState(it) },
                             m.optInt("count", 1),
                         )
                         "state" -> PartyEvent.State(parseState(m))
-                        "stream" -> m.optJSONObject("stream")?.let { PartyEvent.StreamSwitch(parseStream(it)) }
+                        "stream" -> m.optJSONObject("stream")?.let { parseStream(it) }?.takeIf { it.url.isNotEmpty() }?.let { PartyEvent.StreamSwitch(it) }
                         "peers" -> PartyEvent.Peers(m.optInt("count", 1), m.optJSONArray("names")?.let { arr ->
                             (0 until arr.length()).mapNotNull { i -> arr.optString(i).ifEmpty { null } }
                         } ?: emptyList())
@@ -197,10 +197,12 @@ class PartySession(
     private fun parseStream(o: JSONObject): PartyStreamDesc {
         val subs = mutableListOf<SubTrack>()
         o.optJSONArray("subs")?.let { arr ->
-            for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { subs.add(SubTrack(it.optString("url"), it.optString("lang"))) }
+            for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { webUrl(it.optString("url")).takeIf { u -> u.isNotEmpty() }?.let { u -> subs.add(SubTrack(u, it.optString("lang"))) } }
         }
+        // the host's addresses are someone else's: a stream or subtitle that is not a web address is dropped here, and a
+        // stream left with no address is no stream at all (UrlSafety.kt)
         return PartyStreamDesc(
-            o.optString("url"), o.optString("title").ifEmpty { "Watch party" }, subs,
+            webUrl(o.optString("url")), o.optString("title").ifEmpty { "Watch party" }, subs,
             type = o.optString("type").ifEmpty { null }, id = o.optString("id").ifEmpty { null },
             name = o.optString("name").ifEmpty { null }, poster = o.optString("poster").ifEmpty { null },
             addonUrl = o.optString("addonUrl").ifEmpty { null },

@@ -132,7 +132,7 @@ object Stremio {
         val out = mutableListOf<SubTrack>()
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
-            val u = o.optString("url")
+            val u = webUrl(o.optString("url"))
             if (u.isNotEmpty()) out.add(SubTrack(u, o.optString("lang", o.optString("language", "und"))))
         }
         return out
@@ -375,7 +375,8 @@ object Stremio {
         val out = mutableListOf<StreamItem>()
         for (i in 0 until arr.length()) {
             val s = arr.getJSONObject(i)
-            var url = s.optString("url")
+            // an add-on's address is played through a data source that also opens file: and content: — web addresses only
+            var url = webUrl(s.optString("url"))
             // A torrent stream has an infoHash where the url would be. Those rows were dropped on
             // the floor until P2P streams (Settings › Streams) — with it on they get a stand-in
             // address the engine resolves at play time; with it off they are still not playable.
@@ -392,7 +393,7 @@ object Stremio {
             val sarr = s.optJSONArray("subtitles")
             if (sarr != null) for (k in 0 until sarr.length()) {
                 val o = sarr.optJSONObject(k) ?: continue
-                val su = o.optString("url")
+                val su = webUrl(o.optString("url"))
                 if (su.isNotEmpty()) subs.add(SubTrack(su, o.optString("lang", "und")))
             }
             val text = s.optString("title").ifEmpty { s.optString("description") }

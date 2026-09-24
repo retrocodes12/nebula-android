@@ -338,7 +338,10 @@ private fun RecoveryPanel(me: Profile?, key: String, onDone: () -> Unit) {
             PButton("I’ve saved it", false, onClick = onDone)
             TextAction("Copy") {
                 val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                cm?.setPrimaryClip(ClipData.newPlainText("Nebula recovery key", key))
+                // flagged sensitive: Android 13+ keeps it out of the copy preview and the keyboard's suggestions
+                val clip = ClipData.newPlainText("Nebula recovery key", key)
+                clip.description.extras = android.os.PersistableBundle().apply { putBoolean("android.content.extra.IS_SENSITIVE", true) }
+                cm?.setPrimaryClip(clip)
                 if (Build.VERSION.SDK_INT < 33) Toasts.show("Copied")
             }
         }

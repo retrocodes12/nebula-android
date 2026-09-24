@@ -454,7 +454,8 @@ object Cloud {
         val rr = remote.optJSONObject("removed") ?: JSONObject()
         val have = arr.map { it.manifestUrl }.toHashSet()
         for (u in rl.keys()) {
-            val r = rl.getJSONObject(u)
+            val r = rl.optJSONObject(u) ?: continue
+            if (webUrl(u) != u) continue                 // an add-on is a web address, nothing else
             if (u in have) {
                 if (at.optLong(u) > r.optLong("at")) localNewer = true
                 else if (r.optLong("at") > at.optLong(u)) at.put(u, r.optLong("at"))
@@ -462,9 +463,9 @@ object Cloud {
             }
             // adopt unless WE removed it more recently than they added it
             if (!removed.has(u) || r.optLong("at") > removed.optLong(u)) {
-                arr.add(Addon(u, r.optString("name", "Add-on"),
-                    r.optString("base").ifEmpty { Stremio.baseOf(u) },
-                    r.optString("logo").ifEmpty { null }))
+                // the address its requests go to is worked out here, as for an add-on added on this device: a synced
+                // `base` of its own could make a trusted-looking add-on send every request somewhere else
+                arr.add(Addon(u, r.optString("name", "Add-on"), Stremio.baseOf(u), r.optString("logo").ifEmpty { null }))
                 at.put(u, if (r.optLong("at") > 0) r.optLong("at") else System.currentTimeMillis())
                 removed.remove(u)
                 changed = true

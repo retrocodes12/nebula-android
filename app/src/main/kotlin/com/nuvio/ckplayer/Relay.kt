@@ -82,11 +82,13 @@ internal object Relay {
     private suspend fun probeAll(d: JSONObject): Live? = coroutineScope {
         val hosts = d.getJSONArray("hosts")
         val port = d.optInt("port")
+        if (port !in 1..65535) return@coroutineScope null
         val token = d.optString("token")
         val name = d.optString("name").ifEmpty { "Your PC" }
-        (0 until minOf(hosts.length(), 6)).map { i ->
+        // a sharing computer is on this TV's own network: only a private LAN address is probed (UrlSafety.kt)
+        (0 until hosts.length()).map { hosts.optString(it) }.filter { lanHost(it) }.take(6).map { h ->
             async(Dispatchers.IO) {
-                val base = "http://${hosts.optString(i)}:$port"
+                val base = "http://$h:$port"
                 val ok = runCatching {
                     probe.newCall(Request.Builder().url("$base/relay/healthz?k=$token").build()).execute().use { r ->
                         r.code == 200 && JSONObject(r.body?.string() ?: "{}").optBoolean("ok")
