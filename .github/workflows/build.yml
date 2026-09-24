@@ -120,7 +120,9 @@ jobs:
           grep -qi 'CN=Nebula Player' "$RUNNER_TEMP/certs.txt" || { echo "::error::the release APK is not signed with the Nebula key"; exit 1; }
           rm -f "$RUNNER_TEMP/nebula-release.jks"
 
+      # a run started on another branch (workflow_dispatch) gates, builds, signs and checks the signature, and publishes nothing
       - name: Publish release
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
