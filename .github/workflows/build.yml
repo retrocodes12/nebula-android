@@ -127,9 +127,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.82.0.apk
+          cp "$APK" Nebula-1.83.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.82.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.82.0 Nebula-1.82.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.82.0" \
-            --notes "New, experimental: Sync automatically, in the Subtitles panel's Timing section. It listens to the film while you watch and fixes an add-on subtitle file's timing, including files made for a different frame rate. It takes a few minutes of dialogue and may not always find the timing. It cannot listen when the sound goes straight to a soundbar or receiver."
+          gh release delete v1.83.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.83.0 Nebula-1.83.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.83.0" \
+            --notes "The experimental Sync automatically no longer sets subtitles far off (a false match could move them almost a minute), and after its first answer it keeps following the voices, for subtitle files cut from another broadcast that drift a few seconds at each ad break."
