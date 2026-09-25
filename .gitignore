@@ -11,3 +11,6 @@
 
 # agent-router telemetry — leaked /home paths into the public repo once already
 .claude-flow/
+
+# made by device-tests.yml from Tears of Steel (downloaded in CI), never committed
+/app/src/androidTest/assets/
