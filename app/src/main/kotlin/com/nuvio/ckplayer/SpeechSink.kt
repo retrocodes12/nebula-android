@@ -65,7 +65,8 @@ internal class SpeechSink(sink: AudioSink) : ForwardingAudioSink(sink) {
         if (offsetUs == C.TIME_UNSET || ch <= 0 || sr <= 0) return
         val bytes = when (enc) { C.ENCODING_PCM_16BIT -> 2; C.ENCODING_PCM_FLOAT -> 4; else -> return }
         val b = buffer.duplicate().order(ByteOrder.nativeOrder())
-        val start = b.position(), frames = b.remaining() / (bytes * ch)
+        val start = b.position()
+        val frames = b.remaining() / (bytes * ch)
         if (frames <= 0) return
         if (mono.size < frames) mono = FloatArray(frames)
         val pick = if (ch == 3 || ch >= 5) 2 else -1       // the centre; -1 = the average of the front pair (or the one channel)
