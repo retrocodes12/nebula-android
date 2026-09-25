@@ -1,6 +1,8 @@
 package com.nuvio.ckplayer
 
 import androidx.media3.common.MediaItem
+import androidx.media3.datasource.AssetDataSource
+import androidx.media3.datasource.DataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -45,7 +47,7 @@ class SpeechSinkDeviceTest {
         ins.runOnMainSync {
             exo = ExoPlayer.Builder(ins.targetContext)
                 .setRenderersFactory(listeningRenderers(ins.targetContext).setDecoderManager(dm))
-                .setMediaSourceFactory(DefaultMediaSourceFactory(ins.context))   // asset:/// = this test APK's assets
+                .setMediaSourceFactory(DefaultMediaSourceFactory(DataSource.Factory { AssetDataSource(ins.context) }))   // asset:/// = this test APK's assets (its context has no application context for DefaultDataSource)
                 .build().apply {
                     dm.attach(this)
                     volume = 0f                                  // the ear sits before the volume
