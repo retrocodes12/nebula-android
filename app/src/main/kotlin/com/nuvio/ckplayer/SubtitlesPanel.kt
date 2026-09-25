@@ -98,6 +98,11 @@ internal fun SubtitlesPanel(
     canShift: Boolean,                // timing only moves add-on subtitles
     onNudge: (Long) -> Unit,
     onResetTiming: () -> Unit,
+    inTime: Boolean = offsetMs == 0L,  // no nudge and no stretch: "Back in sync" is lit
+    timingNote: String? = null,       // "Speed matched · set automatically" when the sync set it
+    syncLabel: String? = null,        // "Sync automatically" / "Listening… 45 s"; null = not offered (live)
+    syncing: Boolean = false,
+    onSync: () -> Unit = {},
     onPickAddon: (SubTrack) -> Unit,
     onPickEmbedded: () -> Unit,       // a stream track took over from the add-on pick
     onOff: () -> Unit,
@@ -192,7 +197,7 @@ internal fun SubtitlesPanel(
                     VDivider()
                     TracksColumn(w2.fillMaxHeight(), lang, lang?.let { byLang[it] } ?: emptyList(), searching, busy, anyOn)
                     VDivider()
-                    StyleColumn(w3.fillMaxHeight(), offsetMs, canShift, onNudge, onResetTiming)
+                    StyleColumn(w3.fillMaxHeight(), offsetMs, canShift, onNudge, onResetTiming, inTime, timingNote, syncLabel, syncing, onSync)
                 }
             }
         }
@@ -318,7 +323,10 @@ private fun Nudge(label: String, onClick: () -> Unit) {
 
 /** Preview, timing, the appearance rows, Reset — the whole column scrolls. */
 @Composable
-private fun StyleColumn(modifier: Modifier, offsetMs: Long, canShift: Boolean, onNudge: (Long) -> Unit, onResetTiming: () -> Unit) {
+private fun StyleColumn(
+    modifier: Modifier, offsetMs: Long, canShift: Boolean, onNudge: (Long) -> Unit, onResetTiming: () -> Unit,
+    inTime: Boolean, timingNote: String?, syncLabel: String?, syncing: Boolean, onSync: () -> Unit,
+) {
     val ctx = LocalContext.current
     @Suppress("UNUSED_EXPRESSION") SubStyle.version.value   // recompose on cycle
     val style = SubStyle.get(ctx)
@@ -333,15 +341,18 @@ private fun StyleColumn(modifier: Modifier, offsetMs: Long, canShift: Boolean, o
                         fmtSubOffset(offsetMs), color = Color.White, fontFamily = Mono, fontSize = 22.sp,
                         fontWeight = FontWeight.SemiBold, letterSpacing = (-0.3).sp, modifier = Modifier.padding(end = 12.dp),
                     )
-                    GlassPill("Back in sync", on = offsetMs == 0L, onClick = onResetTiming)
+                    GlassPill("Back in sync", on = inTime, onClick = onResetTiming)
                 }
+                if (timingNote != null) Note(timingNote, top = 4.dp)
                 Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Nudge("−0.5") { onNudge(-500) }
                     Nudge("−0.1") { onNudge(-100) }
                     Nudge("+0.1") { onNudge(100) }
                     Nudge("+0.5") { onNudge(500) }
                 }
-                Note("If the words arrive before the voices, choose +.", top = 6.dp)
+                // the sync (SubSync.kt) listens for the voices and sets the timing itself
+                if (syncLabel != null) Row(Modifier.padding(top = 8.dp)) { GlassPill(syncLabel, on = syncing, onClick = onSync) }
+                Note("If the words arrive before the voices, choose + — or let the player match them to the voices.", top = 6.dp)
             } else Note("Timing can be nudged for add-on subtitles; the stream's own tracks cannot be shifted.", top = 6.dp)
             Eyebrow("Appearance", Modifier.padding(top = 14.dp), Label2)
             SubStyleRows(ctx, style, Modifier.padding(top = 4.dp), arrows = false)
