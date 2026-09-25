@@ -20,6 +20,8 @@ android {
         ndk.abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         // the launch gate's and the Screens workflow's emulators are x86: only there, and only when asked, do the x86 libraries go in
         if (project.hasProperty("emulatorAbis")) ndk.abiFilters += listOf("x86_64", "x86")
+        // on-device tests (device-tests.yml, on an emulator): the subtitle sync's ear against real decoding
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     // Signing config: a Gradle -P property, else the environment. CI passes the passwords through the environment (since
@@ -116,6 +118,8 @@ dependencies {
     // device, so the real one goes on the test classpath ahead of it.
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }
 
 // Every test's outcome in the CI log, and one count line at the end: a green run that ran nothing must be visible.
