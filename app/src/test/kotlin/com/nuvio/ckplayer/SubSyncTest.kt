@@ -51,8 +51,8 @@ class SubSyncTest {
         assertNotNull(r); r!!
         assertEquals(-5.91, r.off, 0.0005)
         assertEquals(1.0, r.scale, 0.0)
-        assertEquals(6.577229, r.z, 1e-4)
-        assertEquals(2.682027, r.ratio, 1e-4)
+        assertEquals(5.292061, r.z, 1e-4)             // ±20 s searched (was ±60 until the Mentalist, 09-25)
+        assertEquals(3.207772, r.ratio, 1e-4)
     }
 
     @Test fun aFileForA25fpsCut_isStretchedBack_asOnTheWeb() {
@@ -61,7 +61,31 @@ class SubSyncTest {
         assertNotNull(r); r!!
         assertEquals(k, r.scale, 1e-12)
         assertEquals(2.09, r.off, 0.0005)
-        assertEquals(6.688502, r.z, 1e-4)
+        assertEquals(4.175074, r.z, 1e-4)
+    }
+
+    @Test fun aStretchWithABigOffset_isNotTaken() {
+        // the Mentalist S4E2 on the Founder's phone: "−53.5 s at 25/23.976" twice — a plain shift in disguise near the start.
+        // A real frame-rate mismatch starts in step with the film, so a stretch may only come with a small offset.
+        val f = fixture(); val k = 25 / 23.976
+        val r = syncSolve(f.t0, f.vals, f.cues.map { doubleArrayOf((it[0] + 40) / k, (it[1] + 40) / k) })
+        assertNotNull(r); r!!
+        assertEquals(1.0, r.scale, 0.0)
+        assertTrue("a weak answer the gate refuses: z ${r.z}", r.z < SubSync.Z)
+    }
+
+    @Test fun following_searchesAroundTheTimingNow_atItsSpeed() {
+        val f = fixture()
+        val far = syncSolve(f.t0, f.vals, f.cues.map { doubleArrayOf(it[0] + 30, it[1] + 30) }, around = -25.0, fixedScale = 1.0)!!
+        assertEquals(-29.91, far.off, 0.0005)                         // 30 s late is outside ±20 s of 0, inside ±20 s of −25
+        assertEquals(5.277099, far.z, 1e-4)
+        val from = 6000                                               // the last minutes only, as the follow window is
+        val last = syncSolve(f.t0 + 60, f.vals.copyOfRange(from, f.vals.size), f.cues.map { doubleArrayOf(it[0] + 6, it[1] + 6) }, around = -5.0, fixedScale = 1.0)!!
+        assertEquals(-5.9, last.off, 0.0005)
+        assertEquals(4.946094, last.z, 1e-4)
+        val g = SyncGate(SubSync.FZ, SubSync.FTOL)                    // the follow bar: z 3.5, agreeing within 0.6 s
+        fun r(off: Double, z: Double) = SyncResult(off, 1.0, z, 2.0, 1.0)
+        assertNull(g.offer(r(3.2, 3.6))); assertNull(g.offer(r(2.7, 3.7))); assertNotNull(g.offer(r(3.1, 3.9)))
     }
 
     @Test fun silence_orTooLittle_givesNoAnswer() {

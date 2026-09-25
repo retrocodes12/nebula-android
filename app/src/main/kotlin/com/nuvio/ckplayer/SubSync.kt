@@ -28,6 +28,14 @@ internal object SubSync {
     const val AGREE = 3
     const val Z = 4.0
     const val RATIO = 1.3
+    // ±20 s: an add-on file is seconds off, rarely more — every second searched past that is one more chance of a
+    // coincidence (the Founder's Mentalist S4E2: the wrong answers sat 41–57 s away). Following (after the first answer):
+    // the last 5 minutes, around the timing now, at its speed, a looser bar — a file cut from another broadcast steps a
+    // few seconds at each ad break (+1 → +3 → +6.5 → +10 → +13 s over that episode)
+    const val RANGE = 20
+    const val FOLLOW_W = 300
+    const val FZ = 3.5
+    const val FTOL = 0.6
 }
 
 /** A sync in progress: what it hears, and the file's lines it matches them against. */
@@ -79,7 +87,7 @@ internal fun spokenLine(body: String): Boolean =
  * [vals]: energies at SubSync.HZ from media second [t0], NaN where nothing was heard. [cues]: (start, end) seconds in the
  * file's own times. → shown = file time × scale + off, or null when there is too little to go on.
  */
-internal fun syncSolve(t0: Double, vals: DoubleArray, cues: List<DoubleArray>): SyncResult? {
+internal fun syncSolve(t0: Double, vals: DoubleArray, cues: List<DoubleArray>, around: Double? = null, fixedScale: Double? = null): SyncResult? {
     val n = vals.size
     val heard = vals.filter { !it.isNaN() }.sorted()
     if (heard.size < SubSync.HZ * 20) return null
@@ -101,14 +109,17 @@ internal fun syncSolve(t0: Double, vals: DoubleArray, cues: List<DoubleArray>): 
         }
         p[i + 1] = p[i] + d
     }
-    val tEnd = t0 + n.toDouble() / SubSync.HZ; val range = 60.0; val m = (range * SubSync.HZ).roundToInt(); val step = 1.0 / SubSync.HZ
-    var best: SyncResult? = null; var one: SyncResult? = null
-    for (sc in doubleArrayOf(1.0, 25 / 23.976, 23.976 / 25)) {
+    val tEnd = t0 + n.toDouble() / SubSync.HZ; val range = SubSync.RANGE.toDouble(); val m = (range * SubSync.HZ).roundToInt(); val step = 1.0 / SubSync.HZ
+    var best: SyncResult? = null; var one: SyncResult? = null; val base = around ?: 0.0
+    for (sc in if (fixedScale != null) doubleArrayOf(fixedScale) else doubleArrayOf(1.0, 25 / 23.976, 23.976 / 25)) {
         // a speed mismatch pivots on the film's start: both begin together
-        val sel = cues.map { doubleArrayOf(it[0] * sc, it[1] * sc) }.filter { it[1] + range > t0 && it[0] - range < tEnd }
+        val sel = cues.map { doubleArrayOf(it[0] * sc + base, it[1] * sc + base) }.filter { it[1] + range > t0 && it[0] - range < tEnd }
         if (sel.size < 8) continue
-        val scores = DoubleArray(2 * m + 1)
-        for (k in -m..m) {
+        // a film-speed mismatch starts in step with the film, so its offset is small: a stretch with a big offset is only a
+        // plain shift in disguise near the start (the Founder's Mentalist S4E2, 09-25: −53.5 s at 25/23.976, twice)
+        val mk = if (sc == 1.0 || fixedScale != null) m else minOf(m, 10 * SubSync.HZ); val lo0 = m - mk; val hi0 = m + mk
+        val scores = DoubleArray(2 * m + 1) { -1e18 }
+        for (k in -mk..mk) {
             val sh = k * step; var s = 0.0
             for (c in sel) {
                 val ia = ((c[0] + sh - t0) * SubSync.HZ).roundToLong(); val ib = ((c[1] + sh - t0) * SubSync.HZ).roundToLong()
@@ -119,12 +130,12 @@ internal fun syncSolve(t0: Double, vals: DoubleArray, cues: List<DoubleArray>): 
         }
         // the peak, how far it stands above the whole search, and the best rival more than 1.5 s away
         var bk = 0; var bs = -1e18; var mu = 0.0; var sd = 0.0; var rival = -1e18; val gap = 1.5 * SubSync.HZ
-        for (k in scores.indices) { mu += scores[k]; if (scores[k] > bs) { bs = scores[k]; bk = k } }
-        mu /= scores.size
-        for (k in scores.indices) sd += (scores[k] - mu) * (scores[k] - mu)
-        sd = sqrt(sd / scores.size).let { if (it == 0.0) 1e-9 else it }
-        for (k in scores.indices) if (abs(k - bk) > gap && scores[k] > rival) rival = scores[k]
-        val res = SyncResult((bk - m) * step, sc, (bs - mu) / sd, (bs - mu) / ((rival - mu).let { if (it == 0.0) 1e-9 else it }), bs)
+        for (k in lo0..hi0) { mu += scores[k]; if (scores[k] > bs) { bs = scores[k]; bk = k } }
+        mu /= (hi0 - lo0 + 1)
+        for (k in lo0..hi0) sd += (scores[k] - mu) * (scores[k] - mu)
+        sd = sqrt(sd / (hi0 - lo0 + 1)).let { if (it == 0.0) 1e-9 else it }
+        for (k in lo0..hi0) if (abs(k - bk) > gap && scores[k] > rival) rival = scores[k]
+        val res = SyncResult(base + (bk - m) * step, sc, (bs - mu) / sd, (bs - mu) / ((rival - mu).let { if (it == 0.0) 1e-9 else it }), bs)
         if (best == null || res.score > best.score) best = res
         if (sc == 1.0) one = res
     }
@@ -135,12 +146,12 @@ internal fun syncSolve(t0: Double, vals: DoubleArray, cues: List<DoubleArray>): 
 }
 
 /** Three agreeing answers in a row (same speed, within a quarter second) — a lone answer is not trusted. */
-internal class SyncGate {
+internal class SyncGate(private val z: Double = SubSync.Z, private val tol: Double = 0.25) {
     private val run = ArrayList<SyncResult>()
     fun offer(r: SyncResult?): SyncResult? {
-        if (r == null || r.z < SubSync.Z || r.ratio < SubSync.RATIO) { run.clear(); return null }
+        if (r == null || r.z < z || r.ratio < SubSync.RATIO) { run.clear(); return null }
         val last = run.lastOrNull()
-        if (last != null && (abs(last.off - r.off) >= 0.25 || last.scale != r.scale)) run.clear()
+        if (last != null && (abs(last.off - r.off) >= tol || last.scale != r.scale)) run.clear()
         run.add(r)
         return if (run.size >= SubSync.AGREE) r else null
     }
@@ -183,8 +194,15 @@ internal class SpeechCollector {
         val idx = (t * SubSync.HZ).roundToLong()
         synchronized(lock) {
             if (base < 0) base = idx
-            val k = (idx - base).toInt()
-            if (k < 0 || k > SubSync.HZ * 1200) return
+            var k = (idx - base).toInt()
+            if (k < 0) return
+            if (k >= SubSync.HZ * 1200) {           // following a whole film: keep the last 10 minutes
+                val cut = SubSync.HZ * 600
+                val keep = vals.copyOfRange(cut, maxOf(cut, len))
+                vals = DoubleArray(SubSync.HZ * 1260) { Double.NaN }; keep.copyInto(vals)
+                base += cut; len = keep.size; k -= cut
+                if (k >= SubSync.HZ * 1200) return
+            }
             if (k >= vals.size) vals = vals.copyOf(max(k + 1, vals.size * 2)).also { it.fill(Double.NaN, vals.size, it.size) }
             if (k >= len || vals[k].isNaN()) { heard++; if (e > loud) loud = e }
             vals[k] = e

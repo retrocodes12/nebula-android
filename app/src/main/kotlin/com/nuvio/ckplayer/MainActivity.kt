@@ -6019,6 +6019,7 @@ private fun PlayerScreen(
     var subSynced by remember { mutableStateOf(false) }
     var syncRun by remember { mutableStateOf<SyncRun?>(null) }
     var syncHeard by remember { mutableStateOf(0) }
+    var syncFollowing by remember { mutableStateOf(false) }
     var liveOffMs by remember { mutableStateOf(0L) }                            // behind the live edge, for the left pill
     // the add-on subtitle showing: its cues, drawn by our own overlay over the video (null = the stream's tracks, or off)
     var overlayCues by remember { mutableStateOf<List<SubCue>?>(null) }
@@ -6263,7 +6264,7 @@ private fun PlayerScreen(
         tracksFor = null
         // owed until the new item is set — a hop cancelled during the relay lookup must not lose it
         if (!sameTitle && overlayCues != null) textOwed[0] = true
-        if (syncRun != null) { SpeechTap.collector = null; syncRun = null }   // a sync belongs to the source it listened to
+        if (syncRun != null) { SpeechTap.collector = null; syncRun = null; syncFollowing = false }   // a sync belongs to the source it listened to
         if (!sameTitle) {
             pickSerial[0]++; subBusy = false
             activeAddonSub = null; overlayCues = null; subOffsetMs = 0L; subScale = 1.0; subSynced = false
@@ -6734,7 +6735,7 @@ private fun PlayerScreen(
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
             .apply { if (!auto) setPreferredTextLanguages(*prefer.toTypedArray()) }
             .build()
-        if (syncRun != null) { SpeechTap.collector = null; syncRun = null }
+        if (syncRun != null) { SpeechTap.collector = null; syncRun = null; syncFollowing = false }
         overlayCues = cues
         activeAddonSub = st.url
         subOffsetMs = 0L; subScale = 1.0; subSynced = false
@@ -6745,7 +6746,7 @@ private fun PlayerScreen(
     // "Sync automatically" (SubSync.kt): the sink's ear hears the voices while the viewer watches; every 30 s of them the
     // file's lines are matched against what was heard, and three agreeing answers set the timing
     fun stopSync(msg: String?) {
-        SpeechTap.collector = null; syncRun = null
+        SpeechTap.collector = null; syncRun = null; syncFollowing = false
         if (msg != null) Toasts.show(msg)
     }
     fun startSync() {
@@ -6755,7 +6756,7 @@ private fun PlayerScreen(
         if (lines.size < 8) { Toasts.show("This subtitle file has too few lines to sync."); return }
         val col = SpeechCollector()
         SpeechTap.collector = col
-        syncHeard = 0
+        syncHeard = 0; syncFollowing = false
         syncRun = SyncRun(col, lines)
         Toasts.show("Syncing subtitles — keep watching, this listens for a minute or two.")
     }
@@ -6768,16 +6769,19 @@ private fun PlayerScreen(
     fun subsOff() {
         pickSerial[0]++
         subBusy = false
-        if (syncRun != null) { SpeechTap.collector = null; syncRun = null }
+        if (syncRun != null) { SpeechTap.collector = null; syncRun = null; syncFollowing = false }
         activeAddonSub = null; overlayCues = null
         subOffsetMs = 0L; subScale = 1.0; subSynced = false
         pickLang = null
         subChosenFor = contentId
     }
     // the sync's loop: once a second, the count for the panel; every 30 s of voices, a try; a seek starts the count again
+    // After the first answer it keeps FOLLOWING for the rest of the play (syncFollowing): the last 5 minutes, around the
+    // timing now, at its speed — a file cut from another broadcast steps a few seconds at each ad break
     LaunchedEffect(syncRun) {
         val run = syncRun ?: return@LaunchedEffect
-        val gate = SyncGate()
+        var gate = SyncGate()
+        var following = false
         var next = SubSync.MIN * SubSync.HZ
         var gen = run.col.generation
         while (syncRun === run) {
@@ -6790,17 +6794,34 @@ private fun PlayerScreen(
             next = col.heard + SubSync.STEP * SubSync.HZ
             if (col.loud < -90) { stopSync("Could not hear this stream."); break }
             val snap = col.snapshot() ?: continue
-            val r = withContext(Dispatchers.Default) { syncSolve(snap.first, snap.second, run.lines) }
+            val around = subOffsetMs / 1000.0; val scaleNow = subScale
+            val r = withContext(Dispatchers.Default) {
+                if (!following) syncSolve(snap.first, snap.second, run.lines)
+                else {
+                    val from = maxOf(0, snap.second.size - SubSync.FOLLOW_W * SubSync.HZ)
+                    syncSolve(snap.first + from.toDouble() / SubSync.HZ, snap.second.copyOfRange(from, snap.second.size), run.lines, around, scaleNow)
+                }
+            }
             if (syncRun !== run) break
             val got = gate.offer(r)
+            if (got != null && following) {
+                gate.clear()
+                if (abs(got.off - around) >= 0.3) {
+                    subOffsetMs = (got.off * 10).roundToLong() * 100; subSynced = true
+                    Toasts.show(String.format(java.util.Locale.US, "Subtitle timing followed the voices: %s%.1f s.", if (subOffsetMs >= 0) "+" else "−", abs(subOffsetMs) / 1000.0))
+                }
+                continue
+            }
             if (got != null) {
-                stopSync(null)
                 subOffsetMs = (got.off * 10).roundToLong() * 100; subScale = got.scale; subSynced = true
                 val said = if (subOffsetMs == 0L) "they were already in time"
                     else String.format(java.util.Locale.US, "%.1f s %s", abs(subOffsetMs) / 1000.0, if (subOffsetMs > 0) "later" else "earlier")
-                Toasts.show("Subtitles synced — " + said + (if (got.scale != 1.0) ", speed matched" else "") + ".")
-                break
+                Toasts.show("Subtitles synced — " + said + (if (got.scale != 1.0) ", speed matched" else "") + ". Following the voices from here.")
+                following = true; syncFollowing = true
+                gate = SyncGate(SubSync.FZ, SubSync.FTOL)
+                continue
             }
+            if (following) continue
             if (col.heard >= SubSync.MAX * SubSync.HZ) {
                 stopSync("Could not match these subtitles to the voices — they may be for another version of the video. The timing is as it was.")
                 break
@@ -7365,9 +7386,9 @@ private fun PlayerScreen(
                 inTime = subOffsetMs == 0L && subScale == 1.0,
                 timingNote = listOfNotNull(if (subScale != 1.0) "Speed matched" else null, if (subSynced) "set automatically" else null)
                     .joinToString(" · ").replaceFirstChar { it.uppercase() }.ifEmpty { null },
-                syncLabel = if (isLiveState) null else if (syncRun != null) "Listening… $syncHeard s" else "Sync automatically",
+                syncLabel = if (isLiveState) null else if (syncRun != null) (if (syncFollowing) "Following the voices" else "Listening… $syncHeard s") else "Sync automatically",
                 syncing = syncRun != null,
-                onSync = { if (syncRun != null) stopSync("Stopped syncing — the timing is as it was.") else startSync() },
+                onSync = { if (syncRun != null) stopSync(if (syncFollowing) "Stopped following — the timing stays as it is." else "Stopped syncing — the timing is as it was.") else startSync() },
                 onPickAddon = { st -> applyPick(st) },
                 onPickEmbedded = { subsOff() },
                 onOff = { subsOff() },
