@@ -59,7 +59,14 @@ class SpeechSinkDeviceTest {
         while (col.heard < secs * SubSync.HZ && System.currentTimeMillis() < deadline) {
             Thread.sleep(500)
             var pos = 0L; var playing = false; var err: String? = null
-            ins.runOnMainSync { pos = exo.currentPosition; playing = exo.isPlaying; err = exo.playerError?.message }
+            ins.runOnMainSync {
+                pos = exo.currentPosition; playing = exo.isPlaying
+                err = exo.playerError?.let { e ->
+                    var c: Throwable? = e; val chain = StringBuilder(e.errorCodeName)
+                    while (c != null) { chain.append(" <- ").append(c.toString()).append(" @ ").append(c.stackTrace.take(5).joinToString(" | ")); c = c.cause }
+                    chain.toString()
+                }
+            }
             if (err != null) { log.append("error: ").append(err); break }
             val s = col.snapshot() ?: continue
             val last = s.first + s.second.size.toDouble() / SubSync.HZ
