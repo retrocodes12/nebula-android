@@ -351,8 +351,8 @@ private fun StyleColumn(
                     Nudge("+0.5") { onNudge(500) }
                 }
                 // the sync (SubSync.kt) listens for the voices and sets the timing itself
-                if (syncLabel != null) Row(Modifier.padding(top = 8.dp)) { GlassPill(syncLabel, on = syncing, onClick = onSync) }
-                Note("If the words arrive before the voices, choose + — or let the player match them to the voices.", top = 6.dp)
+                if (syncLabel != null) Row(Modifier.padding(top = 8.dp)) { GlassPill(syncLabel, value = "Experimental", on = syncing, onClick = onSync) }
+                Note("If the words arrive before the voices, choose + — or let the player match them to the voices (experimental: it listens for a few minutes, and may not find the timing).", top = 6.dp)
             } else Note("Timing can be nudged for add-on subtitles; the stream's own tracks cannot be shifted.", top = 6.dp)
             Eyebrow("Appearance", Modifier.padding(top = 14.dp), Label2)
             SubStyleRows(ctx, style, Modifier.padding(top = 4.dp), arrows = false)

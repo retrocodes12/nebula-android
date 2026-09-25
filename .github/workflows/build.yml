@@ -127,9 +127,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.81.0.apk
+          cp "$APK" Nebula-1.82.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.81.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.81.0 Nebula-1.81.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.81.0" \
-            --notes "A security update. Add-ons and watch parties can only point the player at web addresses, a TV plays through a shared computer only on your own network, and the recovery key is marked private when copied."
+          gh release delete v1.82.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.82.0 Nebula-1.82.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.82.0" \
+            --notes "New, experimental: Sync automatically, in the Subtitles panel's Timing section. It listens to the film while you watch and fixes an add-on subtitle file's timing, including files made for a different frame rate. It takes a few minutes of dialogue and may not always find the timing. It cannot listen when the sound goes straight to a soundbar or receiver."
