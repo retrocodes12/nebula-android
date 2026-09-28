@@ -139,12 +139,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.83.0.apk
+          cp "$APK" Nebula-1.84.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.83.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.83.0 Nebula-1.83.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.83.0" \
-            --notes "The experimental Sync automatically no longer sets subtitles far off (a false match could move them almost a minute), and after its first answer it keeps following the voices, for subtitle files cut from another broadcast that drift a few seconds at each ad break."
+          gh release delete v1.84.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.84.0 Nebula-1.84.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.84.0" \
+            --notes "New for Supporter Plus, Founders and the monthly plan: vote on what Nebula builds next, a private recap of your month, early builds of the app (switch them on in Settings › Support) and three new app icons. Settings › About now thanks the supporters."
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
