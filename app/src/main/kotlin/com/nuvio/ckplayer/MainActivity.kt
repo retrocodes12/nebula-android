@@ -336,11 +336,20 @@ class MainActivity : ComponentActivity() {
         Prefs.load(this)
         Cloud.load(this)
         Support.restore(this)
+        // a Plus-level app icon whose perk lapsed goes back to Classic (AppIcons.kt; nothing is written otherwise)
+        AppIcons.enforce(this)
         Social.load(this)
         // only honor the launch intent on a fresh start — a recreated activity
         // (process restore, config change) must not jump back into the player
         pendingPlay.value = if (savedInstanceState == null) parsePlayIntent(intent) else null
         setContent { AppRoot(pendingPlay.value) { pendingPlay.value = null } }
+    }
+
+    // Nebula has left the screen: an app icon chosen in Appearance takes over now (AppIcons.settle — turning off the
+    // entry a task was opened from finishes that task, so never while a player is up: a screen switched off mid-film)
+    override fun onStop() {
+        super.onStop()
+        if (activePipPlayer.value == null) AppIcons.settle(this)
     }
 
     // singleTop: a deep link while the app is already open arrives here.
@@ -1041,6 +1050,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                     Toasts.show("This device was signed out of your profile. Nothing on it was deleted.")
                 }
                 Account.boot(ctx)            // pre-profile installs trade the master secret for a device token
+                AppIcons.enforce(ctx)        // …and the profile just re-read may have lost the Plus level
                 Support.load(ctx)            // is there a link to show, and who is on the wall
                 Cloud.pullAll(ctx)
                 while (true) { delay(300_000); Cloud.pullAll(ctx) }
@@ -2854,7 +2864,7 @@ internal fun typeLabel(type: String): String = when (type) {
  * Nuvio's update bar: "our player don't show this so add it".
  */
 @Composable
-private fun UpdateCard(version: String, notes: String, apkUrl: String = Updates.APK_URL, size: Long = 0L, onDismiss: () -> Unit) {
+private fun UpdateCard(version: String, notes: String, apkUrl: String = Updates.APK_URL, size: Long = 0L, beta: Boolean = false, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
     var notesOpen by remember { mutableStateOf(false) }
     if (notesOpen) ReleaseNotesSheet(version, notes) { notesOpen = false }
@@ -2885,7 +2895,7 @@ private fun UpdateCard(version: String, notes: String, apkUrl: String = Updates.
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Text("Update available · v$version$mb", color = TextC, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            Text((if (beta) "Early build available" else "Update available") + " · v$version$mb", color = TextC, fontSize = 15.sp, fontWeight = FontWeight.Bold)
             Text(
                 message ?: when (phase) {
                     "downloading" -> "Downloading… $progress%"
@@ -3172,7 +3182,8 @@ private fun HomeScreen(
     // so finishing an episode is reflected the moment you come back.
     LaunchedEffect(st.continueKey) { st.continueRows = Progress.continueList(ctx) }
 
-    // Best-effort update check against GitHub Releases, once per Home entry.
+    // Best-effort update check (the cloud's feed, GitHub as the fallback), once per Home entry. Early builds are offered
+    // only at the Plus level with the switch on (Perks.early); the release when it is the newer of the two.
     LaunchedEffect(Unit) {
         val current = runCatching {
             ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
@@ -3180,7 +3191,7 @@ private fun HomeScreen(
         if (current.isEmpty()) return@LaunchedEffect
         val dismissed = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getString("updateDismissed", "").orEmpty()
-        val rel = Updates.latest() ?: return@LaunchedEffect
+        val rel = Updates.latest(early = Perks.early()) ?: return@LaunchedEffect
         if (Updates.isNewer(rel.version, current) && rel.version != dismissed) update = rel
     }
 
@@ -3259,6 +3270,7 @@ private fun HomeScreen(
                 notes = rel.notes,
                 apkUrl = rel.apkUrl,
                 size = rel.size,
+                beta = rel.beta,
                 onDismiss = {
                     ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                         .putString("updateDismissed", rel.version).apply()
@@ -4029,10 +4041,11 @@ private fun SettingsScreen(
                 if (!checking) {
                     checking = true; updSub = "Checking…"
                     scope.launch {
-                        val r = runCatching { Updates.latest() }.getOrNull()
+                        val r = runCatching { Updates.latest(early = Perks.early()) }.getOrNull()
                         updSub = when {
                             r == null -> "Could not reach the release feed — try again later"
-                            Updates.isNewer(r.version, version) -> "v${r.version} is available — the update card is waiting on Home"
+                            Updates.isNewer(r.version, version) ->
+                                "v${r.version}${if (r.beta) " (an early build)" else ""} is available — the update card is waiting on Home"
                             else -> "You're up to date (v$version)"
                         }
                         checking = false
@@ -4046,6 +4059,8 @@ private fun SettingsScreen(
             }
             SettingsRow(Icons.Filled.Info, "Nebula for Android", "v$version · plays every add-on format, on-device", false, null)
         }
+        // the names on the supporters' wall, Founders first — for everyone (Perks.kt); nothing while the wall is empty
+        SupportersThanks()
         Spacer(Modifier.height(110.dp))
     }
 }
@@ -4300,6 +4315,8 @@ private fun SettingsLayoutScreen(onBack: () -> Unit, onSupport: () -> Unit) {
             }
             SettingsToggle("Ratings on posters", "The star figure in the corner of a card", Prefs.ratings, divider = false) { Prefs.setRatings(ctx, it) }
         }
+        // another app icon: phones at the Plus level (a line saying so below it; nothing on a TV) — AppIcons.kt
+        AppIconSection()
     }
 }
 
@@ -6422,6 +6439,7 @@ private fun PlayerScreen(
         val obs = LifecycleEventObserver { _, ev ->
             if (ev == Lifecycle.Event.ON_STOP) {
                 runCatching { snapshotProgress() }
+                runCatching { WatchLog.flush(context) }
                 upnextCounting = false
                 exo.pause()
             }
@@ -6596,6 +6614,7 @@ private fun PlayerScreen(
         onDispose {
             // last word on the resume point before the player goes away
             runCatching { snapshotProgress() }
+            runCatching { WatchLog.flush(context) }
             runCatching { Social.publishSoon(context) }   // friends see the freshly watched title
             exo.removeListener(l); runCatching { session?.release() }; runCatching { decoders.detach() }; exo.release()
             Relay.via = null            // the next play asks again
@@ -6620,6 +6639,9 @@ private fun PlayerScreen(
         }
     }
 
+    // the month's recap (WatchLog, on this device only), under the name the chrome shows: its own small clock, kept out
+    // of this function's body (PlayerScreen is one very large method — see the launch gate)
+    WatchLogTicker(exo, showName)
     // one clock drives the chrome: position, buffered, playing, live
     LaunchedEffect(Unit) {
         while (true) {

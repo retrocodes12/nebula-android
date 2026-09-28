@@ -38,12 +38,15 @@ object Updates {
     private const val TIMEOUT_MS = 10_000
 
     /** [notes] = the release's whole text (the card shows its first line, the ⓘ sheet all of it); [size] = the APK's
-        bytes, 0 when the feed did not say. */
-    data class Release(val version: String, val notes: String, val apkUrl: String, val size: Long = 0L)
+        bytes, 0 when the feed did not say; [beta] = an early build (a pre-release, offered only to Plus-level supporters
+        who switched Early builds on). */
+    data class Release(val version: String, val notes: String, val apkUrl: String, val size: Long = 0L, val beta: Boolean = false)
 
-    suspend fun latest(): Release? = withContext(Dispatchers.IO) {
+    /** The newest build this device may be offered: the release, or — with [early] — the early build when that is newer.
+        Whether it is newer than what is installed is the caller's question ([isNewer]). */
+    suspend fun latest(early: Boolean = false): Release? = withContext(Dispatchers.IO) {
         try {
-            fromCloud() ?: fromGitHub()
+            fromCloud(early) ?: fromGitHub()
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -51,27 +54,50 @@ object Updates {
         }
     }
 
-    /** The cloud's `{ android: { version, tag, assets: [{name, url, size}] } }`; null on any miss. */
-    private fun fromCloud(): Release? {
+    /** The cloud's `{ android: { version, tag, notes, assets: [{name, url, size}], beta: {…} | null } }`; null on any miss. */
+    private fun fromCloud(early: Boolean): Release? {
         return try {
             val a = JSONObject(getText(RELEASES_API)).optJSONObject("android") ?: return null
-            val version = cleanVersion(a.optString("version").ifEmpty { a.optString("tag") })
-            if (version.isEmpty()) return null
-            var apk = APK_URL
-            var size = 0L
-            val assets = a.optJSONArray("assets")
-            if (assets != null) for (i in 0 until assets.length()) {
-                val o = assets.optJSONObject(i) ?: continue
-                val u = o.optString("url")
-                if (o.optString("name") == "Nebula.apk" && u.startsWith(ASSET_PREFIX)) { apk = u; size = o.optLong("size"); break }
-            }
-            // the feed carries the release's text since 09-22 (it used to carry none, so the card only ever said
-            // "A new version is available"); an older cloud without it gives an empty string
-            Release(version, cleanNotes(a.optString("notes")), apk, size)
+            val stable = releaseFrom(a, beta = false) ?: return null
+            // `beta` rides beside the release only while a pre-release newer than it exists (cloud 2026-09-28)
+            val pre = if (early) a.optJSONObject("beta")?.let { releaseFrom(it, beta = true) } else null
+            newest(stable, pre)
         } catch (e: Exception) {
             null
         }
     }
+
+    /**
+     * One release out of the cloud's feed. The release falls back to the evergreen link when the feed names no asset;
+     * an early build must name its own `.apk` under our release page, or it is not offered at all (the evergreen link is
+     * the RELEASE — installing that under an early build's name would be a quiet lie).
+     */
+    internal fun releaseFrom(o: JSONObject, beta: Boolean): Release? {
+        val version = cleanVersion(o.optString("version").ifEmpty { o.optString("tag") })
+        if (version.isEmpty()) return null
+        var apk = if (beta) "" else APK_URL
+        var size = 0L
+        val assets = o.optJSONArray("assets")
+        if (assets != null) {
+            val rows = (0 until assets.length()).mapNotNull { assets.optJSONObject(it) }
+                .filter { it.optString("url").startsWith(ASSET_PREFIX) }
+            val hit = if (beta) {
+                rows.firstOrNull { it.optString("name") == "Nebula-$version.apk" }
+                    ?: rows.firstOrNull { it.optString("name").endsWith(".apk") && it.optString("name") != "Nebula.apk" }
+            } else {
+                rows.firstOrNull { it.optString("name") == "Nebula.apk" }
+            }
+            if (hit != null) { apk = hit.optString("url"); size = hit.optLong("size") }
+        }
+        if (apk.isEmpty()) return null
+        // the feed carries the release's text since 09-22 (it used to carry none, so the card only ever said
+        // "A new version is available"); an older cloud without it gives an empty string
+        return Release(version, cleanNotes(o.optString("notes")), apk, size, beta)
+    }
+
+    /** The newer of the release and an early build (the release when they tie, or when there is no early build). */
+    internal fun newest(stable: Release, early: Release?): Release =
+        if (early != null && isNewer(early.version, stable.version)) early else stable
 
     /** GitHub's own `releases/latest` — the fallback when the cloud is unreachable. */
     private fun fromGitHub(): Release? {
@@ -111,10 +137,53 @@ object Updates {
         .replace(Regex("""\n{3,}"""), "\n\n")
         .trim()
 
-    /** "v1.55.0" → "1.55.0"; anything that is not dotted digits is rejected as empty. */
-    private fun cleanVersion(raw: String): String {
+    /** "v1.55.0" → "1.55.0", "v1.84.0-beta.1" → "1.84.0-beta.1"; anything else is rejected as empty. */
+    internal fun cleanVersion(raw: String): String {
         val v = raw.trim().removePrefix("v").removePrefix("V").trim()
-        return if (Regex("^\\d+(\\.\\d+){1,3}$").matches(v)) v else ""
+        val p = parseVersion(v) ?: return ""
+        return if (p.nums.size >= 2) v else ""
+    }
+
+    /** A version taken apart: "1.84.0-beta.2" → nums [1, 84, 0], pre ["beta", "2"]; pre is empty for a release. */
+    internal class Ver(val nums: List<Int>, val pre: List<String>)
+
+    /** Dotted numbers (one to four), then optionally `-` and dot-separated letters/digits (semver's pre-release). */
+    internal fun parseVersion(raw: String): Ver? {
+        val v = raw.trim().removePrefix("v").removePrefix("V")
+        val m = Regex("""^(\d{1,9}(?:\.\d{1,9}){0,3})(?:-([0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*))?$""").matchEntire(v) ?: return null
+        val nums = m.groupValues[1].split('.').map { it.toInt() }
+        val pre = m.groupValues[2].takeIf { it.isNotEmpty() }?.split('.') ?: emptyList()
+        return Ver(nums, pre)
+    }
+
+    /**
+     * Semver's order: numbers first (missing parts count as 0), then a release outranks its own pre-releases, which
+     * compare part by part — digits as numbers, below words; words as text; a longer run of equal parts is newer.
+     * So 1.84.0 > 1.84.0-beta.10 > 1.84.0-beta.2 > 1.84.0-beta.1 > 1.83.0. Positive when [a] is newer, 0 when equal;
+     * null when either does not read as a version.
+     */
+    internal fun compareVersions(a: String, b: String): Int? {
+        val x = parseVersion(a) ?: return null
+        val y = parseVersion(b) ?: return null
+        for (i in 0 until maxOf(x.nums.size, y.nums.size)) {
+            val d = x.nums.getOrElse(i) { 0 }.compareTo(y.nums.getOrElse(i) { 0 })
+            if (d != 0) return d
+        }
+        if (x.pre.isEmpty() || y.pre.isEmpty()) return y.pre.size.coerceAtMost(1) - x.pre.size.coerceAtMost(1)
+        for (i in 0 until maxOf(x.pre.size, y.pre.size)) {
+            val p = x.pre.getOrNull(i) ?: return -1
+            val q = y.pre.getOrNull(i) ?: return 1
+            val pn = p.toIntOrNull()
+            val qn = q.toIntOrNull()
+            val d = when {
+                pn != null && qn != null -> pn.compareTo(qn)
+                pn != null -> -1
+                qn != null -> 1
+                else -> p.compareTo(q)
+            }
+            if (d != 0) return d
+        }
+        return 0
     }
 
     /** One short GET with the app's identity and a 10 s ceiling on both connect and read. */
@@ -137,17 +206,10 @@ object Updates {
         }
     }
 
-    /** Strict "remote is newer than current" over dotted numeric versions (1.5.0 > 1.4.0). */
-    fun isNewer(remote: String, current: String): Boolean {
-        val r = remote.split('.').map { it.toIntOrNull() ?: 0 }
-        val c = current.split('.').map { it.toIntOrNull() ?: 0 }
-        for (i in 0 until maxOf(r.size, c.size)) {
-            val rv = r.getOrElse(i) { 0 }
-            val cv = c.getOrElse(i) { 0 }
-            if (rv != cv) return rv > cv
-        }
-        return false
-    }
+    /** Strict "remote is newer than current" (1.5.0 > 1.4.0, 1.84.0 > 1.84.0-beta.2 > 1.84.0-beta.1 — [compareVersions]).
+        Anything that does not read as a version is never newer: an update is only offered when both sides are known.
+        Switching Early builds off can therefore never offer a downgrade — the release is simply not newer yet. */
+    fun isNewer(remote: String, current: String): Boolean = (compareVersions(remote, current) ?: 0) > 0
 
     private fun apkFile(context: Context, version: String) = File(context.cacheDir, "nebula-update-$version.apk")
 

@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#141414</color>
+    <!-- the alternate app icons' backgrounds (AppIcons.kt) -->
+    <color name="ic_launcher_background_gold">#141414</color>
+    <color name="ic_launcher_background_ice">#0B1620</color>
+    <color name="ic_launcher_background_mono">#F2F2F7</color>
     <color name="brand_red">#E50914</color>
     <color name="black">#000000</color>
 </resources>

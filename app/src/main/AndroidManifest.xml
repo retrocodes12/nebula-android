@@ -40,13 +40,8 @@
             android:screenOrientation="fullUser"
             android:supportsPictureInPicture="true"
             android:theme="@style/Theme.App">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <!-- phone launcher -->
-                <category android:name="android.intent.category.LAUNCHER" />
-                <!-- Android TV launcher -->
-                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
-            </intent-filter>
+            <!-- The launcher entries moved to the aliases below (2026-09-28, the app icon perk): this activity keeps the
+                 deep link, and every alias opens it. -->
             <!-- Deep link: nebula://play?mpd=<url>&t=<title> launches straight into playback.
                  Used by the addon's "Open in Nebula Player" card via the download site. -->
             <intent-filter>
@@ -56,6 +51,62 @@
                 <data android:scheme="nebula" android:host="play" />
             </intent-filter>
         </activity>
+
+        <!-- The app icons (AppIcons.kt): exactly one of these is on. Classic is the manifest's and carries BOTH launcher
+             categories, the same filter MainActivity had — an Android TV launcher (the banner) and the release launch gate
+             (`monkey -c LAUNCHER`) find it as before, and a TV never switches. The others are phone-only choices for
+             Plus-level supporters, off until picked. -->
+        <activity-alias
+            android:name=".LauncherClassic"
+            android:targetActivity=".MainActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <!-- phone launcher -->
+                <category android:name="android.intent.category.LAUNCHER" />
+                <!-- Android TV launcher -->
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".LauncherGold"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_gold"
+            android:roundIcon="@mipmap/ic_launcher_gold_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".LauncherIce"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_ice"
+            android:roundIcon="@mipmap/ic_launcher_ice_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".LauncherMono"
+            android:targetActivity=".MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_mono"
+            android:roundIcon="@mipmap/ic_launcher_mono_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
 
         <provider
             android:name="androidx.core.content.FileProvider"

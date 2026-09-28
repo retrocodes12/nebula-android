@@ -70,13 +70,26 @@ object Support {
     val others: List<String> get() = wall.filter { it.second != "founder" }.map { it.first }
 
     // ---- tiers (2026-09-19): one-time, permanent; a higher code or payment raises the profile ----
-    val TIERS = listOf("supporter" to "Supporter", "plus" to "Supporter Plus", "founder" to "Founder")
+    // `monthly` (2026-09-28, $1.50 a month) carries every Plus-level perk while its subscription runs — the server ranks
+    // it 2 and takes it away when the subscription ends. The order of this list is the order of the names, NOT the rank.
+    val TIERS = listOf("supporter" to "Supporter", "plus" to "Supporter Plus", "monthly" to "Monthly Supporter", "founder" to "Founder")
+    private val RANKS = mapOf("supporter" to 1, "plus" to 2, "monthly" to 2, "founder" to 3)
     val MARKS = listOf("star" to "Star", "heart" to "Heart", "bolt" to "Bolt", "crown" to "Crown")
     fun cleanTier(v: String?): String = if (TIERS.any { it.first == v }) v!! else "supporter"
     fun cleanMark(v: String?): String = if (MARKS.any { it.first == v }) v!! else "star"
-    /** 0 = not a supporter, 1 supporter, 2 plus, 3 founder. */
-    fun rank(): Int { val p = Cloud.profile ?: return 0; if (!p.sup) return 0; return TIERS.indexOfFirst { it.first == p.tier } + 1 }
+    /** A tier's rank: 1 supporter, 2 plus or monthly, 3 founder (an unknown tier counts as a supporter). */
+    internal fun rankOf(tier: String?): Int = RANKS[cleanTier(tier)] ?: 1
+    /** 0 = not a supporter, 1 supporter, 2 plus or monthly, 3 founder. */
+    fun rank(): Int { val p = Cloud.profile ?: return 0; if (!p.sup) return 0; return rankOf(p.tier) }
     fun tierName(): String = TIERS.firstOrNull { it.first == Cloud.profile?.tier }?.second ?: "Supporter"
+    /** The monthly plan's state in words, or "" when there is none (or the service sent a state this build does not know). */
+    internal fun subStatusText(status: String): String = when (status) {
+        "trialing" -> "Free week"
+        "active" -> "Active"
+        "past_due" -> "Payment failed — update your card"
+        "paused" -> "Paused"
+        else -> ""
+    }
     /** The mark by THIS profile's name: the chosen one from Supporter Plus up, a star below. */
     fun myMark(): String = if (rank() >= 2) cleanMark(Cloud.profile?.mark) else "star"
     /** How many supporters there are — including the ones who stayed off the wall. */
@@ -269,6 +282,8 @@ internal fun SettingsSupportScreen(onBack: () -> Unit, onProfile: () -> Unit) {
         } else {
             SupportPitch(tv = tv, onOpen = { scope.launch { Support.open(ctx) } })
         }
+        // the Plus-level perks (the monthly plan, the vote, early builds, the month) — below that level, a line each (Perks.kt)
+        SupportPerks(rank = rank, tv = tv)
         if (rank < 3) {
             Spacer(Modifier.height(12.dp))
             SupportCodePanel(
@@ -365,7 +380,7 @@ private fun SupporterPanel(me: Profile, rank: Int, tv: Boolean, onWall: (Boolean
             Box(Modifier.fillMaxWidth().padding(top = 16.dp).height(1.dp).background(LineC))
             Text("Raise your tier", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 14.dp))
             Text(
-                (if (rank < 2) "Supporter Plus: any accent colour, your own mark, early builds. " else "") +
+                (if (rank < 2) "Supporter Plus or Monthly: any accent colour, your own mark, early builds, a vote on what's next. " else "") +
                     "Founder: the Founders list, a gold ring, Nebula Sports without the sponsor prompt.",
                 color = MutedC, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 2.dp, bottom = 12.dp),
             )
@@ -461,7 +476,7 @@ private fun SupportCodePanel(
 
 /** The hairline card every block on this page sits in. */
 @Composable
-private fun SupportPanel(content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+internal fun SupportPanel(content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
     Column(
         Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(16.dp))
             .border(1.dp, LineC, RoundedCornerShape(16.dp)).padding(18.dp),

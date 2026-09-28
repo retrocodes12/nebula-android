@@ -16,9 +16,14 @@ data class Profile(
     val sup: Boolean = false,
     val supSince: Long = 0L,
     val wall: Boolean = false,
-    /** supporter | plus | founder (tiers, 2026-09-19); star | heart | bolt | crown (plus and up choose). */
+    /** supporter | plus | monthly | founder (tiers, 2026-09-19; monthly 09-28); star | heart | bolt | crown (plus and up choose). */
     val tier: String = "supporter",
     val mark: String = "star",
+    /** The monthly plan, when this profile has one: trialing | active | past_due | paused, else "". */
+    val subStatus: String = "",
+    /** Its private manage page (the service's portal — anyone holding it can manage the plan): kept in memory only,
+        never in the stored copy, which backs up with the rest of `ckplayer`. From the last `/v1/profile/me`. */
+    val subManage: String = "",
 )
 data class DeviceRec(val id: String, val name: String, val plat: String, val at: Long, val seen: Long, val me: Boolean)
 class TvCode(val code: String, val poll: String, val until: Long)
@@ -50,6 +55,9 @@ object Account {
             "already a supporter" -> "You're already a supporter."
             "not a supporter" -> "Only supporters have a wall entry."
             "no profile" -> "Sign in first — the supporter mark lives on your profile."
+            "vote needs plus" -> "The vote is for Supporter Plus, Founders and Monthly supporters."
+            "no vote open" -> "This vote has closed."
+            "unknown option" -> "That choice is no longer on the ballot — the vote was updated."
             "unauthorized" -> "This device was signed out. Sign in again."
             else -> "Something went wrong (${f.code})."
         }

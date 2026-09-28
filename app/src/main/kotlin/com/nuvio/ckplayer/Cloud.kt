@@ -135,6 +135,9 @@ object Cloud {
         // /v1/profile/me carries `supporter: {since, wall} | null`; creds replies, a PUT reply
         // and the copy stored below carry the flattened `sup` / `supSince` / `wall`.
         val sup = o.optJSONObject("supporter")
+        // the monthly plan rides on the supporter object (`subscription: {status, manage}`, absent = none); the stored
+        // copy keeps only the status — the manage link never leaves memory
+        val plan = sup?.optJSONObject("subscription")
         return Profile(
             h, o.optString("name").ifEmpty { h }, o.optString("avatar").ifEmpty { Account.AVATARS[0] },
             sup = o.optBoolean("sup") || sup != null,
@@ -142,8 +145,14 @@ object Cloud {
             wall = if (sup != null) sup.optBoolean("wall") else o.optBoolean("wall"),
             tier = Support.cleanTier((if (sup != null) sup.optString("tier") else o.optString("tier"))),
             mark = Support.cleanMark((if (sup != null) sup.optString("mark") else o.optString("mark"))),
+            subStatus = cleanPlanStatus(if (sup != null) plan?.optString("status") else o.optString("subStatus")),
+            subManage = if (sup != null) cleanManage(plan?.optString("manage")) else "",
         )
     }
+    /** A plan state as a word this app can hold (anything else is dropped); "" = no plan. */
+    internal fun cleanPlanStatus(v: String?): String = v?.trim()?.lowercase()?.takeIf { Regex("^[a-z_]{1,24}$").matches(it) }.orEmpty()
+    /** The manage link is opened in a browser: only ever an https address of a sane length. */
+    internal fun cleanManage(v: String?): String = v?.trim()?.takeIf { it.startsWith("https://") && it.length <= 500 && ' ' !in it }.orEmpty()
     /** Accepts any server object carrying handle/name/avatar (a creds reply, /me, a PUT reply). */
     internal fun setProfile(ctx: Context, o: JSONObject?) {
         var p = parseProfile(o)
@@ -153,16 +162,24 @@ object Cloud {
         if (p != null && p.sup && p.supSince == 0L && prev != null && prev.handle == p.handle && prev.supSince > 0L) {
             p = p.copy(supSince = prev.supSince, wall = prev.wall)
         }
+        // …and the monthly plan, which such a reply does not mention at all
+        if (p != null && o != null && !o.has("supporter") && !o.has("subStatus") && prev != null && prev.handle == p.handle) {
+            p = p.copy(subStatus = prev.subStatus, subManage = prev.subManage)
+        }
         profile = p
         storeProfile(ctx, p)
     }
 
-    /** Patch the supporter fields from a `{since, wall}` reply (redeem, wall on/off). */
+    /** Patch the supporter fields from a `{since, wall, tier, mark, subscription?}` reply (redeem, wall on/off, mark). */
     internal fun noteSupporter(ctx: Context, s: JSONObject?) {
         val p = profile ?: return
-        val next = if (s == null) p.copy(sup = false, supSince = 0L, wall = false, tier = "supporter", mark = "star")
+        val plan = s?.optJSONObject("subscription")
+        val next = if (s == null) p.copy(sup = false, supSince = 0L, wall = false, tier = "supporter", mark = "star", subStatus = "", subManage = "")
         else p.copy(sup = true, supSince = s.optLong("since", p.supSince), wall = s.optBoolean("wall"),
-            tier = Support.cleanTier(s.optString("tier", p.tier)), mark = Support.cleanMark(s.optString("mark", p.mark)))
+            tier = Support.cleanTier(s.optString("tier", p.tier)), mark = Support.cleanMark(s.optString("mark", p.mark)),
+            subStatus = cleanPlanStatus(plan?.optString("status")),
+            // a reply may leave the link out: the one /me brought stays while the plan does
+            subManage = if (plan == null) "" else cleanManage(plan.optString("manage")).ifEmpty { p.subManage })
         if (next == p) return
         profile = next
         storeProfile(ctx, next)
@@ -172,6 +189,7 @@ object Cloud {
         val json = if (p == null) "" else JSONObject()
             .put("handle", p.handle).put("name", p.name).put("avatar", p.avatar)
             .put("sup", p.sup).put("supSince", p.supSince).put("wall", p.wall).put("tier", p.tier).put("mark", p.mark)
+            .put("subStatus", p.subStatus)
             .toString()
         prefs(ctx).edit().putString("profile", json).apply()
     }

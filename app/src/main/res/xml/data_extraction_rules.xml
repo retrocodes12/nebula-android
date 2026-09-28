@@ -4,11 +4,13 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="ckplayer_cred.xml" />
+        <exclude domain="sharedpref" path="ckplayer_private.xml" />
         <exclude domain="file" path="p2p" />
         <exclude domain="external" path="p2p" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="ckplayer_cred.xml" />
+        <exclude domain="sharedpref" path="ckplayer_private.xml" />
         <exclude domain="file" path="p2p" />
         <exclude domain="external" path="p2p" />
     </device-transfer>

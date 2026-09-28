@@ -158,6 +158,8 @@ object Prefs {
 
     // ---- advanced ----
     var welcome by mutableStateOf(true); private set              // the toast at start
+    // ---- supporters (Plus level: Supporter Plus, Founder, Monthly) ----
+    var earlyBuilds by mutableStateOf(false); private set         // offer pre-releases on the update card (Perks.kt)
 
     fun load(ctx: Context) {
         val p = ctx.getSharedPreferences(P, Context.MODE_PRIVATE)
@@ -224,6 +226,7 @@ object Prefs {
         autoPick = p.getString("pref_autopick", null) ?: (if (p.getBoolean("pref_autostream", false)) "last" else "off")
         pickWait = p.getInt("pref_pickwait", 6)
         welcome = p.getBoolean("pref_welcome", true)
+        earlyBuilds = p.getBoolean("pref_earlybuilds", false)
         discType = p.getString("pref_disctype", "") ?: ""
         discCatalog = p.getString("pref_disccat", "") ?: ""
         discGenre = p.getString("pref_discgenre", "") ?: ""
@@ -304,6 +307,7 @@ object Prefs {
     fun setAutoStream(ctx: Context, v: Boolean) = setAutoPick(ctx, if (v) "last" else "off")
     fun setPickWait(ctx: Context, v: Int) { pickWait = v; edit(ctx).putInt("pref_pickwait", v).apply() }
     fun setWelcome(ctx: Context, v: Boolean) { welcome = v; edit(ctx).putBoolean("pref_welcome", v).apply() }
+    fun setEarlyBuilds(ctx: Context, v: Boolean) { earlyBuilds = v; edit(ctx).putBoolean("pref_earlybuilds", v).apply() }
 
     /**
      * Reset all settings: every `pref_*` key, the subtitle style, the Home arrangement

@@ -1,8 +1,20 @@
 name: Build APK
 
+# Two ways out of this file:
+#   * a push to `main` IS the release: gate, sign, then (re)create the release v<X.Y.Z> with Nebula-X.Y.Z.apk AND the
+#     evergreen Nebula.apk that every short link and the in-app updater's fallback point at (releases/latest).
+#   * a push to `beta` is an EARLY BUILD for Plus-level supporters who switched Early builds on (the cloud's
+#     /v1/releases offers `android.beta` when a pre-release newer than the release exists): the same gate and the same
+#     signing, then a GitHub PRE-RELEASE v<versionName> carrying ONLY Nebula-<versionName>.apk. It never uploads or
+#     replaces Nebula.apk, never touches a release that is not a pre-release, and a pre-release is never "latest", so
+#     releases/latest (and with it da.gd/nebulaapk, Downloader code 7664693) keeps pointing at the stable build.
+#     The beta branch's versionName must read X.Y.Z-beta.N (checked below), and its versionCode is the one its stable
+#     X.Y.Z will use: the stable build then installs over the early one (an equal versionCode is allowed), and the
+#     app's own comparison already ranks X.Y.Z above X.Y.Z-beta.N (Updates.compareVersions).
+# A workflow_dispatch on any other branch gates, builds, signs and checks the signature, and publishes nothing.
 on:
   push:
-    branches: [ main ]
+    branches: [ main, beta ]
     paths-ignore: [ '**.md' ]   # docs-only pushes must not re-cut the release
   workflow_dispatch:
 
@@ -133,3 +145,27 @@ jobs:
           gh release create v1.83.0 Nebula-1.83.0.apk Nebula.apk \
             --title "Nebula (Android phone + TV) v1.83.0" \
             --notes "The experimental Sync automatically no longer sets subtitles far off (a false match could move them almost a minute), and after its first answer it keeps following the voices, for subtitle files cut from another broadcast that drift a few seconds at each ad break."
+
+      # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
+      - name: Publish early build (pre-release)
+        if: github.ref == 'refs/heads/beta'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER=$(sed -n 's/^ *versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
+          echo "early build: $VER"
+          echo "$VER" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$' \
+            || { echo "::error::the beta branch's versionName must read X.Y.Z-beta.N (found '$VER')"; exit 1; }
+          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
+          cp "$APK" "Nebula-$VER.apk"
+          # a tag that already exists may only be an earlier upload of this same early build — never a release
+          if gh release view "v$VER" --json isPrerelease --jq .isPrerelease > "$RUNNER_TEMP/pre.txt" 2>/dev/null; then
+            [ "$(cat "$RUNNER_TEMP/pre.txt")" = "true" ] \
+              || { echo "::error::v$VER exists and is not a pre-release — refusing to touch it"; exit 1; }
+            gh release delete "v$VER" -y --cleanup-tag
+          fi
+          git log -1 --format=%B "$GITHUB_SHA" > "$RUNNER_TEMP/notes.txt"
+          gh release create "v$VER" "Nebula-$VER.apk" \
+            --prerelease --latest=false --target "$GITHUB_SHA" \
+            --title "Nebula (Android phone + TV) v$VER — early build" \
+            --notes-file "$RUNNER_TEMP/notes.txt"
