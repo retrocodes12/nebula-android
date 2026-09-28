@@ -139,12 +139,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.84.0.apk
+          cp "$APK" Nebula-1.84.1.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.84.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.84.0 Nebula-1.84.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.84.0" \
-            --notes "New for Supporter Plus, Founders and the monthly plan: vote on what Nebula builds next, a private recap of your month, early builds of the app (switch them on in Settings › Support) and three new app icons. Settings › About now thanks the supporters."
+          gh release delete v1.84.1 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.84.1 Nebula-1.84.1.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.84.1" \
+            --notes "Streams from add-ons that take a while to answer now show up: Android waited 20 seconds for a stream list, and an add-on that looks every source up live can take a minute. Other add-ons still show their streams straight away while it answers."
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)

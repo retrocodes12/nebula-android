@@ -139,10 +139,10 @@ object Stremio {
     }
 
     /** How long a stream list may take to START arriving. Some add-ons look every source up live and answer only when
-        all are in — one measured 24–27 s to its first byte on every request (2026-09-28) — so the 20 s used for
-        everything else dropped them as "no streams" while the web player, which has no limit, showed them. The page
-        shows each add-on's rows as they come, so a slow one only fills in later. */
-    const val STREAM_READ_MS = 60_000
+        all are in — one measured 24 s to over a minute to its first byte (2026-09-28) — so the 20 s used for everything
+        else dropped them as "no streams" while the web player, which has no limit, showed them. The page shows each
+        add-on's rows as they come, so a slow one only fills in later. */
+    const val STREAM_READ_MS = 90_000
 
     suspend fun httpGetText(u: String, readMs: Int = 20000): String = withContext(Dispatchers.IO) {
         val conn = URL(u).openConnection() as HttpURLConnection
