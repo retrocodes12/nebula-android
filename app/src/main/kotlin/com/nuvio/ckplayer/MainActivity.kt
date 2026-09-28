@@ -133,6 +133,7 @@ import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.VolunteerActivism
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -5426,6 +5427,10 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
     // the page has answered once: ↻ (and Add-ons) stay put through a reload, so the chip the remote pressed is not taken away
     var answered by remember { mutableStateOf(false) }
     var usualUrl by remember { mutableStateOf<String?>(null) }   // the row that matches the last pick
+    // the add-ons still being asked, by name (09-28): one took a minute and the page looked finished without it — each is
+    // named with a spinner until it answers, and above the rows once some are on screen (web parity)
+    var waiting by remember { mutableStateOf(listOf<String>()) }
+    var waitSlow by remember { mutableStateOf(false) }
     val ctx = LocalContext.current
     // Start over: a one-play choice for anything already begun (web parity). "When you come back"
     // (Settings › Playback) sets the starting point: Resume, Start over, or Ask — a two-option sheet
@@ -5457,6 +5462,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
     LaunchedEffect(item, reload) {
         loading = true
         usualUrl = null
+        waiting = emptyList(); waitSlow = false
         // the origin add-on and every enabled add-on that serves streams for this id — a switched-off origin feeds nothing either;
         // one entry per address, because the rows below are keyed by it
         val order = (listOf(addon) + activeAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl })
@@ -5511,6 +5517,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             return@LaunchedEffect
         }
         val timer = if (Prefs.autoPick != "off" && autoPlayedFor != item.id) launch { delay(Prefs.pickWait * 1000L); decide() } else null
+        val slowTimer = launch { delay(12_000); waitSlow = true }
         // Every add-on at once (web parity). They were asked one after another, so the page waited for the SUM of
         // every add-on's answer time and one slow add-on held up all the ones after it — the "very slow" on issue #1.
         // Each answer is still handled here on the main thread, so the counters and slots need no locking.
@@ -5533,7 +5540,11 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                         if (!m.canStream(item.type, item.id)) return@launch
                         streamers++
                     }
-                    val raw = Stremio.loadStreams(a.base, item.type, item.id)
+                    // named while it answers — the origin too, unless its cached manifest says it plays nothing
+                    val asking = if (!origin || known == null || known.canStream(item.type, item.id)) a.name else null
+                    if (asking != null) waiting = waiting + asking
+                    val raw = try { Stremio.loadStreams(a.base, item.type, item.id) }
+                        finally { if (asking != null) waiting = waiting.toMutableList().also { it.remove(asking) } }
                     val streams = arrangeStreams(raw, item.runtime)
                     if (raw.isNotEmpty() && streams.isEmpty()) floored = true
                     if (streams.isNotEmpty()) {
@@ -5563,6 +5574,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             }
         }.forEach { it.join() }
         timer?.cancel()
+        slowTimer.cancel()
         decide()
         if (sections.isEmpty()) {
             val why = streamsEmptyStatus(order.isEmpty(), streamers, unread, failures, order.size, floored)
@@ -5692,7 +5704,13 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                     }
                 }
             }
-            if (loading && sections.isEmpty()) items(4) { Box(Modifier.padding(horizontal = 16.dp)) { SkeletonRow(42.dp, 42.dp, circle = true) } }
+            // once rows are on screen, the add-ons still answering are named above them (their own rows come later)
+            if (waiting.isNotEmpty() && sections.isNotEmpty()) item(key = "waiting") { StreamsWaitLine(waiting, waitSlow) }
+            // nothing yet: the add-ons being asked, by name — anonymous skeletons only until the first one is asked
+            if (loading && sections.isEmpty()) {
+                if (waiting.isEmpty()) items(4) { Box(Modifier.padding(horizontal = 16.dp)) { SkeletonRow(42.dp, 42.dp, circle = true) } }
+                else items(waiting.size, key = { "wait/$it" }) { i -> StreamWaitRow(waiting[i], waitSlow) }
+            }
             // keyed by add-on and place, not by position: add-ons answer in any order and a slower one lands ABOVE a
             // faster one, so position keys would slide a different stream under the row the remote is on
             shown.forEachIndexed { sectionIndex, (from, streams) ->
@@ -5714,7 +5732,43 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                 }
             }
             }
+            // …and where their rows will land, below the ones that came first
+            if (sections.isNotEmpty() && filter == null) items(waiting.size, key = { "waitrow/$it" }) { i -> StreamWaitRow(waiting[i], waitSlow) }
         }
+    }
+}
+
+/** An add-on still being asked for streams: a spinner, its name, and — after 12 s — that some take up to a minute. */
+@Composable
+private fun StreamWaitRow(name: String, slow: Boolean) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp).border(1.dp, LineC, RoundedCornerShape(14.dp))
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircularProgressIndicator(Modifier.size(18.dp), color = TextC, strokeWidth = 2.dp, trackColor = Color(0x2EFFFFFF))
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(name, color = TextC, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(if (slow) "Still looking — some add-ons take up to a minute" else "Looking for streams…",
+                color = MutedC, fontSize = 12.5.sp, modifier = Modifier.padding(top = 2.dp))
+        }
+    }
+}
+
+/** Above the rows: who is still being asked ("Still asking A", "A and B", "3 add-ons"). */
+@Composable
+private fun StreamsWaitLine(waiting: List<String>, slow: Boolean) {
+    val who = when (waiting.size) {
+        1 -> waiting[0]
+        2 -> waiting[0] + " and " + waiting[1]
+        else -> "${waiting.size} add-ons"
+    }
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        CircularProgressIndicator(Modifier.size(13.dp), color = MutedC, strokeWidth = 1.5.dp, trackColor = Color(0x1FFFFFFF))
+        Spacer(Modifier.width(9.dp))
+        Text("Still asking $who" + if (slow) " — some add-ons take up to a minute" else "",
+            color = MutedC, fontSize = 12.5.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 
