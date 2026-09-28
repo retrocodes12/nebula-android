@@ -138,10 +138,16 @@ object Stremio {
         return out
     }
 
-    suspend fun httpGetText(u: String): String = withContext(Dispatchers.IO) {
+    /** How long a stream list may take to START arriving. Some add-ons look every source up live and answer only when
+        all are in — one measured 24–27 s to its first byte on every request (2026-09-28) — so the 20 s used for
+        everything else dropped them as "no streams" while the web player, which has no limit, showed them. The page
+        shows each add-on's rows as they come, so a slow one only fills in later. */
+    const val STREAM_READ_MS = 60_000
+
+    suspend fun httpGetText(u: String, readMs: Int = 20000): String = withContext(Dispatchers.IO) {
         val conn = URL(u).openConnection() as HttpURLConnection
         conn.connectTimeout = 15000
-        conn.readTimeout = 20000
+        conn.readTimeout = readMs
         conn.instanceFollowRedirects = true
         conn.setRequestProperty("Accept", "*/*")
         // A User-Agent is required by the GitHub API (update check) and also lets
@@ -370,7 +376,7 @@ object Stremio {
     /** Parsed off the main thread: a torrent add-on can answer with hundreds of rows, and every add-on now answers at once. */
     suspend fun loadStreams(base: String, type: String, id: String): List<StreamItem> = withContext(Dispatchers.IO) {
         val u = "$base/stream/${enc(type)}/${enc(id)}.json"
-        val j = JSONObject(httpGetText(u))
+        val j = JSONObject(httpGetText(u, STREAM_READ_MS))
         val arr = j.optJSONArray("streams") ?: return@withContext emptyList()
         val out = mutableListOf<StreamItem>()
         for (i in 0 until arr.length()) {
