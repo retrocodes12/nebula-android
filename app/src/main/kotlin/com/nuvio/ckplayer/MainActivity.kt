@@ -709,6 +709,24 @@ internal fun seriesCursorOf(videos: List<Episode>, recOf: (String) -> ProgressRe
 private fun seriesUpNext(ctx: Context, type: String, videos: List<Episode>): Episode? =
     seriesCursor(ctx, type, videos)?.upNext
 
+private sealed interface SeriesPlay {
+    data class Resume(val record: ProgressRec) : SeriesPlay
+    data class EpisodeTarget(val episode: Episode) : SeriesPlay
+}
+
+/** The first playable episode for a fresh series — regular seasons before specials. */
+internal fun seriesFirstEpisode(videos: List<Episode>): Episode? =
+    videos.sortedWith(compareBy({ it.season == 0 }, { it.season }, { it.episode ?: 0 })).firstOrNull()
+
+/** One answer for both the title-page label and its click: the resume point, else up next, else (a fresh or a
+    finished show) the first regular episode — what the click always started. */
+private fun seriesPlayTarget(ctx: Context, item: MetaItem, episodes: List<Episode>): SeriesPlay? {
+    if (item.type != "series") return null
+    seriesResumeRec(ctx, item.id)?.let { return SeriesPlay.Resume(it) }
+    val go = seriesUpNext(ctx, item.type, episodes) ?: seriesFirstEpisode(episodes)
+    return go?.let { SeriesPlay.EpisodeTarget(it) }
+}
+
 /** "Resume S2E4" from the id tail past the series prefix; kitsu-style single
     tails become "Resume E3"; anything else is plain "Resume". */
 private fun resumeLabel(seriesId: String, epId: String): String {
@@ -718,6 +736,33 @@ private fun resumeLabel(seriesId: String, epId: String): String {
         rest.size == 1 && rest[0].isNotEmpty() -> "Resume E${rest[0]}"
         else -> "Resume"
     }
+}
+
+/** The Play pill's compact words, kept pure so marks and resolver reads can be tested separately. */
+internal fun seriesPlayLabel(
+    seriesId: String,
+    resumeId: String?,
+    episodeId: String?,
+    season: Int? = null,
+    episode: Int? = null,
+): String {
+    resumeId?.let { return resumeLabel(seriesId, it) }
+    val tail = episodeId?.takeIf { it.startsWith("$seriesId:") }
+        ?.removePrefix("$seriesId:")?.split(":")
+    val idEpisode = when {
+        tail?.size == 2 -> tail[1].toIntOrNull()
+        tail?.size == 1 -> tail[0].toIntOrNull()
+        else -> null
+    }
+    val episodeNumber = idEpisode ?: episode
+    if (episodeNumber == null) return "Play"
+    val idSeason = tail?.takeIf { it.size == 2 }?.firstOrNull()?.toIntOrNull()
+    val seasonNumber = when {
+        idSeason != null -> idSeason
+        tail != null -> null // a kitsu-style id carries only its episode number
+        else -> season?.takeIf { it > 0 }
+    }
+    return if (seasonNumber == null) "Play E$episodeNumber" else "Play S${seasonNumber}E$episodeNumber"
 }
 
 /** Home tab state, hoisted to AppRoot so rows survive navigating into a stream. */
@@ -4557,6 +4602,8 @@ private fun DetailScreen(
     val ctx = LocalContext.current
     val ck = item.type + ":" + item.id
     val detailTv = remember(ctx) { Account.isTv(ctx) }
+    // Weight needs a bounded, non-scrolling row; TV and wide screens keep the natural pill and focus geometry.
+    val detailPhone = !detailTv && LocalConfiguration.current.screenWidthDp < 600
     val screenEntry = LocalScreenEntry.current
     // Back from Streams or the player comes back to the season the viewer was on (not the cursor's) and the list where
     // it was — the page leaves composition, and it used to rebuild at the top of the cursor's season every time
@@ -4584,11 +4631,10 @@ private fun DetailScreen(
     }
 
     // bumped whenever an episode is marked by hand, so everything that reads the
-    // progress store on this page is re-read — the hero button's LABEL above all,
-    // which otherwise goes on offering "Resume S1E3" for an episode just ticked off
+    // progress store on this page is re-read — the film hero button's LABEL above all
     var marks by remember(ck) { mutableIntStateOf(0) }
     val resume = remember(ck, full, marks, Progress.syncVersion) {
-        if (item.type == "series") seriesResumeRec(ctx, item.id)
+        if (item.type == "series") null
         else Progress.get(ctx, item.type, item.id)?.takeIf {
             !it.done && !it.dismissed && it.pos >= Progress.MIN_POS_MS && it.dur > 0 && it.pos <= it.dur - Progress.END_GAP_MS
         }
@@ -4662,6 +4708,9 @@ private fun DetailScreen(
         val seasons = bySeason.keys.sortedWith(compareBy({ it == 0 }, { it }))
         val currentSeason = selectedSeason ?: seasons.firstOrNull()
         val eps = (bySeason[currentSeason] ?: emptyList()).sortedBy { it.episode ?: 0 }
+        val seriesTarget = remember(ck, marks, Progress.syncVersion, episodes) {
+            if (item.type == "series") seriesPlayTarget(ctx, item, episodes) else null
+        }
 
         // the list's place, put back once the episodes are there to scroll to (the page rebuilds with only its header)
         val keptPlace = remember { if (backHere) screenEntry?.let { keptDetailPlaces[it] } else null }
@@ -4726,7 +4775,9 @@ private fun DetailScreen(
         val playPill = remember { MutableInteractionSource() }
         val playFocused by playPill.collectIsFocusedAsState()
         Row(
-            Modifier.padding(top = 16.dp, bottom = 24.dp).horizontalScroll(rememberScrollState()),
+            Modifier.padding(top = 16.dp, bottom = 24.dp).then(
+                if (detailPhone) Modifier.fillMaxWidth() else Modifier.horizontalScroll(rememberScrollState())
+            ),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -4734,20 +4785,15 @@ private fun DetailScreen(
                 onClick = {
                     // recompute at click time — the remembered copy can lag a
                     // just-finished episode when returning from playback
-                    val r = if (item.type == "series") seriesResumeRec(ctx, item.id) else null
-                    when {
-                        item.type == "series" && r != null -> onResumeEpisode(
-                            if (r.addonUrl.isEmpty()) r.copy(addonUrl = addon.manifestUrl) else r
-                        )
-                        item.type == "series" -> {
-                            // nothing half-watched, but episodes may still be ticked off —
-                            // continue the show from up next rather than restarting it at episode 1
-                            val go = seriesUpNext(ctx, item.type, episodes)
-                                ?: episodes.sortedWith(compareBy({ it.season == 0 }, { it.season }, { it.episode ?: 0 })).firstOrNull()
-                            if (go != null) onPlayEpisode(go, PlayIntent.TAP) else onEpisodes()
+                    if (item.type == "series") {
+                        when (val target = seriesPlayTarget(ctx, item, episodes)) {
+                            is SeriesPlay.Resume -> onResumeEpisode(
+                                if (target.record.addonUrl.isEmpty()) target.record.copy(addonUrl = addon.manifestUrl) else target.record
+                            )
+                            is SeriesPlay.EpisodeTarget -> onPlayEpisode(target.episode, PlayIntent.TAP)
+                            null -> onEpisodes()
                         }
-                        else -> onPlayMovie()
-                    }
+                    } else onPlayMovie()
                 },
                 interactionSource = playPill,
                 colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
@@ -4759,6 +4805,7 @@ private fun DetailScreen(
                 // the pill's rounded start was cut flat on the first thing every title page focuses (android-tv-14);
                 // this way it grows into the 10 dp gap on its right
                 modifier = Modifier.height(48.dp)
+                    .then(if (detailPhone) Modifier.weight(1f) else Modifier)
                     .returnTo("play")
                     .focusRequester(tvFirstFocus())
                     .graphicsLayer {
@@ -4770,7 +4817,13 @@ private fun DetailScreen(
                 Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
                 Text(
                     when {
-                        item.type == "series" && resume != null -> resumeLabel(item.id, resume.id)
+                        item.type == "series" -> when (val target = seriesTarget) {
+                            is SeriesPlay.Resume -> seriesPlayLabel(item.id, target.record.id, null)
+                            is SeriesPlay.EpisodeTarget -> seriesPlayLabel(
+                                item.id, null, target.episode.id, target.episode.season, target.episode.episode,
+                            )
+                            null -> seriesPlayLabel(item.id, null, null)
+                        }
                         resume != null -> "Resume"
                         else -> "Play"
                     },
