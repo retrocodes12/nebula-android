@@ -7153,6 +7153,18 @@ private fun PlayerScreen(
             if (runCatching { target.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
         }
     }
+    // The panel removes the chrome, so its opener is unattached when closePanel() first runs. Retry after the
+    // chrome has composed again; otherwise a TV remote can lose focus on Back or Done.
+    val subPanelWasOpen = remember { BooleanArray(1) }
+    LaunchedEffect(subPanelOpen, remoteNow) {
+        val wasOpen = subPanelWasOpen[0]
+        subPanelWasOpen[0] = subPanelOpen
+        if (subPanelOpen || !wasOpen || !remoteNow) return@LaunchedEffect
+        repeat(10) {
+            withFrameNanos {}
+            if (runCatching { subsFocus.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+        }
+    }
     // With the chrome asleep the Up next card takes the remote (after Skip and the source pill, which already do),
     // so OK near the end is Play now — as the web card owns OK.
     LaunchedEffect(upnextOpen, chromeVisible, skipKind == null, swapOffer == null) {
@@ -7177,7 +7189,8 @@ private fun PlayerScreen(
     }
     // a phone on its side has no room for both: the board would sit over the centre transport, so while the
     // controls are up there it steps aside (with its scrim and the title it hides), and comes back when they fade
-    val boardUp = pauseBoardOn && !(shortScreen && chromeVisible)
+    // boardCan blocks a new board; this render guard also drops one already up when the panel opens
+    val boardUp = pauseBoardOn && !subPanelOpen && !(shortScreen && chromeVisible)
     Box(Modifier.fillMaxSize().background(Color.Black).onFocusChanged { rootHasFocus = it.hasFocus }) {
         AndroidView(
             factory = { ctx ->
@@ -7272,7 +7285,8 @@ private fun PlayerScreen(
         // the Title Card chrome (see PlayerChrome.kt)
         // a scrim under the pause board, so the words read over any picture
         if (boardUp && !pip) Box(Modifier.fillMaxSize().background(Color(0x7A000000)))
-        if (!pip) Box(Modifier.fillMaxSize().onFocusChanged { chromeHasFocus = it.hasFocus }) { TitleCardChrome(
+        // The panel owns the screen: remove the chrome instead of fading it, so no hidden control can take focus or a tap.
+        if (!pip && !subPanelOpen) Box(Modifier.fillMaxSize().onFocusChanged { chromeHasFocus = it.hasFocus }) { TitleCardChrome(
             visible = chromeVisible,
             title = showName,
             isPlaying = isPlayingState,
@@ -7388,7 +7402,8 @@ private fun PlayerScreen(
                 }
             }
             nextEpisode?.let { n -> meta += upNextLabel(n.season, n.episode, n.name) to true }
-            PauseBoard(
+            // Skip its exit animation under the panel's translucent scrim; pauseBoardOn may lag the panel by a tick.
+            if (!subPanelOpen) PauseBoard(
                 visible = boardUp,
                 kicker = (if (sleepFired) "Sleep timer · " else "") +
                     when { ended -> "Finished"; isLiveState -> "Live · Paused"; else -> "Paused" },
@@ -7399,14 +7414,14 @@ private fun PlayerScreen(
                 // end: a phone's board takes the whole width (pauseBoardWidth) and keeps the same margin at both sides
                 modifier = Modifier.align(Alignment.TopStart).padding(start = 20.dp, top = 84.dp, end = 20.dp),
             )
-            if (pinfoOn) PlaybackInfoHud(infoRows, Modifier.align(Alignment.TopEnd).padding(end = 20.dp, top = 76.dp))
+            if (pinfoOn && !subPanelOpen) PlaybackInfoHud(infoRows, Modifier.align(Alignment.TopEnd).padding(end = 20.dp, top = 76.dp))
         }
         // Party reactions float up from the bottom
         partyUi.reactions.forEach { r ->
             key(r.first) { ReactionFloat(r.second, r.third) }
         }
         // Sleep timer menu (the Sleep pill toggles it): by minutes, or at the end of this episode
-        if (sleepMenuOpen && !pip) {
+        if (sleepMenuOpen && !subPanelOpen && !pip) {
             Column(
                 Modifier.align(Alignment.CenterEnd).padding(end = 20.dp)
                     .width(280.dp)
@@ -7440,11 +7455,11 @@ private fun PlayerScreen(
         // The Subtitles panel (SubtitlesPanel.kt): languages · that language's tracks · style, over the
         // still-playing video. One layer: Back closes it, not the player; focus goes back to its opener.
         if (subPanelOpen && !pip) {
-            val keysMode = LocalInputModeManager.current.inputMode == InputMode.Keyboard
             fun closePanel() {
                 subPanelOpen = false
+                chromeVisible = true
                 chromeTouchedAt = System.currentTimeMillis()
-                if (keysMode) runCatching { subsFocus.requestFocus() }
+                if (remoteNow) runCatching { subsFocus.requestFocus() }
             }
             BackHandler { closePanel() }
             SubtitlesPanel(
