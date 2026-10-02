@@ -139,12 +139,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.85.2.apk
+          cp "$APK" Nebula-1.85.3.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.85.2 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.85.2 Nebula-1.85.2.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.85.2" \
-            --notes "AV1 on a phone or TV with no AV1 chip now plays on a fast decoder at once instead of dropping most of its frames, and any stream that keeps dropping frames offers the next source. On such a device AV1 sources say “may stutter here” and are not picked by themselves. Playback info names the decoder. (1.85.1: Seekr previews show at once and without gaps.)"
+          gh release delete v1.85.3 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.85.3 Nebula-1.85.3.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.85.3" \
+            --notes "A stream that stops reading mid-film is picked up again from the same second (up to three tries), and if it still fails the next source is offered. A failure in the last minute of a film or episode now counts as its end: ticked off, then Up next. (1.85.2: AV1 on a device with no AV1 chip plays on a fast decoder.)"
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
