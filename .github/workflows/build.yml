@@ -139,12 +139,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.84.2.apk
+          cp "$APK" Nebula-1.85.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.84.2 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.84.2 Nebula-1.84.2.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.84.2" \
-            --notes "The streams page names every add-on that is still answering, with a spinner — some take up to a minute — instead of looking finished without them. (1.84.1: streams from add-ons that take up to a minute to answer now show up.)"
+          gh release delete v1.85.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.85.0 Nebula-1.85.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.85.0" \
+            --notes "Seekr previews: connect your own free key from seekr.tv in Settings › Playback and scrubbing a film or episode shows a picture at once — on phones and on Android TV. The key follows your profile to your other devices. (1.84.2: the streams page names every add-on that is still answering.)"
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
