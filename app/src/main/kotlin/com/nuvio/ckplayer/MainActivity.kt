@@ -6555,6 +6555,17 @@ private fun PlayerScreen(
     DisposableEffect(Unit) {
         val l = object : Player.Listener {
             override fun onPlayerError(e: PlaybackException) {
+                // Any failure in the LAST MINUTE of a film or episode (a host that drops the credits' last bytes, a file
+                // cut a few seconds short — the Founder, 2026-10-03: "if happens like in the last 1min of the stream"):
+                // it was watched. The ending it would have had — ticked off, Up next — not a red line or a retry.
+                val durNow = exo.duration
+                if (!exo.isCurrentMediaItemLive && durNow != C.TIME_UNSET && durNow > 120_000 &&
+                    durNow - exo.currentPosition <= 60_000 && exo.currentMediaItem != null) {
+                    error = null
+                    Toasts.show("The stream stopped in its last minute — counted as watched")
+                    reachedEnd()
+                    return
+                }
                 // A live stream that fell behind its window (a long pause, a long stall): rejoin at the edge, as every
                 // player does — it was a final red line. Once per 10 s, so a feed that keeps failing still says so.
                 if (e.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW && exo.currentMediaItem != null &&
@@ -6717,6 +6728,10 @@ private fun PlayerScreen(
                 if (state == Player.STATE_READY && stallWatch.playedAt == 0L) stallWatch.playedAt = System.currentTimeMillis()
                 if (state == Player.STATE_BUFFERING && exo.playWhenReady && stallWatch.note()) offerSwap()
                 if (state != Player.STATE_ENDED) return
+                reachedEnd()
+            }
+            /** The film or episode is over: what a real end does — ticked off, then the sleep timer or Up next. */
+            fun reachedEnd() {
                 snapshotProgress(done = true)          // ticks it off the episode list
                 if (sleepMode == "ep") {
                     // the night ends here: no up-next, the board says why
