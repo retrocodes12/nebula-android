@@ -296,3 +296,25 @@ internal fun isSoftwareDecoderName(name: String?): Boolean {
     val n = (name ?: return false).lowercase(Locale.US)
     return n.startsWith("omx.google.") || n.startsWith("c2.android.") || n.contains(".sw.") || n.contains("ffmpeg") || n.contains("dav1d")
 }
+
+/**
+ * Whether a reading failure (Media3's 2xxx) may answer if asked again: a dropped connection, a timeout, a server's own
+ * trouble (5xx, 408, 429) — not a refusal that will not change by itself (a 4xx: a link that expired or a file that
+ * is gone; file not found, no permission, cleartext refused).
+ */
+internal fun ioWorthRetry(e: androidx.media3.common.PlaybackException): Boolean {
+    when (e.errorCode) {
+        androidx.media3.common.PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND,
+        androidx.media3.common.PlaybackException.ERROR_CODE_IO_NO_PERMISSION,
+        androidx.media3.common.PlaybackException.ERROR_CODE_IO_CLEARTEXT_NOT_PERMITTED -> return false
+    }
+    var c: Throwable? = e.cause
+    while (c != null) {
+        if (c is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException) return httpWorthRetry(c.responseCode)
+        c = c.cause
+    }
+    return true
+}
+
+/** An HTTP status that may answer differently if asked again. */
+internal fun httpWorthRetry(code: Int): Boolean = code >= 500 || code == 408 || code == 429

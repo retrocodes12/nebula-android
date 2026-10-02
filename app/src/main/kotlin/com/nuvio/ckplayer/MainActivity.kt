@@ -6534,6 +6534,7 @@ private fun PlayerScreen(
 
     val behindLiveAt = remember { LongArray(1) }
     val drmAsked = remember { HashSet<String>() }           // addresses whose licence was read after a key request failed
+    val ioRetry = remember { LongArray(3) }                 // reading failures picked up again: [count, last at, for which address hash]
     // The app leaving the screen pauses the film: Home on a TV without picture-in-picture, the box going to standby,
     // a phone's power button. Nothing did — the audio played on under the launcher, and a box left running autoplayed
     // episode after episode all night, ticking each one watched. Picture-in-picture pauses the Activity without
@@ -6598,6 +6599,30 @@ private fun PlayerScreen(
                     Toasts.show("Your PC stopped answering — playing direct")
                     return
                 }
+                // A reading failure (Media3's 2xxx after its own quick retries: the host dropped the connection mid-film, a
+                // mobile network blip, a read that timed out — "ERROR_CODE_IO_UNSPECIFIED (2000)" on his phone, 2026-10-02):
+                // the same item again from where it was, on a fresh connection — up to three times, 2 s, 5 s and 10 s on,
+                // re-armed two minutes after the last. Never for a refusal that will not change on its own: an HTTP 4xx
+                // other than 408/429 (a link that expired, a file gone), file not found, no permission, cleartext refused.
+                if (item != null && e.errorCode in 2000..2999 && ioWorthRetry(e)) {
+                    val now = System.currentTimeMillis()
+                    val key = (item.localConfiguration?.uri?.toString() ?: "").hashCode().toLong()
+                    if (ioRetry[2] != key || now - ioRetry[1] > 120_000) { ioRetry[0] = 0; ioRetry[2] = key }
+                    if (ioRetry[0] < 3) {
+                        val n = ioRetry[0].toInt(); ioRetry[0]++; ioRetry[1] = now
+                        val pos = exo.currentPosition
+                        val live = exo.isCurrentMediaItemLive
+                        val wanted = exo.playWhenReady
+                        if (n == 0) Toasts.show("The connection dropped — picking up where it was")
+                        scope.launch {
+                            delay(longArrayOf(2_000, 5_000, 10_000)[n])
+                            if (exo.currentMediaItem?.localConfiguration?.uri != item.localConfiguration?.uri) return@launch
+                            if (!live && pos > 0) exo.setMediaItem(item, pos) else exo.setMediaItem(item)
+                            exo.prepare(); exo.playWhenReady = wanted
+                        }
+                        return
+                    }
+                }
                 // The chip could not decode this picture (a 10-bit H.264 feed, an odd profile): the same item again on the
                 // processor, once. A live stream rejoins at the edge; a film keeps its place. Media3 does not do this by
                 // itself — a decoder that dies mid-stream is a final error to it (nextlib's notes say the same).
@@ -6624,6 +6649,8 @@ private fun PlayerScreen(
                 error = "Playback error ${e.errorCodeName} (${e.errorCode})"
                 // the processor could not either (or it is not a decoder error): the row after this one, on the pill
                 if (decodeFail) offerSwap("Cannot decode")
+                // the source kept failing to read (or refused outright): the row after this one, on the pill too
+                else if (e.errorCode in 2000..2999) offerSwap()
             }
             override fun onTracksChanged(tracks: Tracks) {
                 var v = 0
