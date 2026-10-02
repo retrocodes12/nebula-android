@@ -150,6 +150,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -4402,6 +4403,8 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
                 ) { Prefs.setRelay(ctx, it) }
             }
         }
+        // the viewer's own Seekr key: ready-made pictures for the scrub preview above (Seekr.kt)
+        SeekrSettings()
         SettingsHeader("NEXT EPISODE", "Rolling on, skipping ahead and coming back")
         SettingsGroup {
             SettingsToggle(
@@ -6109,6 +6112,16 @@ private fun PlayerScreen(
     // rebuilt per URL, released with the player. While a preview is up the chrome stays awake.
     val scrubPreview = remember(url) { if (ScrubPreview.eligible(url)) ScrubPreview(url, context) else null }
     DisposableEffect(scrubPreview) { onDispose { scrubPreview?.release() } }
+    // Seekr previews (Seekr.kt): with the viewer's own key and a film/episode id Seekr can place, ONE lookup once the
+    // length is known; its pictures come first and the reader above is the fallback. Any player, a TV's too, encrypted
+    // or not — never live.
+    val seekrFrames = remember(url, contentId) { SeekrFrames.forPlay(context, contentType, contentId) }
+    DisposableEffect(seekrFrames) { onDispose { seekrFrames?.release() } }
+    val seekrNow by rememberUpdatedState(seekrFrames)      // for the clock loop below, which outlives an episode hop
+    LaunchedEffect(seekrFrames, durMs > 0, isLiveState, Prefs.scrubFrames) {
+        if (seekrFrames == null || durMs <= 0 || isLiveState || !Prefs.scrubFrames) return@LaunchedEffect
+        seekrFrames.start(durMs)
+    }
     // a few seconds into playback, once the length is known, the reader opens and sweeps frames across
     // the film in the background — so a phone's one-second drag has a picture at once (ScrubPreview.warm)
     LaunchedEffect(scrubPreview, durMs > 0, isPlayingState) {
@@ -6118,7 +6131,16 @@ private fun PlayerScreen(
         // same reason). A TV still gets a frame for the position it asks for.
         if (Account.isTv(context)) return@LaunchedEffect
         delay(4000)
+        // Seekr has the pictures already: no sweep (give its lookup a few more seconds to answer first)
+        if (seekrFrames != null) {
+            repeat(16) { if (!seekrFrames.settled) delay(500) }
+            if (seekrFrames.ready) return@LaunchedEffect
+        }
         scrubPreview.warm(context, durMs)      // eligible() already rules out manifests, and keys ride on .mpd here
+    }
+    // the tip's picture: Seekr's while its previews load, else the app's own reader's
+    val scrubFrameState = remember(seekrFrames, scrubPreview) {
+        derivedStateOf { if (seekrFrames?.ready == true) seekrFrames.frame.value else scrubPreview?.frame?.value }
     }
     var scrubbing by remember { mutableStateOf(false) }
     // Our own meter so the HUD can read the estimate; Start high seeds it so the
@@ -6757,7 +6779,7 @@ private fun PlayerScreen(
             pauseBoardOn = boardCan && now - pausedSince > 1600 && now - chromeTouchedAt > 1600
             if (pinfoOn) infoRows = playbackInfoRows(
                 exo, bandwidth, subOffsetMs,
-                scrubStatusLine(
+                if (Prefs.scrubFrames && !isLiveState && seekrNow?.ready == true) "Ready · from Seekr" else scrubStatusLine(
                     Prefs.scrubFrames, isLiveState,
                     // the tracks' own protection: every DASH item carries a ClearKey configuration, protected or not
                     exo.videoFormat?.drmInitData != null || exo.audioFormat?.drmInitData != null,
@@ -7316,13 +7338,17 @@ private fun PlayerScreen(
             },
             onSeekBy = { d -> seekBy(d); chromeTouchedAt = System.currentTimeMillis() },
             onSeekTo = { t -> exo.seekTo(t.coerceAtLeast(0L)); chromeTouchedAt = System.currentTimeMillis() },
-            scrubFrame = if (Prefs.scrubFrames) scrubPreview?.frame else null,
+            scrubFrame = if (Prefs.scrubFrames) scrubFrameState else null,
             onScrub = { t ->
                 if (t != null || scrubbing) chromeTouchedAt = System.currentTimeMillis()
                 scrubbing = t != null
-                // frames only for a plain file: never live, never an encrypted item, never with the setting off
-                if (t == null) scrubPreview?.idle()
-                else if (Prefs.scrubFrames && !isLiveState && exo.currentMediaItem?.localConfiguration?.drmConfiguration == null) scrubPreview?.request(t)
+                // Seekr's pictures first (any item it found, encrypted too); the app's own reader only for a plain file:
+                // never live, never an encrypted item, never with the setting off
+                if (t == null) { scrubPreview?.idle(); seekrFrames?.idle() }
+                else if (Prefs.scrubFrames && !isLiveState) {
+                    if (seekrFrames?.ready == true) seekrFrames.request(t)
+                    else if (exo.currentMediaItem?.localConfiguration?.drmConfiguration == null) scrubPreview?.request(t)
+                }
             },
             onNext = { nextEpisode?.let { upnextCounting = false; autoRun = 0; onPlayNext(it) } },
             onParty = {

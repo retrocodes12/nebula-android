@@ -42,7 +42,7 @@ import java.util.concurrent.TimeUnit
 object Cloud {
     private const val BASE = "https://play.rifflehq.in/cloud"
     private const val PREFS = "ckplayer"
-    private val SYNC_KEYS = listOf("addons", "progress", "library", "sub_style", "ratings")
+    private val SYNC_KEYS = listOf("addons", "progress", "library", "sub_style", "ratings", "seekr")
     private val JSON_MT = "application/json".toMediaType()
 
     private val http = OkHttpClient.Builder()
@@ -329,6 +329,7 @@ object Cloud {
         "library" -> Library.all(ctx).length() > 0
         "ratings" -> Ratings.all(ctx).length() > 0
         "sub_style" -> SubStyle.at(ctx) > 0
+        "seekr" -> Seekr.at(ctx) > 0          // a disconnect ("" key) is content too: it must reach the others
         else -> false
     }
 
@@ -374,6 +375,7 @@ object Cloud {
         "library" -> mergeLibrary(ctx, remote)
         "ratings" -> mergeRatings(ctx, remote)
         "sub_style" -> mergeSubStyle(ctx, remote)
+        "seekr" -> Seekr.merge(ctx, remote)
         else -> false to false
     }
 
@@ -424,6 +426,7 @@ object Cloud {
             SubStyle.get(ctx).forEach { (k, v) -> style.put(k, v) }
             JSONObject().put("style", style).put("at", SubStyle.at(ctx)).toString()
         }
+        "seekr" -> Seekr.doc(ctx)
         else -> null
     }
 
