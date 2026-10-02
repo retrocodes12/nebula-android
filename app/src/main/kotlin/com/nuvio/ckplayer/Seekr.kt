@@ -3,6 +3,9 @@ package com.nuvio.ckplayer
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.BitmapRegionDecoder
+import android.graphics.Rect
+import android.os.Build
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -12,6 +15,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -171,19 +175,29 @@ internal object Seekr {
 }
 
 /**
- * One play's Seekr frames: the lookup once the length is known ([start]), then the scrub's pictures cropped out of
- * the sprite sheets — each sheet fetched and decoded once (RGB 565, the last [SHEETS] kept), a crop per cue kept in a
- * small LRU. Like ScrubPreview, one worker at a time and the latest position wins. A signed URL that answers 403
- * (expired) looks the title up again once; a play whose sheets keep failing gives up ([ready] false) so the scrub
- * falls back to the app's own frames.
+ * One play's Seekr frames. Once the lookup answers ([start]) every sprite sheet of the title is DOWNLOADED in the
+ * background (compressed, ~0.5 MB each — a film is a few MB), nearest the playhead first; a sheet the scrub points at
+ * jumps the queue. A picture is never a whole-sheet decode: each sheet gets a BitmapRegionDecoder over its bytes and
+ * only the cue's 320×180 is decoded (a few ms), into a crop LRU. The decode worker serves the wanted cue first, then
+ * the next [AHEAD] in the scrub's direction, then [WARM] around where the viewer is, so a moving finger mostly finds
+ * its crop already made. While a crop is being made the tip keeps the nearest one it has — it never goes blank in the
+ * middle of a scrub (a null frame folds the card to the pill, which read as "breaks"). 1.85.0 fetched and fully
+ * decoded a 3200×1800 sheet only when a scrub reached it, kept three, and showed nothing meanwhile.
+ * A signed URL that answers 403 (expired) looks the title up again once; a play whose sheets keep failing gives up
+ * ([ready] false) so the scrub falls back to the app's own frames.
  */
-internal class SeekrFrames private constructor(private val q: List<Pair<String, String>>) {
+internal class SeekrFrames internal constructor(
+    private val q: List<Pair<String, String>>,
+    private val get: (String) -> Pair<Int, ByteArray?> = ::httpGet,    // a sheet: status + bytes (tests pass their own)
+) {
     companion object {
-        private const val SHEETS = 3
-        private const val CROPS = 40                     // 320×180 RGB 565 = 115 KB each
-        private const val NEAR = 6                       // a cue this many away stands in while the right sheet loads
-        private const val SHEET_PX = 16_000_000          // a sheet bigger than this is decoded at half size
+        private const val CROPS = 160                    // 320×180 RGB 565 = 115 KB each → ≤ 18 MB
+        private const val DECODERS = 12                  // region decoders kept (each holds its sheet's bytes)
+        private const val NEAR = 6                       // a crop this many cues away stands in at once
+        private const val AHEAD = 4                      // crops made past the wanted one, the way the scrub moves
+        private const val WARM = 6                       // crops made either side of where the viewer is, when idle
         private const val GIVE_UP = 3                    // sheets failing before any worked
+        private const val BYTES_MAX = 64L * 1024 * 1024  // all of a title's sheets, compressed
 
         /** Null when no key is connected or the title cannot be looked up (live, kitsu, no id…). */
         fun forPlay(ctx: Context, type: String?, id: String?): SeekrFrames? {
@@ -191,26 +205,46 @@ internal class SeekrFrames private constructor(private val q: List<Pair<String, 
             if (Seekr.key.isEmpty()) return null
             return SeekrWire.query(type, id)?.let { SeekrFrames(it) }
         }
-    }
 
-    private class Sheet(val bmp: Bitmap, val sample: Int)
+        /** Worker thread. One sheet's bytes; no key on this hop. */
+        private fun httpGet(url: String): Pair<Int, ByteArray?> =
+            Seekr.http.newCall(Request.Builder().url(url).build()).execute().use { r ->
+                r.code to (if (r.isSuccessful) Seekr.bytesOf(r.body, Seekr.SHEET_MAX) else null)
+            }
+
+        private fun regionDecoder(b: ByteArray): BitmapRegionDecoder? = runCatching {
+            if (Build.VERSION.SDK_INT >= 31) BitmapRegionDecoder.newInstance(b, 0, b.size)
+            else @Suppress("DEPRECATION") BitmapRegionDecoder.newInstance(b, 0, b.size, false)
+        }.getOrNull()
+    }
 
     private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lock = Any()
+    private val kickFetch = Channel<Unit>(Channel.CONFLATED)
+    private val kickDecode = Channel<Unit>(Channel.CONFLATED)
     @Volatile private var track: Seekr.Track? = null
     private var durMs = 0L
     private var started = false
     private var relooked = false
-    private val sheets = object : LinkedHashMap<String, Sheet>(4, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Sheet>?) = size > SHEETS
-    }
-    private val crops = object : LinkedHashMap<Int, Bitmap>(16, 0.75f, true) {
+    private var order: List<String> = emptyList()       // the title's sheets, nearest the start position first (under lock)
+    private val bytes = HashMap<String, ByteArray>()     // sheet URL → JPEG (under lock)
+    private var held = 0L                                // their total size (under lock)
+    private val decoders = object : LinkedHashMap<String, BitmapRegionDecoder>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, BitmapRegionDecoder>?): Boolean {
+            if (size <= DECODERS) return false
+            runCatching { eldest?.value?.recycle() }
+            return true
+        }
+    }                                                    // decode thread only
+    private val crops = object : LinkedHashMap<Int, Bitmap>(64, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, Bitmap>?) = size > CROPS
     }
     private val bad = HashSet<String>()                  // sheet URLs that would not load (under lock)
+    private val skip = HashSet<Int>()                    // cues whose region would not decode (under lock)
     private var good = 0                                 // sheets that did (under lock)
-    private var running = false                          // a worker is alive (under lock)
     @Volatile private var wanted = -1                    // the cue the scrub points at; -1 = nothing wanted
+    @Volatile private var home = 0                       // where the viewer is: the start, then the last scrub
+    @Volatile private var dir = 1                        // which way the scrub last moved
     @Volatile private var dead = false
     private val frameState = mutableStateOf<Bitmap?>(null)
 
@@ -220,14 +254,40 @@ internal class SeekrFrames private constructor(private val q: List<Pair<String, 
     var settled by mutableStateOf(false); private set
     val frame: State<Bitmap?> get() = frameState
 
-    /** Main thread, once the length is known and the item is not live. Once per play. */
-    fun start(durationMs: Long) {
+    /** Main thread, once the length is known and the item is not live. Once per play. [atMs] = where playback is. */
+    fun start(durationMs: Long, atMs: Long = 0) {
         if (started || dead || durationMs <= 0) return
         started = true; durMs = durationMs
         io.launch {
             val t = Seekr.track(q, durationMs)
-            withContext(Dispatchers.Main) { if (!dead) { track = t; ready = t != null; settled = true } }
+            withContext(Dispatchers.Main) { if (!dead) begin(t, atMs) }
         }
+    }
+
+    /** Tests: skip the lookup. Main thread. */
+    internal fun startWith(t: Seekr.Track, atMs: Long = 0) { if (!started && !dead) { started = true; begin(t, atMs) } }
+
+    private fun begin(t: Seekr.Track?, atMs: Long) {
+        track = t; ready = t != null; settled = true
+        if (t == null) return
+        home = SeekrWire.cueIndex(t.cues, atMs, t.scale).coerceAtLeast(0)
+        synchronized(lock) { order = sheetOrder(t, home) }
+        io.launch { fetchLoop() }
+        io.launch { decodeLoop() }
+    }
+
+    /** The title's distinct sheets, the one holding cue [from] first, then outward from it. */
+    private fun sheetOrder(t: Seekr.Track, from: Int): List<String> {
+        val seq = LinkedHashSet<String>()
+        t.cues.forEach { seq.add(it.sheet) }
+        val all = seq.toList()
+        val at = all.indexOf(t.cues[from.coerceIn(0, t.cues.size - 1)].sheet).coerceAtLeast(0)
+        val out = ArrayList<String>(all.size)
+        for (d in 0 until all.size) {
+            if (at + d < all.size) out.add(all[at + d])
+            if (d > 0 && at - d >= 0) out.add(all[at - d])
+        }
+        return out
     }
 
     /** Main thread. Point the preview at the player position [posMs]. */
@@ -236,106 +296,137 @@ internal class SeekrFrames private constructor(private val q: List<Pair<String, 
         if (dead || !ready) return
         val i = SeekrWire.cueIndex(t.cues, posMs, t.scale)
         if (i < 0) return
-        wanted = i
-        val go: Boolean
-        synchronized(lock) {
-            frameState.value = best(t, i)
-            val u = t.cues[i].sheet
-            go = !running && !crops.containsKey(i) && !sheets.containsKey(u) && u !in bad
-            if (go) running = true
-        }
-        if (go) io.launch { work() }
+        val was = wanted
+        if (was >= 0 && i != was) dir = if (i > was) 1 else -1
+        wanted = i; home = i
+        show(t, i)
+        kickDecode.trySend(Unit); kickFetch.trySend(Unit)
     }
 
     /** Main thread. The scrub ended. */
-    fun idle() { wanted = -1 }
+    fun idle() { wanted = -1; kickDecode.trySend(Unit) }
 
     /** Main thread. Player dispose. */
     fun release() {
         dead = true
         wanted = -1
         io.cancel()
-        synchronized(lock) { sheets.clear(); crops.clear() }
+        synchronized(lock) { crops.clear(); bytes.clear(); held = 0 }
+        Thread { synchronized(decoders) { decoders.values.forEach { runCatching { it.recycle() } }; decoders.clear() } }.start()
         frameState.value = null
     }
 
-    /** Under the lock: cue [i]'s crop, else a neighbour's within [NEAR] whose sheet is here, else null. */
-    private fun best(t: Seekr.Track, i: Int): Bitmap? {
-        cropOf(t, i)?.let { return it }
+    /** Under the lock: cue [i] if its crop is made, else the nearest made within [NEAR], else -1. */
+    private fun best(t: Seekr.Track, i: Int): Int {
+        if (crops.containsKey(i)) return i
         for (d in 1..NEAR) {
-            if (i - d >= 0) cropOf(t, i - d)?.let { return it }
-            if (i + d < t.cues.size) cropOf(t, i + d)?.let { return it }
+            if (i - d >= 0 && crops.containsKey(i - d)) return i - d
+            if (i + d < t.cues.size && crops.containsKey(i + d)) return i + d
         }
-        return null
+        return -1
     }
 
-    private fun cropOf(t: Seekr.Track, i: Int): Bitmap? {
-        crops[i]?.let { return it }
-        val c = t.cues[i]
-        val s = sheets[c.sheet] ?: return null
-        val x = c.x / s.sample; val y = c.y / s.sample
-        val w = minOf(c.w / s.sample, s.bmp.width - x); val h = minOf(c.h / s.sample, s.bmp.height - y)
-        if (x < 0 || y < 0 || w <= 0 || h <= 0) return null
-        val b = runCatching { Bitmap.createBitmap(s.bmp, x, y, w, h) }.getOrNull() ?: return null
-        crops[i] = b
-        return b
+    /** Main thread. Show the best crop for cue [i]; nothing changes when none is near (never a blank mid-scrub). */
+    private fun show(t: Seekr.Track, i: Int) {
+        val (j, b) = synchronized(lock) { best(t, i).let { it to (if (it >= 0) crops[it] else null) } }
+        if (b != null) { frameState.value = b; shownCue = j }
     }
 
-    private sealed class Got {
-        class Ok(val sheet: Sheet) : Got()
-        object Expired : Got()
-        object Failed : Got()
+    /** Tests: the cue whose picture is showing, and whether a cue's crop is made. */
+    @Volatile internal var shownCue = -1; private set
+    internal fun hasCrop(i: Int) = synchronized(lock) { crops.containsKey(i) }
+
+    // ---- downloads: the wanted cue's sheet first, then the title's sheets in order ----
+
+    private fun nextFetch(t: Seekr.Track): String? = synchronized(lock) {
+        val w = wanted
+        if (w >= 0 && w < t.cues.size) {
+            val u = t.cues[w].sheet
+            if (!bytes.containsKey(u) && u !in bad) return@synchronized u
+        }
+        if (held >= BYTES_MAX) return@synchronized null
+        order.firstOrNull { !bytes.containsKey(it) && it !in bad }
     }
 
-    private suspend fun work() {
-        while (true) {
-            val t = track ?: break
-            val u: String = synchronized(lock) {
-                val i = wanted
-                val url = if (dead || i < 0 || i >= t.cues.size || crops.containsKey(i)) null
-                    else t.cues[i].sheet.takeIf { !sheets.containsKey(it) && it !in bad }
-                if (url == null) running = false
-                url
-            } ?: break
-            when (val got = fetch(u)) {
-                is Got.Ok -> synchronized(lock) { sheets[u] = got.sheet; good++ }
-                Got.Expired -> {
-                    // the signed URLs ran out (6 h): one fresh lookup, then the same position again
-                    val nt = if (relooked) null else { relooked = true; Seekr.track(q, durMs, fresh = true) }
-                    if (nt != null) { synchronized(lock) { track = nt; sheets.clear() }; continue }
-                    synchronized(lock) { bad.add(u) }
+    private suspend fun fetchLoop() {
+        while (!dead) {
+            val t = track ?: return
+            val u = nextFetch(t)
+            if (u == null) { kickFetch.receive(); continue }
+            val (code, b) = try { get(u) } catch (e: CancellationException) { throw e } catch (e: Exception) { 0 to null }
+            if (dead) return
+            if (code == 403) {
+                // the signed URLs ran out (6 h): one fresh lookup, then everything again from the new addresses
+                val nt = if (relooked) null else { relooked = true; Seekr.track(q, durMs, fresh = true) }
+                if (nt != null) {
+                    synchronized(lock) { track = nt; bytes.clear(); held = 0; order = sheetOrder(nt, home) }
+                    continue
                 }
-                Got.Failed -> synchronized(lock) { bad.add(u) }
             }
-            val giveUp = synchronized(lock) { good == 0 && bad.size >= GIVE_UP }
-            withContext(Dispatchers.Main) {
-                if (dead) return@withContext
-                if (giveUp) { ready = false; frameState.value = null; return@withContext }
-                val w = wanted
-                val tt = track
-                if (w >= 0 && tt != null && w < tt.cues.size) frameState.value = synchronized(lock) { best(tt, w) }
+            val giveUp = synchronized(lock) {
+                if (b != null && code in 200..299) { bytes[u] = b; held += b.size; good++ } else bad.add(u)
+                good == 0 && bad.size >= GIVE_UP
             }
-            if (giveUp) { synchronized(lock) { running = false }; break }
+            if (giveUp) {
+                withContext(Dispatchers.Main) { if (!dead) { ready = false; frameState.value = null } }
+                return
+            }
+            kickDecode.trySend(Unit)
         }
     }
 
-    /** Worker thread. One sheet, decoded once; Expired on 403 (the signed URL ran out). No key on this hop. */
-    private fun fetch(url: String): Got = try {
-        val (code, bytes) = Seekr.http.newCall(Request.Builder().url(url).build()).execute().use { r ->
-            r.code to (if (r.isSuccessful) Seekr.bytesOf(r.body, Seekr.SHEET_MAX) else null)
+    // ---- decodes: one cue's region at a time ----
+
+    /** The next crop worth making: the wanted cue, then ahead of it, then around [home]; only from sheets in hand. */
+    private fun nextDecode(t: Seekr.Track): Int? = synchronized(lock) {
+        val n = t.cues.size
+        fun ok(i: Int) = i in 0 until n && !crops.containsKey(i) && i !in skip && bytes.containsKey(t.cues[i].sheet)
+        val w = wanted
+        if (w >= 0) {
+            if (ok(w)) return@synchronized w
+            for (d in 1..AHEAD) { val i = w + dir * d; if (ok(i)) return@synchronized i }
         }
-        when {
-            code == 403 -> Got.Expired
-            bytes == null -> Got.Failed
-            else -> {
-                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-                var sample = 1
-                while (bounds.outWidth > 0 && bounds.outHeight > 0 &&
-                    (bounds.outWidth.toLong() / sample) * (bounds.outHeight.toLong() / sample) > SHEET_PX) sample *= 2
-                val opts = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.RGB_565; inSampleSize = sample }
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)?.let { Got.Ok(Sheet(it, sample)) } ?: Got.Failed
+        val h = if (w >= 0) w else home
+        if (ok(h)) return@synchronized h
+        for (d in 1..WARM) {
+            if (ok(h + d)) return@synchronized h + d
+            if (ok(h - d)) return@synchronized h - d
+        }
+        null
+    }
+
+    private suspend fun decodeLoop() {
+        while (!dead) {
+            val t = track ?: return
+            val i = nextDecode(t)
+            if (i == null) { kickDecode.receive(); continue }
+            val c = t.cues[i]
+            val (made, sheetBad) = cropFrom(c)
+            synchronized(lock) {
+                when {
+                    made != null -> crops[i] = made
+                    sheetBad -> { bad.add(c.sheet); bytes.remove(c.sheet)?.let { held -= it.size } }   // never again
+                    else -> skip.add(i)
+                }
+            }
+            val w = wanted
+            if (made != null && w >= 0 && kotlin.math.abs(w - i) <= NEAR) withContext(Dispatchers.Main) {
+                val now = wanted
+                if (!dead && now >= 0) show(t, now)
             }
         }
-    } catch (e: CancellationException) { throw e } catch (e: Exception) { Got.Failed }
+    }
+
+    /** Decode thread. The cue's region of its sheet, at full size, RGB 565 — and whether the SHEET itself is unusable. */
+    private fun cropFrom(c: SeekrCue): Pair<Bitmap?, Boolean> = synchronized(decoders) {
+        val d = decoders[c.sheet] ?: run {
+            val b = synchronized(lock) { bytes[c.sheet] } ?: return@synchronized null to false
+            regionDecoder(b)?.also { decoders[c.sheet] = it } ?: return@synchronized null to true
+        }
+        runCatching {
+            val r = Rect(c.x, c.y, minOf(c.x + c.w, d.width), minOf(c.y + c.h, d.height))
+            if (r.width() <= 0 || r.height() <= 0) null
+            else d.decodeRegion(r, BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.RGB_565 })
+        }.getOrNull() to false
+    }
 }

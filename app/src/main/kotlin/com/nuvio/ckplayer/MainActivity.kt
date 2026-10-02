@@ -6118,10 +6118,6 @@ private fun PlayerScreen(
     val seekrFrames = remember(url, contentId) { SeekrFrames.forPlay(context, contentType, contentId) }
     DisposableEffect(seekrFrames) { onDispose { seekrFrames?.release() } }
     val seekrNow by rememberUpdatedState(seekrFrames)      // for the clock loop below, which outlives an episode hop
-    LaunchedEffect(seekrFrames, durMs > 0, isLiveState, Prefs.scrubFrames) {
-        if (seekrFrames == null || durMs <= 0 || isLiveState || !Prefs.scrubFrames) return@LaunchedEffect
-        seekrFrames.start(durMs)
-    }
     // a few seconds into playback, once the length is known, the reader opens and sweeps frames across
     // the film in the background — so a phone's one-second drag has a picture at once (ScrubPreview.warm)
     LaunchedEffect(scrubPreview, durMs > 0, isPlayingState) {
@@ -6187,6 +6183,11 @@ private fun PlayerScreen(
                 trackSelectionParameters = trackParams(trackSelectionParameters)
                 if (startSpeed != 1f) setPlaybackSpeed(startSpeed)
             }
+    }
+    // the lookup, and the sheets nearest where playback is downloaded first (Seekr.kt)
+    LaunchedEffect(seekrFrames, durMs > 0, isLiveState, Prefs.scrubFrames) {
+        if (seekrFrames == null || durMs <= 0 || isLiveState || !Prefs.scrubFrames) return@LaunchedEffect
+        seekrFrames.start(durMs, exo.currentPosition.coerceAtLeast(0L))
     }
     var subForced by remember { mutableStateOf(false) }      // "Always" already switched a text track on for this item
     // "Show · S1E2 · Episode name" is how the chain labels an episode; take it apart again
