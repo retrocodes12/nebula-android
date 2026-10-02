@@ -100,6 +100,11 @@ object StreamBadges {
         val need = bps(s.videoSize, s.name + "\n" + s.title, runtime)
         return need > 0 && need.toDouble() > Prefs.bw * 0.8
     }
+    /** An AV1 row on a device with no AV1 chip: only the processor can decode it, and a phone's drops most frames. */
+    fun stutter(s: StreamItem): Boolean = !hasHardwareAv1 && mentionsAv1(s.name + "\n" + s.title)
+    /** "AV1" as a word of a row's text (a release name's ".AV1.", "AV1 10bit") — not "dav1d", not "SAV1". */
+    fun mentionsAv1(text: String): Boolean = RE_AV1.containsMatchIn(text)
+    private val RE_AV1 = Regex("""(^|[^a-z0-9])av1([^a-z0-9]|$)""", RegexOption.IGNORE_CASE)
     private val RE_HOURS = Regex("""(\d+)\s*h""", RegexOption.IGNORE_CASE)
     private val RE_MINS = Regex("""(\d+)\s*m""", RegexOption.IGNORE_CASE)
 

@@ -67,7 +67,7 @@ internal class StallWatch {
                     val (s, a) = cands[(start + k) % cands.size]
                     if (s.url == curUrl) continue
                     if (curSig != null && StreamTwin.isTwin(s, curSig, a)) continue
-                    if (pass == 0 && StreamBadges.slow(s, runtime)) continue
+                    if (pass == 0 && (StreamBadges.slow(s, runtime) || StreamBadges.stutter(s))) continue
                     return s to a
                 }
             }

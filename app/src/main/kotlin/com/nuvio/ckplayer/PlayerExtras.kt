@@ -1,6 +1,9 @@
 package com.nuvio.ckplayer
 
 import android.content.Context
+import android.media.MediaCodecInfo
+import android.media.MediaCodecList
+import android.os.Build
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MimeTypes
@@ -269,4 +272,27 @@ internal fun pauseBoardWidth(widthDp: Int, heightDp: Int): BoardWidth = when {
     widthDp < 600 -> BoardWidth(full = true, capDp = null)
     heightDp < 480 -> BoardWidth(full = false, capDp = null)
     else -> BoardWidth(full = false, capDp = widthDp / 2 - 160)
+}
+
+/**
+ * Whether this device has an AV1 decoder in its video chip. Without one, Android hands AV1 to its own software decoder
+ * (`c2.android.av1.decoder`, libgav1), which a mid-range phone runs at a few frames a second — no error, just a picture
+ * that drops most of its frames ("1316 of 1590", the Founder's phone, 2026-10-02). Read once; true when it cannot be read,
+ * so a failure here changes nothing.
+ */
+internal val hasHardwareAv1: Boolean by lazy {
+    runCatching {
+        MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { ci ->
+            !ci.isEncoder && ci.supportedTypes.any { it.equals(MimeTypes.VIDEO_AV1, ignoreCase = true) } && !isSoftwareCodec(ci)
+        }
+    }.getOrDefault(true)
+}
+
+private fun isSoftwareCodec(ci: MediaCodecInfo): Boolean =
+    if (Build.VERSION.SDK_INT >= 29) ci.isSoftwareOnly || !ci.isHardwareAccelerated else isSoftwareDecoderName(ci.name)
+
+/** A decoder name that is Android's own software codec (or one of the familiar software families). */
+internal fun isSoftwareDecoderName(name: String?): Boolean {
+    val n = (name ?: return false).lowercase(Locale.US)
+    return n.startsWith("omx.google.") || n.startsWith("c2.android.") || n.contains(".sw.") || n.contains("ffmpeg") || n.contains("dav1d")
 }

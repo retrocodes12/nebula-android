@@ -5503,7 +5503,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             val (a, list) = if (Prefs.autoPick == "last") (secs.firstOrNull { it.first.manifestUrl == pf?.addonUrl } ?: secs.first()) else secs.first()
             // never a row this connection cannot carry while another is there (Settings › Streams)
             val pick = if (Prefs.autoPick == "last") (StreamTwin.match(list, pf, a) ?: list.first())
-                else (list.firstOrNull { !StreamBadges.slow(it, item.runtime) } ?: list.first())
+                else (list.firstOrNull { !StreamBadges.slow(it, item.runtime) && !StreamBadges.stutter(it) } ?: list.first())
             play(pick, a, false)
         }
         // Back from the player shows the list it left (kept ten minutes per title, the window NextEp trusts a pick
@@ -5727,7 +5727,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                 val s = streams[i]
                 Box(Modifier.padding(horizontal = 16.dp)) {
                     StreamRow(
-                        s, from.name, item.name, usual = s.url == usualUrl, slow = StreamBadges.slow(s, item.runtime),
+                        s, from.name, item.name, usual = s.url == usualUrl, slow = StreamBadges.slow(s, item.runtime), stutter = StreamBadges.stutter(s),
                         modifier = Modifier.returnTo("stream/" + from.manifestUrl + "/" + s.url)
                             .then(if (sectionIndex == 0 && i == 0) Modifier.focusRequester(firstRow) else Modifier),
                         onPlay = { play(it, from, true) },
@@ -5818,8 +5818,9 @@ internal fun arrangeStreams(raw: List<StreamItem>, runtime: String? = null): Lis
     }
     // Streams your connection cannot carry = Mark and move down: the rows this device cannot keep up with sink under
     // the ones that fit, whatever the order above chose (StreamBadges.slow; the row itself carries the mark)
-    if (Prefs.slowMark != "move" || Prefs.bw <= 0) return ordered
-    val (slow, fits) = ordered.partition { StreamBadges.slow(it, runtime) }
+    // — and AV1 rows on a device with no AV1 chip (StreamBadges.stutter): the processor alone cannot keep up on most
+    if (Prefs.slowMark != "move") return ordered
+    val (slow, fits) = ordered.partition { StreamBadges.slow(it, runtime) || StreamBadges.stutter(it) }
     return fits + slow
 }
 
@@ -5854,7 +5855,7 @@ private fun StreamFilterChip(label: String, on: Boolean, modifier: Modifier = Mo
 /** A stream row: resolution plate, release name, badges, and a right-hand
     spec column — the parts you actually choose by, nothing said twice. */
 @Composable
-private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual: Boolean = false, slow: Boolean = false, modifier: Modifier = Modifier, onPlay: (StreamItem) -> Unit) {
+private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual: Boolean = false, slow: Boolean = false, stutter: Boolean = false, modifier: Modifier = Modifier, onPlay: (StreamItem) -> Unit) {
     val raw = remember(s.url) { s.name + "\n" + s.title }
     val plate = remember(s.url) { StreamBadges.plate(raw) }
     val m = remember(s.url) { StreamBadges.match(raw, if (plate != null) "resolution" else null) }
@@ -5930,12 +5931,12 @@ private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual
             // Stream details (Settings › Streams): size, bitrate, seeds as the right-hand column — and under them the word
             // that this row is faster than the connection this device has measured (StreamBadges.slow)
             val facts = Prefs.streamFacts && (f.size != null || f.bitrate != null || f.seeds != null)
-            if (facts || slow) {
+            if (facts || slow || stutter) {
                 Column(horizontalAlignment = Alignment.End) {
                     if (facts) f.size?.let { Text(it, color = TextC, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
                     val line2 = if (facts) listOfNotNull(f.bitrate, f.seeds?.let { "$it seeds" }).joinToString(" · ") else ""
                     if (line2.isNotEmpty()) Text(line2, color = MutedC, fontFamily = Mono, fontSize = 11.sp, modifier = Modifier.padding(top = 2.dp))
-                    if (slow) Text("may stall here", color = FaintC, fontFamily = Mono, fontSize = 10.sp, letterSpacing = 0.5.sp, modifier = Modifier.padding(top = 2.dp))
+                    if (slow || stutter) Text(if (stutter) "may stutter here" else "may stall here", color = FaintC, fontFamily = Mono, fontSize = 10.sp, letterSpacing = 0.5.sp, modifier = Modifier.padding(top = 2.dp))
                 }
             }
             // Add-on on each row: its initial in an accent ring, its name in the mono register, or nothing
@@ -6153,6 +6154,8 @@ private fun PlayerScreen(
     // (nextlib's FFmpeg renderer) once, per stream — softDecode remembers the retry so a second failure is final.
     val decoders = remember { DecoderManager() }
     var softDecode by remember { mutableStateOf(false) }
+    var softWhy by remember { mutableStateOf("the chip refused this picture") }   // why the picture is on the processor
+    var videoDecoderName by remember { mutableStateOf<String?>(null) }           // the decoder actually drawing, for the info panel
     val exo = remember {
         ExoPlayer.Builder(context)
             .setBandwidthMeter(bandwidth)
@@ -6341,6 +6344,30 @@ private fun PlayerScreen(
                 "Decoding too slowly" -> "This device cannot decode this source smoothly — another stream from the list may."
                 else -> "This device cannot decode this source — another stream from the list may."
             })
+        }
+    }
+
+    // Dropped frames are no error, so nothing else would ever say the device cannot keep up: every 8 s of PLAY, on that
+    // stretch's frames alone, offer the next source when a fifth or more were dropped. Any decoder — the chip, the
+    // processor after a failure, Android's own software decoder (AV1 on a phone with no AV1 chip sat at 1316 of 1590
+    // dropped with nothing said, 2026-10-02). Counters restart with a new decoder; a pause or a buffering stretch is skipped.
+    LaunchedEffect(url) {
+        var seenDropped = 0
+        var seenAll = 0
+        var counters: androidx.media3.exoplayer.DecoderCounters? = null
+        while (true) {
+            delay(8_000)
+            if (swapOffer != null || stallWatch.offered) continue
+            val c = exo.videoDecoderCounters ?: continue
+            c.ensureUpdated()
+            if (c !== counters) { counters = c; seenDropped = c.droppedBufferCount; seenAll = c.droppedBufferCount + c.renderedOutputBufferCount; continue }
+            val dropped = c.droppedBufferCount
+            val all = dropped + c.renderedOutputBufferCount
+            val d = dropped - seenDropped
+            val n = all - seenAll
+            seenDropped = dropped; seenAll = all
+            if (!exo.isPlaying || n < 60) continue
+            if (d * 5 >= n) offerSwap("Decoding too slowly")
         }
     }
 
@@ -6585,33 +6612,13 @@ private fun PlayerScreen(
                 val hopeless = fmt != null && (fmt.sampleMimeType == MimeTypes.VIDEO_DOLBY_VISION ||
                     (Account.isTv(context) && (fmt.height > 1088 || fmt.width > 1920)))
                 if (decodeFail && !softDecode && item != null && !hopeless) {
-                    softDecode = true
+                    softDecode = true; softWhy = "the chip refused this picture"
                     val pos = exo.currentPosition
                     runCatching { decoders.selectVideoDecoder(DecoderMode.FFMPEG) }
                     if (!exo.isCurrentMediaItemLive && pos > 0) exo.setMediaItem(item, pos) else exo.setMediaItem(item)
                     exo.prepare(); exo.play()
                     Toasts.show("This device's video chip could not decode this picture — decoding on the processor instead")
-                    // The processor may not keep up (a TV box with 1080p60 in software) and dropped frames are no error,
-                    // so nothing would ever say so: look after a few seconds of play, and offer the next source when a
-                    // fifth or more of the frames are being dropped.
-                    // Every 8 s while it lasts, on the frames of that stretch alone: one look at 8 s missed a stream that
-                    // spent it buffering or paused, and the slideshow after never said so.
-                    scope.launch {
-                        var seenDropped = 0
-                        var seenAll = 0
-                        while (true) {
-                            delay(8_000)
-                            if (!softDecode || swapOffer != null) return@launch
-                            val c = exo.videoDecoderCounters ?: continue
-                            c.ensureUpdated()
-                            val dropped = c.droppedBufferCount
-                            val all = dropped + c.renderedOutputBufferCount
-                            val d = dropped - seenDropped
-                            val n = all - seenAll
-                            seenDropped = dropped; seenAll = all
-                            if (n >= 60 && d * 5 >= n) { offerSwap("Decoding too slowly"); return@launch }
-                        }
-                    }
+                    // whether the processor keeps up is the dropped-frame watch's to say (LaunchedEffect(url) above)
                     return
                 }
                 error = "Playback error ${e.errorCodeName} (${e.errorCode})"
@@ -6633,6 +6640,18 @@ private fun PlayerScreen(
                             tx++
                             for (i in 0 until g.length) if (g.isTrackSupported(i)) tt += EmbeddedSub(g, i, g.getTrackFormat(i), g.isTrackSelected(i))
                         }
+                    }
+                }
+                // AV1 on a device with no AV1 chip: Android's own software decoder manages a few frames a second on a
+                // phone, so the picture goes to nextlib's FFmpeg at once — dav1d on every core, several times faster.
+                // No restart (nextlib swaps the renderer in place); the dropped-frame watch still offers another
+                // source if even that cannot keep up.
+                if (!softDecode && !hasHardwareAv1) {
+                    val av1 = tracks.groups.any { g -> g.type == C.TRACK_TYPE_VIDEO && g.isSelected &&
+                        (0 until g.length).any { g.isTrackSelected(it) && g.getTrackFormat(it).sampleMimeType == MimeTypes.VIDEO_AV1 } }
+                    if (av1) {
+                        softDecode = true; softWhy = "AV1 — this device has no AV1 chip, so the fast software decoder"
+                        runCatching { decoders.selectVideoDecoder(DecoderMode.FFMPEG) }
                     }
                 }
                 videoQualityCount = v
@@ -6686,6 +6705,13 @@ private fun PlayerScreen(
             }
         }
         exo.addListener(l)
+        val decoderSeen = object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+            override fun onVideoDecoderInitialized(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long,
+            ) { videoDecoderName = decoderName }
+        }
+        exo.addAnalyticsListener(decoderSeen)
         activePipPlayer.value = exo
         (activity as? MainActivity)?.refreshPipParams()
         onDispose {
@@ -6693,7 +6719,7 @@ private fun PlayerScreen(
             runCatching { snapshotProgress() }
             runCatching { WatchLog.flush(context) }
             runCatching { Social.publishSoon(context) }   // friends see the freshly watched title
-            exo.removeListener(l); runCatching { session?.release() }; runCatching { decoders.detach() }; exo.release()
+            exo.removeListener(l); exo.removeAnalyticsListener(decoderSeen); runCatching { session?.release() }; runCatching { decoders.detach() }; exo.release()
             Relay.via = null            // the next play asks again
             P2p.leave(context)          // engine off, download cleared — on its own thread, stopping it blocks
             if (activePipPlayer.value === exo) activePipPlayer.value = null
@@ -6787,7 +6813,11 @@ private fun PlayerScreen(
                     scrubPreview?.status?.value,
                 ),
                 p2pLine = if (P2p.isLocal(url)) P2p.line() else null,
-                decoderLine = if (softDecode) "on the processor (the chip refused this picture)" else null,
+                decoderLine = when {
+                    softDecode -> "on the processor ($softWhy)"
+                    isSoftwareDecoderName(videoDecoderName) -> "on the processor (${videoDecoderName}) — this device's chip cannot"
+                    else -> null
+                },
                 stalls = stallWatch.total,
                 viaLine = viaRelay?.let { "${it.name} on your network" },
             )

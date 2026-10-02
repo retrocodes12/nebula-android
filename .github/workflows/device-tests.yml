@@ -41,6 +41,10 @@ jobs:
           ffmpeg -v error -y -i tos.ac3 -t 360 -af "$DM" -c:a aac -b:a 96k -f hls -hls_time 6 -hls_playlist_type vod -hls_segment_filename "$A/tos-hls/seg%03d.ts" $A/tos-hls/index.m3u8
           # a Seekr-sized sprite sheet (3200×1800 JPEG, ~0.5 MB like the real ones) for SeekrFramesDeviceTest
           ffmpeg -v error -y -f lavfi -i "testsrc2=s=3200x1800:d=1,noise=alls=10:allf=t" -frames:v 1 -q:v 6 $A/sheet.jpg
+          # a 1080p AV1 clip (Sintel trailer, CC BY, Blender Foundation) for Av1DecodeDeviceTest
+          curl -sSfL -o sintel.mp4 https://download.blender.org/durian/trailer/sintel_trailer-1080p.mp4
+          ffmpeg -v error -y -ss 4 -t 24 -i sintel.mp4 -an -c:v libsvtav1 -preset 10 -crf 32 -g 48 -pix_fmt yuv420p $A/av1.mkv
+          ffprobe -v error -show_entries stream=codec_name,width,height,r_frame_rate -of csv=p=0 $A/av1.mkv
           ls -la $A $A/tos-hls | head -12
 
       - name: Enable KVM
@@ -61,4 +65,4 @@ jobs:
           ram-size: 3072M
           heap-size: 512M
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim
-          script: gradle connectedDebugAndroidTest --no-daemon -PemulatorAbis --stacktrace || touch /tmp/gradle-failed; adb logcat -d | grep -E "SEEKR-DEVICE|SUBSYNC-DEVICE|AndroidRuntime|TestRunner|ExoPlayerImplInternal|MediaCodec|nextlib|Ffmpeg" | tail -120; test -z "$(find app/build/outputs/androidTest-results -name '*.xml' -exec grep -l '<failure' {} +)" && test ! -e /tmp/gradle-failed
+          script: gradle connectedDebugAndroidTest --no-daemon -PemulatorAbis --stacktrace || touch /tmp/gradle-failed; adb logcat -d | grep -E "AV1-DEVICE|SEEKR-DEVICE|SUBSYNC-DEVICE|AndroidRuntime|TestRunner|ExoPlayerImplInternal|MediaCodec|nextlib|Ffmpeg" | tail -120; test -z "$(find app/build/outputs/androidTest-results -name '*.xml' -exec grep -l '<failure' {} +)" && test ! -e /tmp/gradle-failed
