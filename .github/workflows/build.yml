@@ -132,6 +132,15 @@ jobs:
           grep -qi 'CN=Nebula Player' "$RUNNER_TEMP/certs.txt" || { echo "::error::the release APK is not signed with the Nebula key"; exit 1; }
           rm -f "$RUNNER_TEMP/nebula-release.jks"
 
+      # a run started on another branch keeps its signed APK for a day, for a test install on a phone (never published)
+      - name: Keep the test build
+        if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/beta'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nebula-test-apk
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 1
+
       # a run started on another branch (workflow_dispatch) gates, builds, signs and checks the signature, and publishes nothing
       - name: Publish release
         if: github.ref == 'refs/heads/main'
