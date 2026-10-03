@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -22,6 +23,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -98,11 +101,11 @@ internal fun SubtitlesPanel(
     canShift: Boolean,                // timing only moves add-on subtitles
     onNudge: (Long) -> Unit,
     onResetTiming: () -> Unit,
-    inTime: Boolean = offsetMs == 0L,  // no nudge and no stretch: "Back in sync" is lit
-    timingNote: String? = null,       // "Speed matched · set automatically" when the sync set it
-    syncLabel: String? = null,        // "Sync automatically" / "Listening… 45 s"; null = not offered (live)
-    syncing: Boolean = false,
-    onSync: () -> Unit = {},
+    pickLine: PickLineState? = null,  // "Pick the line you just heard" (PickLine.kt): the list while it is up
+    onPickLineOpen: () -> Unit = {},
+    onPickLineChoose: (Int) -> Unit = {},
+    onPickLineMore: (Boolean) -> Unit = {},   // true = earlier lines, false = later
+    onPickLineCancel: () -> Unit = {},
     onPickAddon: (SubTrack) -> Unit,
     onPickEmbedded: () -> Unit,       // a stream track took over from the add-on pick
     onOff: () -> Unit,
@@ -151,6 +154,18 @@ internal fun SubtitlesPanel(
             if (runCatching { firstFocus.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
         }
     }
+    // back from the line list (Back or Cancel): the remote lands on the button that opened it
+    val pickFocus = remember { FocusRequester() }
+    val picking = pickLine != null
+    var wasPicking by remember { mutableStateOf(false) }
+    LaunchedEffect(picking) {
+        val back = wasPicking && !picking
+        wasPicking = picking
+        if (back && keys) repeat(10) {
+            withFrameNanos {}
+            if (runCatching { pickFocus.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+        }
+    }
 
     Box(
         Modifier.fillMaxSize().background(Scrim)
@@ -197,7 +212,9 @@ internal fun SubtitlesPanel(
                     VDivider()
                     TracksColumn(w2.fillMaxHeight(), lang, lang?.let { byLang[it] } ?: emptyList(), searching, busy, anyOn)
                     VDivider()
-                    StyleColumn(w3.fillMaxHeight(), offsetMs, canShift, onNudge, onResetTiming, inTime, timingNote, syncLabel, syncing, onSync)
+                    // while the viewer picks the line just heard, the list takes the style column's place
+                    if (pickLine != null) PickLineColumn(w3.fillMaxHeight(), pickLine, offsetMs, onPickLineChoose, onPickLineMore, onPickLineCancel)
+                    else StyleColumn(w3.fillMaxHeight(), offsetMs, canShift, onNudge, onResetTiming, onPickLineOpen, pickFocus)
                 }
             }
         }
@@ -325,7 +342,7 @@ private fun Nudge(label: String, onClick: () -> Unit) {
 @Composable
 private fun StyleColumn(
     modifier: Modifier, offsetMs: Long, canShift: Boolean, onNudge: (Long) -> Unit, onResetTiming: () -> Unit,
-    inTime: Boolean, timingNote: String?, syncLabel: String?, syncing: Boolean, onSync: () -> Unit,
+    onPickLine: () -> Unit, pickFocus: FocusRequester,
 ) {
     val ctx = LocalContext.current
     @Suppress("UNUSED_EXPRESSION") SubStyle.version.value   // recompose on cycle
@@ -341,19 +358,21 @@ private fun StyleColumn(
                         fmtSubOffset(offsetMs), color = Color.White, fontFamily = Mono, fontSize = 22.sp,
                         fontWeight = FontWeight.SemiBold, letterSpacing = (-0.3).sp, modifier = Modifier.padding(end = 12.dp),
                     )
-                    GlassPill("Back in sync", on = inTime, onClick = onResetTiming)
+                    GlassPill("Back in sync", on = offsetMs == 0L, onClick = onResetTiming)
                 }
-                if (timingNote != null) Note(timingNote, top = 4.dp)
                 Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Nudge("−0.5") { onNudge(-500) }
                     Nudge("−0.1") { onNudge(-100) }
                     Nudge("+0.1") { onNudge(100) }
                     Nudge("+0.5") { onNudge(500) }
                 }
-                // the sync (SubSync.kt) listens for the voices and sets the timing itself
-                if (syncLabel != null) Row(Modifier.padding(top = 8.dp)) { GlassPill(syncLabel, value = "Experimental", on = syncing, onClick = onSync) }
-                Note("If the words arrive before the voices, choose + — or let the player match them to the voices (experimental: it listens for a few minutes, and may not find the timing).", top = 6.dp)
-            } else Note("Timing can be nudged for add-on subtitles; the stream's own tracks cannot be shifted.", top = 6.dp)
+            }
+            // offered whatever is showing: with subtitles off or the stream's own track, the press says why it cannot
+            Row(Modifier.padding(top = 8.dp)) {
+                GlassPill("Pick the line you just heard", modifier = Modifier.focusRequester(pickFocus), onClick = onPickLine)
+            }
+            if (canShift) Note("Words early or late? Pick the line you just heard and the subtitles move to match it — then nudge if needed.", top = 6.dp)
+            else Note("Timing can be nudged for add-on subtitles; the stream's own tracks cannot be shifted.", top = 6.dp)
             Eyebrow("Appearance", Modifier.padding(top = 14.dp), Label2)
             SubStyleRows(ctx, style, Modifier.padding(top = 4.dp), arrows = false)
             Row(Modifier.padding(top = 10.dp, bottom = 8.dp)) {
@@ -361,4 +380,94 @@ private fun StyleColumn(
             }
         }
     }
+}
+
+/**
+ * The line list (PickLine.kt): "Earlier lines", the showing file's lines around the anchor — each with where it sits
+ * against the anchor ("On screen", "12 s ago", "in 4 s") — "Later lines", Cancel. The line on screen at the anchor
+ * ([PickLineState.here]) wears a light edge. It opens scrolled to that line in the middle; under a remote focus lands on
+ * it ("Earlier"/"Later" land on the first line they added).
+ */
+@Composable
+private fun PickLineColumn(
+    modifier: Modifier, st: PickLineState, offsetMs: Long,
+    onChoose: (Int) -> Unit, onMore: (Boolean) -> Unit, onCancel: () -> Unit,
+) {
+    val keys = LocalInputModeManager.current.inputMode == InputMode.Keyboard
+    val list = rememberLazyListState()
+    val landing = remember { FocusRequester() }
+    Column(modifier.padding(start = 12.dp)) {
+        Eyebrow("Which line did you just hear?", color = Label2, maxLines = 2)
+        Note(PickLines.note(st.paused), top = 6.dp)
+        LazyColumn(
+            Modifier.padding(top = 8.dp).fillMaxWidth().weight(1f),
+            state = list,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (st.from > 0) item(key = "earlier") { PickMoreRow("Earlier lines", muted = true) { onMore(true) } }
+            items(count = st.to - st.from, key = { "line/" + (st.from + it) }) { k ->
+                val i = st.from + k
+                val l = st.lines[i]
+                PickLineCard(
+                    PickLines.badge(l, st.anchorMs, offsetMs), l.text, here = i == st.here,
+                    modifier = if (i == st.focus) Modifier.focusRequester(landing) else Modifier,
+                ) { onChoose(i) }
+            }
+            if (st.to < st.lines.size) item(key = "later") { PickMoreRow("Later lines", muted = true) { onMore(false) } }
+            item(key = "cancel") { PickMoreRow("Cancel", muted = false, onClick = onCancel) }
+        }
+    }
+    // the landing line in the middle of the column, and under a remote the focus on it
+    LaunchedEffect(st.from, st.to, st.focus) {
+        val idx = (st.focus - st.from) + (if (st.from > 0) 1 else 0)
+        list.scrollToItem(idx)
+        withFrameNanos {}
+        val info = list.layoutInfo
+        val row = info.visibleItemsInfo.firstOrNull { it.index == idx }
+        if (row != null) {
+            val view = info.viewportEndOffset - info.viewportStartOffset
+            list.scrollBy((row.offset - (view - row.size) / 2).toFloat())
+        }
+        if (keys) repeat(10) {
+            withFrameNanos {}
+            if (runCatching { landing.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+        }
+    }
+}
+
+private val HereEdge = Color(0x73FFFFFF)       // rgba(255,255,255,.45), as the web's .lp-here
+
+@Composable
+private fun PickLineCard(badge: String, text: String, here: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val ink = if (focused) Color.Black else Color.White
+    Column(
+        modifier.fillMaxWidth()
+            .background(if (focused) Color.White else Fill, Card)
+            .border(1.dp, if (focused) Color.Transparent else if (here) HereEdge else Hair, Card)
+            .clickable(interactionSource = interaction, indication = null) { onClick() }
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        Text(
+            badge.uppercase(), color = if (focused) Color(0x99000000) else Label2, fontFamily = Mono, fontSize = 10.sp,
+            fontWeight = FontWeight.Medium, letterSpacing = 1.2.sp, maxLines = 1,
+            modifier = Modifier.border(1.dp, if (focused) Color(0x33000000) else Hair, PillShape).padding(horizontal = 7.dp, vertical = 2.dp),
+        )
+        Text(text, color = ink, fontSize = 15.sp, fontWeight = FontWeight.Medium, lineHeight = 20.sp, modifier = Modifier.padding(top = 6.dp))
+    }
+}
+
+/** "Earlier lines" / "Later lines" (quieter) and Cancel: a plain row with the white lozenge under focus. */
+@Composable
+private fun PickMoreRow(label: String, muted: Boolean, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    Text(
+        label, color = if (focused) Color.Black else if (muted) Ink2 else Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+        modifier = Modifier.fillMaxWidth()
+            .background(if (focused) Color.White else Color.Transparent, RoundedCornerShape(10.dp))
+            .clickable(interactionSource = interaction, indication = null) { onClick() }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    )
 }

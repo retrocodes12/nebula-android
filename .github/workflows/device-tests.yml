@@ -1,7 +1,7 @@
 name: Device tests
 
-# On-device tests (app/src/androidTest) on an emulator: the subtitle sync's ear against real Media3 decoding.
-# The media is Tears of Steel (CC BY 3.0, Blender Foundation), downloaded and cut here, never committed.
+# On-device tests (app/src/androidTest) on an emulator, against real Media3 decoding: Seekr's sprite sheets and AV1.
+# The media is made here (ffmpeg's test source, the Sintel trailer — CC BY, Blender Foundation), never committed.
 on:
   workflow_dispatch:
   push:
@@ -32,20 +32,14 @@ jobs:
       - name: Make the test media
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null
-          A=app/src/androidTest/assets; mkdir -p $A/tos-hls
-          curl -sSfL -o tos.ac3 "https://download.blender.org/demo/movies/ToS/Surround-TOS_DVDSURROUND-Dolby%205.1.ac3"
-          curl -sSfL -o $A/tos.srt https://download.blender.org/demo/movies/ToS/subtitles/TOS-en.srt
-          DM="pan=stereo|FL=FL+0.707*FC+0.707*SL|FR=FR+0.707*FC+0.707*SR"
-          ffmpeg -v error -y -i tos.ac3 -t 360 -af "$DM" -c:a aac -b:a 96k $A/tos-stereo.mkv
-          ffmpeg -v error -y -i tos.ac3 -t 360 -c:a aac -ac 6 -b:a 192k $A/tos-51.mp4
-          ffmpeg -v error -y -i tos.ac3 -t 360 -af "$DM" -c:a aac -b:a 96k -f hls -hls_time 6 -hls_playlist_type vod -hls_segment_filename "$A/tos-hls/seg%03d.ts" $A/tos-hls/index.m3u8
+          A=app/src/androidTest/assets; mkdir -p $A
           # a Seekr-sized sprite sheet (3200×1800 JPEG, ~0.5 MB like the real ones) for SeekrFramesDeviceTest
           ffmpeg -v error -y -f lavfi -i "testsrc2=s=3200x1800:d=1,noise=alls=10:allf=t" -frames:v 1 -q:v 6 $A/sheet.jpg
           # a 1080p AV1 clip (Sintel trailer, CC BY, Blender Foundation) for Av1DecodeDeviceTest
           curl -sSfL -o sintel.mp4 https://download.blender.org/durian/trailer/sintel_trailer-1080p.mp4
           ffmpeg -v error -y -ss 4 -t 24 -i sintel.mp4 -an -c:v libsvtav1 -preset 10 -crf 32 -g 48 -pix_fmt yuv420p $A/av1.mkv
           ffprobe -v error -show_entries stream=codec_name,width,height,r_frame_rate -of csv=p=0 $A/av1.mkv
-          ls -la $A $A/tos-hls | head -12
+          ls -la $A | head -12
 
       - name: Enable KVM
         run: |
@@ -65,4 +59,4 @@ jobs:
           ram-size: 3072M
           heap-size: 512M
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim
-          script: gradle connectedDebugAndroidTest --no-daemon -PemulatorAbis --stacktrace || touch /tmp/gradle-failed; adb logcat -d | grep -E "AV1-DEVICE|SEEKR-DEVICE|SUBSYNC-DEVICE|AndroidRuntime|TestRunner|ExoPlayerImplInternal|MediaCodec|nextlib|Ffmpeg" | tail -120; test -z "$(find app/build/outputs/androidTest-results -name '*.xml' -exec grep -l '<failure' {} +)" && test ! -e /tmp/gradle-failed
+          script: gradle connectedDebugAndroidTest --no-daemon -PemulatorAbis --stacktrace || touch /tmp/gradle-failed; adb logcat -d | grep -E "AV1-DEVICE|SEEKR-DEVICE|AndroidRuntime|TestRunner|ExoPlayerImplInternal|MediaCodec|nextlib|Ffmpeg" | tail -120; test -z "$(find app/build/outputs/androidTest-results -name '*.xml' -exec grep -l '<failure' {} +)" && test ! -e /tmp/gradle-failed

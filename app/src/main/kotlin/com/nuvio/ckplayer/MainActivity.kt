@@ -257,7 +257,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.roundToInt
-import kotlin.math.roundToLong
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -6088,13 +6087,8 @@ private fun PlayerScreen(
     var infoRows by remember { mutableStateOf<List<InfoRow>>(emptyList()) }
     var viaRelay by remember { mutableStateOf<Relay.Live?>(null) }             // Play through your PC: the sharing computer this play goes through
     var subOffsetMs by remember { mutableStateOf(0L) }
-    // automatic timing (SubSync.kt): the film-speed stretch it found (shown = file × subScale + offset), whether the
-    // timing is the sync's own, and the sync while it listens
-    var subScale by remember { mutableStateOf(1.0) }
-    var subSynced by remember { mutableStateOf(false) }
-    var syncRun by remember { mutableStateOf<SyncRun?>(null) }
-    var syncHeard by remember { mutableStateOf(0) }
-    var syncFollowing by remember { mutableStateOf(false) }
+    // "Pick the line you just heard" (PickLine.kt): the line list while it is up in the Subtitles panel
+    var pickLine by remember { mutableStateOf<PickLineState?>(null) }
     var liveOffMs by remember { mutableStateOf(0L) }                            // behind the live edge, for the left pill
     // the add-on subtitle showing: its cues, drawn by our own overlay over the video (null = the stream's tracks, or off)
     var overlayCues by remember { mutableStateOf<List<SubCue>?>(null) }
@@ -6159,7 +6153,7 @@ private fun PlayerScreen(
     val exo = remember {
         ExoPlayer.Builder(context)
             .setBandwidthMeter(bandwidth)
-            .setRenderersFactory(listeningRenderers(context).setDecoderManager(decoders))   // SpeechSink.kt: the subtitle sync's ear
+            .setRenderersFactory(NextRenderersFactory(context).setDecoderManager(decoders))
             // Settings › Buffer ahead, and a memory ceiling for every setting including Auto (PlayerExtras.kt)
             .setLoadControl(bufferLoadControl(Prefs.buffer))
             // one HTTP identity (UA, X-Nebula-Client, cookies) shared with the scrub-frame reader — MediaHttp.kt
@@ -6385,10 +6379,10 @@ private fun PlayerScreen(
         tracksFor = null
         // owed until the new item is set — a hop cancelled during the relay lookup must not lose it
         if (!sameTitle && overlayCues != null) textOwed[0] = true
-        if (syncRun != null) { SpeechTap.collector = null; syncRun = null; syncFollowing = false }   // a sync belongs to the source it listened to
+        pickLine = null                                   // the line list belongs to the address it was opened on
         if (!sameTitle) {
             pickSerial[0]++; subBusy = false
-            activeAddonSub = null; overlayCues = null; subOffsetMs = 0L; subScale = 1.0; subSynced = false
+            activeAddonSub = null; overlayCues = null; subOffsetMs = 0L
         }
         val isMpd = Regex("\\.mpd(\\?|#|$)", RegexOption.IGNORE_CASE).containsMatchIn(url)
         // A protected stream's licence address used to be read from its manifest HERE, before the item was set — a
@@ -6875,7 +6869,7 @@ private fun PlayerScreen(
         var shown: List<Int>? = null
         var shownOn: SubtitleView? = null
         while (true) {
-            cuesAt(all, ((exo.currentPosition - subOffsetMs) * 1000.0 / subScale).toLong(), on)
+            cuesAt(all, (exo.currentPosition - subOffsetMs) * 1000L, on)
             val v = overlaySubView
             if (on != shown || v !== shownOn) {
                 shown = ArrayList(on); shownOn = v
@@ -6906,30 +6900,12 @@ private fun PlayerScreen(
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
             .apply { if (!auto) setPreferredTextLanguages(*prefer.toTypedArray()) }
             .build()
-        if (syncRun != null) { SpeechTap.collector = null; syncRun = null; syncFollowing = false }
         overlayCues = cues
         activeAddonSub = st.url
-        subOffsetMs = 0L; subScale = 1.0; subSynced = false
+        subOffsetMs = 0L
         subForced = true
         if (!auto) pickLang = st.lang
         return true
-    }
-    // "Sync automatically" (SubSync.kt): the sink's ear hears the voices while the viewer watches; every 30 s of them the
-    // file's lines are matched against what was heard, and three agreeing answers set the timing
-    fun stopSync(msg: String?) {
-        SpeechTap.collector = null; syncRun = null; syncFollowing = false
-        if (msg != null) Toasts.show(msg)
-    }
-    fun startSync() {
-        val all = overlayCues ?: run { Toasts.show("Pick an add-on subtitle first — the stream's own tracks already follow it."); return }
-        if (exo.isCurrentMediaItemLive) { Toasts.show("Live streams cannot be synced."); return }
-        val lines = syncLines(all)
-        if (lines.size < 8) { Toasts.show("This subtitle file has too few lines to sync."); return }
-        val col = SpeechCollector()
-        SpeechTap.collector = col
-        syncHeard = 0; syncFollowing = false
-        syncRun = SyncRun(col, lines)
-        Toasts.show("Syncing subtitles — keep watching, this listens for a minute or two.")
     }
     fun applyPick(st: SubTrack) {
         subBusy = true
@@ -6940,66 +6916,58 @@ private fun PlayerScreen(
     fun subsOff() {
         pickSerial[0]++
         subBusy = false
-        if (syncRun != null) { SpeechTap.collector = null; syncRun = null; syncFollowing = false }
         activeAddonSub = null; overlayCues = null
-        subOffsetMs = 0L; subScale = 1.0; subSynced = false
+        subOffsetMs = 0L
         pickLang = null
         subChosenFor = contentId
     }
-    // the sync's loop: once a second, the count for the panel; every 30 s of voices, a try; a seek starts the count again
-    // After the first answer it keeps FOLLOWING for the rest of the play (syncFollowing): the last 5 minutes, around the
-    // timing now, at its speed — a file cut from another broadcast steps a few seconds at each ad break
-    LaunchedEffect(syncRun) {
-        val run = syncRun ?: return@LaunchedEffect
-        var gate = SyncGate()
-        var following = false
-        var next = SubSync.MIN * SubSync.HZ
-        var gen = run.col.generation
-        while (syncRun === run) {
-            delay(1000)
-            val col = run.col
-            if (col.generation != gen) { gen = col.generation; next = SubSync.MIN * SubSync.HZ; gate.clear() }
-            syncHeard = col.heard / SubSync.HZ
-            if (col.passthrough) { stopSync("The sound goes straight to your speakers or receiver here, so it cannot be listened to."); break }
-            if (col.heard < next) continue
-            next = col.heard + SubSync.STEP * SubSync.HZ
-            if (col.loud < -90) { stopSync("Could not hear this stream."); break }
-            val snap = col.snapshot() ?: continue
-            val around = subOffsetMs / 1000.0; val scaleNow = subScale
-            val r = withContext(Dispatchers.Default) {
-                if (!following) syncSolve(snap.first, snap.second, run.lines)
-                else {
-                    val from = maxOf(0, snap.second.size - SubSync.FOLLOW_W * SubSync.HZ)
-                    syncSolve(snap.first + from.toDouble() / SubSync.HZ, snap.second.copyOfRange(from, snap.second.size), run.lines, around, scaleNow)
-                }
-            }
-            if (syncRun !== run) break
-            val got = gate.offer(r)
-            if (got != null && following) {
-                gate.clear()
-                if (abs(got.off - around) >= 0.3) {
-                    subOffsetMs = (got.off * 10).roundToLong() * 100; subSynced = true
-                    Toasts.show(String.format(java.util.Locale.US, "Subtitle timing followed the voices: %s%.1f s.", if (subOffsetMs >= 0) "+" else "−", abs(subOffsetMs) / 1000.0))
-                }
-                continue
-            }
-            if (got != null) {
-                subOffsetMs = (got.off * 10).roundToLong() * 100; subScale = got.scale; subSynced = true
-                val said = if (subOffsetMs == 0L) "they were already in time"
-                    else String.format(java.util.Locale.US, "%.1f s %s", abs(subOffsetMs) / 1000.0, if (subOffsetMs > 0) "later" else "earlier")
-                Toasts.show("Subtitles synced — " + said + (if (got.scale != 1.0) ", speed matched" else "") + ". Following the voices from here.")
-                following = true; syncFollowing = true
-                gate = SyncGate(SubSync.FZ, SubSync.FTOL)
-                continue
-            }
-            if (following) continue
-            if (col.heard >= SubSync.MAX * SubSync.HZ) {
-                stopSync("Could not match these subtitles to the voices — they may be for another version of the video. The timing is as it was.")
-                break
-            }
-        }
+    // "Pick the line you just heard" (PickLine.kt). Opening it takes the moment as the anchor and pauses the video there
+    // (not in a watch party — a pause would stop everyone — and not on a live stream, which cannot wait); the list is the
+    // add-on file's lines around it. Picking line i sets the timing so that line ENDS at the anchor (shown = file +
+    // offset, as the overlay's clock and the nudges read it). Only add-on files: the stream's own tracks are drawn by
+    // Media3, whose lines we never see.
+    fun pickEnd(): Boolean {
+        val st = pickLine ?: return false
+        pickLine = null
+        // the video plays on if the list paused it — on the same address, and only if nothing else has started it
+        if (st.paused && st.url == url && !exo.playWhenReady) exo.play()
+        return true
     }
-    DisposableEffect(Unit) { onDispose { SpeechTap.collector = null } }
+    fun pickOpen() {
+        val all = overlayCues
+        if (all == null) {
+            val streamText = exo.currentTracks.groups.any { it.type == C.TRACK_TYPE_TEXT && it.isSelected }
+            Toasts.show(if (streamText) "These subtitles come inside the video — move them with the nudges." else "Turn subtitles on first, then pick a line.")
+            return
+        }
+        val lines = PickLines.lines(all.map { c -> PickSeg(c.startUs / 1000L, c.endUs / 1000L, c.cues.map { it.text?.toString() ?: "" }) })
+        if (lines.isEmpty()) { Toasts.show("These subtitles have no lines yet."); return }
+        val at = exo.currentPosition
+        val stop = exo.playWhenReady && !partyUi.active() && !exo.isCurrentMediaItemLive
+        if (stop) exo.pause()
+        val here = PickLines.here(lines, at, subOffsetMs)
+        val (from, to) = PickLines.window(here, lines.size)
+        pickLine = PickLineState(at, stop, lines, here, from, to, here, all, url)
+    }
+    fun pickMore(earlier: Boolean) {
+        val st = pickLine ?: return
+        pickLine = if (earlier) st.copy(from = PickLines.earlier(st.from), focus = st.from - 1)
+            else st.copy(to = PickLines.later(st.to, st.lines.size), focus = st.to)
+    }
+    /** Line [i] was the one just said: the timing moves, the list ends; the caller closes the panel. */
+    fun pickChoose(i: Int) {
+        val st = pickLine ?: return
+        val l = st.lines.getOrNull(i) ?: return
+        val was = subOffsetMs
+        subOffsetMs = PickLines.offsetFor(st.anchorMs, l)
+        val d = subOffsetMs - was
+        pickEnd()
+        Toasts.show(PickLines.movedText(d))
+    }
+    // the panel closing under the list (Done, a tap on the dim, the Sleep menu, picture-in-picture): the video plays on
+    LaunchedEffect(subPanelOpen, inPipMode.value) { if (!subPanelOpen || inPipMode.value) pickEnd() }
+    // the subtitles it listed went away or changed (Off, another file): back to the timing, the video playing on
+    LaunchedEffect(overlayCues) { if (pickLine?.let { it.source !== overlayCues } == true) pickEnd() }
 
     // Subtitles when a video starts, for the add-ons' subtitles too (issue #1: "the chosen subtitles for autoload don't
     // show up" — only the stream's own tracks were ever switched on). Once this address's tracks are known, the languages
@@ -7546,6 +7514,8 @@ private fun PlayerScreen(
                 if (keysMode) runCatching { subsFocus.requestFocus() }
             }
             BackHandler { closePanel() }
+            // Back while the line list is up returns to the timing (declared later, so it is asked first)
+            if (pickLine != null) BackHandler { pickEnd() }
             SubtitlesPanel(
                 player = exo,
                 embedded = embeddedSubs,
@@ -7556,14 +7526,13 @@ private fun PlayerScreen(
                 busy = subBusy,
                 offsetMs = subOffsetMs,
                 canShift = overlayCues != null,
-                onNudge = { d -> subOffsetMs += d; subSynced = false },
-                onResetTiming = { if (syncRun != null) stopSync(null); subOffsetMs = 0L; subScale = 1.0; subSynced = false },
-                inTime = subOffsetMs == 0L && subScale == 1.0,
-                timingNote = listOfNotNull(if (subScale != 1.0) "Speed matched" else null, if (subSynced) "set automatically" else null)
-                    .joinToString(" · ").replaceFirstChar { it.uppercase() }.ifEmpty { null },
-                syncLabel = if (isLiveState) null else if (syncRun != null) (if (syncFollowing) "Following the voices" else "Listening… $syncHeard s") else "Sync automatically",
-                syncing = syncRun != null,
-                onSync = { if (syncRun != null) stopSync(if (syncFollowing) "Stopped following — the timing stays as it is." else "Stopped syncing — the timing is as it was.") else startSync() },
+                onNudge = { d -> subOffsetMs += d },
+                onResetTiming = { subOffsetMs = 0L },
+                pickLine = pickLine,
+                onPickLineOpen = { pickOpen() },
+                onPickLineChoose = { i -> pickChoose(i); closePanel() },
+                onPickLineMore = { earlier -> pickMore(earlier) },
+                onPickLineCancel = { pickEnd() },
                 onPickAddon = { st -> applyPick(st) },
                 onPickEmbedded = { subsOff() },
                 onOff = { subsOff() },

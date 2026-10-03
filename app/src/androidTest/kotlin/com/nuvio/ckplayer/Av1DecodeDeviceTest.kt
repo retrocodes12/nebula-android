@@ -20,6 +20,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.DecoderManager
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.DecoderMode
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -89,7 +90,7 @@ class Av1DecodeDeviceTest {
         var name: String? = null
         ins.runOnMainSync {
             exo = ExoPlayer.Builder(ins.targetContext)
-                .setRenderersFactory(listeningRenderers(ins.targetContext).setDecoderManager(dm))
+                .setRenderersFactory(NextRenderersFactory(ins.targetContext).setDecoderManager(dm))
                 .setMediaSourceFactory(DefaultMediaSourceFactory(DataSource.Factory { AssetDataSource(ins.context) }))
                 .build().apply { dm.attach(this) }
             dm.selectVideoDecoder(mode)
