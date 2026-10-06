@@ -1364,6 +1364,9 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                 pageJob[0] = pageScope.launch {
                                     repeat(n) {
                                         if (!pageFocus.moveFocus(if (down) FocusDirection.Down else FocusDirection.Up)) return@launch
+                                        // a page never ends on the TV rail (past the last row the search can find a tab
+                                        // lower down): back to the screen, where the move came from, and stop there
+                                        if (RailFocus.has) { pageFocus.moveFocus(FocusDirection.Right); return@launch }
                                         withFrameNanos {}
                                     }
                                 }
