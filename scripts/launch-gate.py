@@ -58,13 +58,54 @@ def crashes():
     return out
 
 
+class _Part:
+    """the rest of a file from one offset, for a 206 (copyfile reads it to its end)"""
+    def __init__(self, f, n): self.f, self.n = f, n
+
+    def read(self, k=-1):
+        if self.n <= 0: return b''
+        k = self.n if k is None or k < 0 else min(k, self.n)
+        b = self.f.read(k); self.n -= len(b); return b
+
+    def close(self): self.f.close()
+
+
+class _Ranged(http.server.SimpleHTTPRequestHandler):
+    """the stdlib's file server, answering one byte range the way a real host does: the player re-opens a file at its
+    position after a pause, and without ranges it had to read the whole file again from the start to get there"""
+    def send_head(self):
+        path = self.translate_path(self.path)
+        m = re.match(r'^bytes=(\d+)-(\d*)$', (self.headers.get('Range') or '').strip())
+        if not m or not os.path.isfile(path): return super().send_head()
+        size = os.path.getsize(path)
+        a = int(m.group(1)); b = min(int(m.group(2)) if m.group(2) else size - 1, size - 1)
+        if a >= size or b < a: self.send_error(416); return None
+        f = open(path, 'rb'); f.seek(a)
+        self.send_response(206)
+        self.send_header('Content-Type', self.guess_type(path))
+        self.send_header('Accept-Ranges', 'bytes')
+        self.send_header('Content-Range', 'bytes %d-%d/%d' % (a, b, size))
+        self.send_header('Content-Length', str(b - a + 1))
+        self.end_headers()
+        return _Part(f, b - a + 1)
+
+    def log_message(self, *a): pass
+
+
+class _Quiet(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address): pass     # a player closing a connection mid-file is normal
+
+
 def av1_phase(path):
     """The AV1 file through the release's FFmpeg decoder: [failures]. Logged step by step. Read with the controls held
     still: the remote's Info key opens the playback info (a key first takes the app out of touch mode, as a remote does)
-    and each reading is taken paused, so neither fades while uiautomator takes its slow dumps."""
+    and each reading is taken paused, so neither fades while uiautomator takes its slow dumps. Four readings, the film
+    playing six seconds between them: one may land while the engine re-reads (its picture rows are away then)."""
     fails = []
     d, name = os.path.dirname(os.path.abspath(path)), os.path.basename(path)
-    srv = http.server.ThreadingHTTPServer(('127.0.0.1', 8765), functools.partial(http.server.SimpleHTTPRequestHandler, directory=d))
+    srv = _Quiet(('127.0.0.1', 8765), functools.partial(_Ranged, directory=d))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     # a fresh start straight into the player (a deep link to a cold app opens the player at once, playing)
     sh('am', 'force-stop', PKG); time.sleep(2)
@@ -89,15 +130,17 @@ def av1_phase(path):
         drawn = (int(fr.group(2)) - int(fr.group(1))) if fr else -1
         return dec, drawn, (int(pos.group(1)) * 60 + int(pos.group(2))) if pos else -1, [x for x in t if x]
 
-    d1, f1, p1, t1 = read()
-    print('av1: first reading — decoding %r, frames drawn %d, clock %d s' % (d1, f1, p1), flush=True)
-    adb('shell', 'input', 'keyevent', 'KEYCODE_MEDIA_PLAY'); time.sleep(8)
-    d2, f2, p2, t2 = read()
-    print('av1: second reading — decoding %r, frames drawn %d, clock %d s' % (d2, f2, p2), flush=True)
-    print('av1: on screen: ' + ' | '.join(t2)[:400], flush=True)
-    if not (d1 or d2): fails.append('AV1: the picture is not on the processor (no "on the processor" decoding line)')
-    if not (f2 > f1 > 0): fails.append('AV1: frames did not keep being drawn (%d, then %d)' % (f1, f2))
-    if not (p2 > p1 >= 0): fails.append('AV1: the clock did not move (%d s, then %d s)' % (p1, p2))
+    got = []
+    for i in range(4):
+        r = read(); got.append(r)
+        print('av1: reading %d — decoding %r, frames drawn %d, clock %d s' % (i + 1, r[0], r[1], r[2]), flush=True)
+        if i < 3: adb('shell', 'input', 'keyevent', 'KEYCODE_MEDIA_PLAY'); time.sleep(6)
+    print('av1: on screen last: ' + ' | '.join(got[-1][3])[:400], flush=True)
+    frames = [r[1] for r in got if r[1] > 0]
+    clocks = [r[2] for r in got if r[2] >= 0]
+    if not any(r[0] for r in got): fails.append('AV1: the picture is not on the processor (no "on the processor" decoding line)')
+    if not (len(frames) >= 2 and frames[-1] > frames[0]): fails.append('AV1: frames did not keep being drawn %s' % frames)
+    if not (len(clocks) >= 2 and clocks[-1] > clocks[0]): fails.append('AV1: the clock did not move %s' % clocks)
     srv.shutdown()
     return fails
 
