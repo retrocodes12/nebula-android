@@ -160,12 +160,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.86.0.apk
+          cp "$APK" Nebula-1.87.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.86.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.86.0 Nebula-1.86.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.86.0" \
-            --notes "Pick the line you just heard to move add-on subtitles into time. Open the subtitle panel, tap Pick the line you just heard, and choose the line that was just spoken. The video pauses while you choose, then you can fine-tune with the timing buttons. (1.85.3: reading failures retry up to three times, and a failure in the last minute counts as watched.)"
+          gh release delete v1.87.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.87.0 Nebula-1.87.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.87.0" \
+            --notes "Smoother on Android TV and phones: cards, rows and screens move without stutter, Home and Search fill several rows at once, and the player stops redrawing everything while a film plays. The remote does more: Back on Home goes to the top before it leaves, Play opens or plays what is lit, Menu opens its options, CH+/CH- move a page at a time, the Search button opens Search, and in the player Info shows playback details, Previous steps back and Stop leaves. Media buttons no longer start other apps while Nebula is open, and a headset or the TV home screen can no longer start a film while Nebula is in the background. The Subtitles panel hides the controls behind it, the pause board stays clear of the controls on TVs, and a phone player toolbar fits the screen. Searches that reach no add-on and series that will not load now say so with Retry, and errors read as plain sentences. The download is a third smaller. (1.86.0: pick the line you just heard to time add-on subtitles.)"
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
