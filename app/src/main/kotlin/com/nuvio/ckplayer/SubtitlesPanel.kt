@@ -311,7 +311,7 @@ private fun TrackCard(c: SubChoice) {
     ) {
         Column(Modifier.weight(1f)) {
             Text(
-                c.badge.uppercase(), color = if (focused) Color(0x99000000) else Label2, fontFamily = Mono, fontSize = 10.sp,
+                c.badge.uppercase(), color = if (focused) Color(0x99000000) else Label2, fontFamily = Mono, fontSize = tinySp(10f),
                 fontWeight = FontWeight.Medium, letterSpacing = 1.2.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.border(1.dp, if (focused) Color(0x33000000) else Hair, PillShape).padding(horizontal = 7.dp, vertical = 2.dp),
             )
@@ -450,7 +450,7 @@ private fun PickLineCard(badge: String, text: String, here: Boolean, modifier: M
             .padding(horizontal = 14.dp, vertical = 12.dp),
     ) {
         Text(
-            badge.uppercase(), color = if (focused) Color(0x99000000) else Label2, fontFamily = Mono, fontSize = 10.sp,
+            badge.uppercase(), color = if (focused) Color(0x99000000) else Label2, fontFamily = Mono, fontSize = tinySp(10f),
             fontWeight = FontWeight.Medium, letterSpacing = 1.2.sp, maxLines = 1,
             modifier = Modifier.border(1.dp, if (focused) Color(0x33000000) else Hair, PillShape).padding(horizontal = 7.dp, vertical = 2.dp),
         )

@@ -75,6 +75,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInputModeManager
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -121,10 +123,13 @@ private fun GlassCircle(
                 drawCircle(Color(0x80FFFFFF), radius = this.size.minDimension / 2 + 2.dp.toPx(), style = Stroke(4.dp.toPx()))
             } else Modifier)
             .background(bg, CircleShape)
-            .clickable(interactionSource = interaction, indication = null) { onClick() },
+            .clickable(interactionSource = interaction, indication = null) { onClick() }
+            // the name is the whole glass circle's, not its glyph's: what a screen reader frames (and the Screens walk
+            // measures) is the 80 dp target a finger and the remote press, not the 40 dp picture inside it
+            .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = label, tint = if (on) Color.Black else Ink, modifier = Modifier.size(iconSize))
+        Icon(icon, contentDescription = null, tint = if (on) Color.Black else Ink, modifier = Modifier.size(iconSize))
     }
 }
 
@@ -154,31 +159,36 @@ internal fun GlassPill(label: String, value: String? = null, on: Boolean = false
 }
 
 /** One toolbar item: an outline icon and a short label (+ a dim value). Focus, like "on",
-    inverts it to a white pill with black ink — what the web player's .pui-btn:focus does. */
+    inverts it to a white pill with black ink — what the web player's .pui-btn:focus does.
+    [iconsOnly]: a narrow screen's toolbar — the icon alone, named for a screen reader (an item with no icon, a party
+    reaction, keeps its label). */
 @Composable
 private fun ToolItem(
     icon: ImageVector?, label: String, value: String? = null, on: Boolean = false,
-    modifier: Modifier = Modifier, onClick: () -> Unit,
+    modifier: Modifier = Modifier, iconsOnly: Boolean = false, onClick: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val lit = focused || on
     val ink = if (lit) Color.Black else Ink
+    val bare = iconsOnly && icon != null
     Row(
         modifier.background(if (lit) Color.White else Color.Transparent, Pill)
             .clickable(interactionSource = interaction, indication = null) { onClick() }
-            .padding(horizontal = 12.dp, vertical = 7.dp),
+            .padding(horizontal = if (bare) 10.dp else 12.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (icon != null) {
-            Icon(icon, contentDescription = null, tint = ink, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(7.dp))
+            Icon(icon, contentDescription = if (bare) label + (value?.let { " $it" } ?: "") else null, tint = ink, modifier = Modifier.size(18.dp))
+            if (!bare) Spacer(Modifier.width(7.dp))
         }
-        Text(label, color = ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-        if (value != null) Text(
-            value, color = if (lit) Color(0x99000000) else DimInk, fontSize = 13.sp, fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(start = 6.dp), maxLines = 1,
-        )
+        if (!bare) {
+            Text(label, color = ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            if (value != null) Text(
+                value, color = if (lit) Color(0x99000000) else DimInk, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(start = 6.dp), maxLines = 1,
+            )
+        }
     }
 }
 
@@ -227,6 +237,7 @@ private fun PlayerToolbar(
     onNext: () -> Unit, onSubtitles: () -> Unit, onAudio: () -> Unit, onQuality: () -> Unit,
     onSpeedCycle: () -> Unit, onSleep: () -> Unit, onParty: () -> Unit, onInvite: () -> Unit, onReact: (String) -> Unit,
     canInvite: Boolean = true,
+    iconsOnly: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -237,23 +248,25 @@ private fun PlayerToolbar(
             horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (hasNext) ToolItem(Icons.Filled.SkipNext, "Next ›", onClick = onNext)
+            if (hasNext) ToolItem(Icons.Filled.SkipNext, "Next ›", iconsOnly = iconsOnly, onClick = onNext)
             if (showSubtitles) ToolItem(
                 Icons.Outlined.Subtitles, "Subtitles",
                 modifier = if (subtitlesFocus != null) Modifier.focusRequester(subtitlesFocus) else Modifier,
+                iconsOnly = iconsOnly,
                 onClick = onSubtitles,
             )
-            if (showAudio) ToolItem(Icons.Outlined.Audiotrack, "Audio", onClick = onAudio)
-            if (qualityLabel != null) ToolItem(Icons.Outlined.HighQuality, "Quality", qualityLabel, onClick = onQuality)
-            ToolItem(Icons.Outlined.Speed, "Speed", speedLabel, onClick = onSpeedCycle)
+            if (showAudio) ToolItem(Icons.Outlined.Audiotrack, "Audio", iconsOnly = iconsOnly, onClick = onAudio)
+            if (qualityLabel != null) ToolItem(Icons.Outlined.HighQuality, "Quality", qualityLabel, iconsOnly = iconsOnly, onClick = onQuality)
+            ToolItem(Icons.Outlined.Speed, "Speed", speedLabel, iconsOnly = iconsOnly, onClick = onSpeedCycle)
             ToolItem(
                 Icons.Outlined.Bedtime, "Sleep", sleepLabel, on = sleepLabel != null,
                 modifier = if (sleepFocus != null) Modifier.focusRequester(sleepFocus) else Modifier,
+                iconsOnly = iconsOnly,
                 onClick = onSleep,
             )
-            ToolItem(Icons.Outlined.Groups, if (partyActive) "Leave party" else "Party", onClick = onParty)
+            ToolItem(Icons.Outlined.Groups, if (partyActive) "Leave party" else "Party", iconsOnly = iconsOnly, onClick = onParty)
             if (partyActive) {
-                if (canInvite) ToolItem(Icons.Outlined.PersonAdd, "Invite", onClick = onInvite)
+                if (canInvite) ToolItem(Icons.Outlined.PersonAdd, "Invite", iconsOnly = iconsOnly, onClick = onInvite)
                 // the reactions are the party's own vocabulary, sent on the wire as they are
                 listOf("\uD83D\uDC4D", "\uD83D\uDE02", "\u2764\uFE0F", "\uD83D\uDD25").forEach { e ->
                     ToolItem(null, e, onClick = { onReact(e) })
@@ -285,8 +298,14 @@ internal fun PauseBoard(
     val w = pauseBoardWidth(cfg.screenWidthDp, cfg.screenHeightDp)
     AnimatedVisibility(visible, enter = fadeIn(), exit = fadeOut(), modifier = modifier) {
         Column(
-            (if (w.full) Modifier.fillMaxWidth() else Modifier.fillMaxWidth(0.62f))
-                .then(if (w.capDp != null) Modifier.widthIn(max = w.capDp.dp) else Modifier),
+            when {
+                w.full -> Modifier.fillMaxWidth()
+                // the cap comes FIRST: placed after fillMaxWidth it did nothing (that fixes the width before a later
+                // limit is read), so on a TV the board ran 570 dp wide and its Up next pill sat over the −10 circle
+                // (the Screens walk's tv-07c shot)
+                w.capDp != null -> Modifier.widthIn(max = w.capDp.dp).fillMaxWidth()
+                else -> Modifier.fillMaxWidth(0.62f)
+            },
         ) {
             Text(kicker, color = DimInk, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.4.sp)
             Text(
@@ -330,7 +349,7 @@ internal fun PlaybackInfoHud(rows: List<InfoRow>, modifier: Modifier = Modifier)
             .background(Color(0xD91C1C1E), RoundedCornerShape(14.dp))
             .padding(horizontal = 14.dp, vertical = 12.dp),
     ) {
-        Text("PLAYBACK INFO", color = Color(0x8CEBEBF5), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp)
+        Text("PLAYBACK INFO", color = Color(0x8CEBEBF5), fontSize = tinySp(10f), fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp)
         rows.forEachIndexed { i, r ->
             Row(Modifier.fillMaxWidth().padding(top = if (i == 0) 8.dp else 5.dp), verticalAlignment = Alignment.Top) {
                 Text(r.k, color = DimInk, fontSize = 12.5.sp, modifier = Modifier.weight(1f))
@@ -352,9 +371,7 @@ internal fun TitleCardChrome(
     title: String,
     isPlaying: Boolean,
     isLive: Boolean,
-    positionMs: Long,
-    durationMs: Long,
-    bufferedMs: Long,
+    clock: PlayerClock,                 // position, length, buffer, speed: read only by the parts that show them
     episodeTag: String?,
     qualityLabel: String?,
     speedLabel: String,
@@ -387,8 +404,7 @@ internal fun TitleCardChrome(
     sleepLabel: String? = null,         // "38 min" / "End of episode" while a sleep timer is set
     onSleep: () -> Unit = {},
     sourceLine: String? = null,         // "1080p · Torrentio" — the playing stream's signature
-    clockLine: String? = null,          // "9:41 pm · Ends 11:12 pm" (just the clock on live)
-    liveOffsetMs: Long = 0L,            // how far behind the live edge, for the left pill
+    showClock: Boolean = false,         // "9:41 pm · Ends 11:12 pm" top-right (just the clock on live)
     subtitlesFocus: FocusRequester? = null,   // so the panel can hand focus back to its opener
     playFocus: FocusRequester? = null,        // the remote's landing place when the chrome wakes
     sleepFocus: FocusRequester? = null,       // the sleep menu hands focus back here when it closes
@@ -411,6 +427,8 @@ internal fun TitleCardChrome(
             // a phone on its side has no room for a title above the bar: it sits beside Back instead
             val compact = maxHeight < 480.dp
             val narrow = maxWidth < 600.dp
+            // a phone's toolbar is icons: with their words it ran off the right edge ("Quality 576p (" cut)
+            val iconsOnly = maxWidth < 700.dp || compact
             Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(140.dp)
                 .background(Brush.verticalGradient(0f to Color(0x8C000000), 1f to Color(0x00000000))))
             Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(if (compact) 200.dp else 260.dp)
@@ -424,12 +442,8 @@ internal fun TitleCardChrome(
                     modifier = Modifier.weight(1f).padding(horizontal = 14.dp).alpha(if (dimTitle) 0f else 1f),
                 )
                 // a narrow screen keeps the clock and drops the end time; the clock gives way, never the round buttons
-                val clock = if (clockLine != null && narrow) clockLine.substringBefore(" · ") else clockLine
-                if (clock != null) Text(
-                    clock, color = DimInk, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End,
-                    modifier = (if (compact) Modifier else Modifier.weight(1f)).padding(end = 14.dp),
-                ) else if (!compact) Spacer(Modifier.weight(1f))
+                if (showClock) ClockText(clock, isLive, narrow, (if (compact) Modifier else Modifier.weight(1f)).padding(end = 14.dp))
+                else if (!compact) Spacer(Modifier.weight(1f))
                 partyBadge?.let {
                     Text(
                         it, color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold,
@@ -479,27 +493,12 @@ internal fun TitleCardChrome(
                 )
 
                 // the scrubber with its scrub preview (ScrubPreview.kt): drag or ←/→ show a ghost knob and a tip
-                Scrubber(
-                    positionMs = positionMs, durationMs = durationMs, bufferedMs = bufferedMs,
-                    isLive = isLive, liveOffsetMs = liveOffsetMs, frame = scrubFrame,
-                    onSeekBy = onSeekBy, onSeekTo = onSeekTo, onScrub = onScrub, stepMs = seekStepMs,
-                    kick = scrubKick, onKickTaken = onScrubKickTaken,
+                ClockedScrubber(
+                    clock, isLive, scrubFrame, onSeekBy, onSeekTo, onScrub, seekStepMs, scrubKick, onScrubKickTaken,
                 )
                 // elapsed at the left end, remaining (or, on a tap, the total) at the right — glass pills
-                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    TimePill(
-                        when {
-                            !isLive -> fmtTime(positionMs)
-                            liveOffsetMs > 12_000 -> "−" + fmtTime(liveOffsetMs) + " behind live"
-                            else -> "At the live edge"
-                        }
-                    )
-                    Spacer(Modifier.weight(1f))
-                    // the way back to the edge, one press: focusable, so the remote can reach it too
-                    if (isLive) TimePill("LIVE") { onGoLive() }
-                    else TimePill(
-                        if (showTotal) fmtTime(durationMs) else "−" + fmtTime((durationMs - positionMs).coerceAtLeast(0L))
-                    ) { showTotal = !showTotal; Prefs.setTimeDisplay(ctx, if (showTotal) "total" else "left") }
+                TimePills(clock, isLive, showTotal, onGoLive) {
+                    showTotal = !showTotal; Prefs.setTimeDisplay(ctx, if (showTotal) "total" else "left")
                 }
                 PlayerToolbar(
                     hasNext = hasNext, showSubtitles = showSubtitles, showAudio = showAudio,
@@ -508,9 +507,116 @@ internal fun TitleCardChrome(
                     onNext = onNext, onSubtitles = onSubtitles, onAudio = onAudio, onQuality = onQuality,
                     onSpeedCycle = onSpeedCycle, onSleep = onSleep, onParty = onParty, onInvite = onInvite, onReact = onReact,
                     canInvite = canInvite,
+                    iconsOnly = iconsOnly,
                     modifier = Modifier.padding(top = 10.dp),
                 )
             }
         }
     }
+}
+
+/**
+ * The player's clock: position, length, buffer, how far behind live, the speed and whether it ended — written by the
+ * player's 400 ms tick and read ONLY by what shows them (the time pills, the scrubber, the top-right clock, the pause
+ * board's facts while it is up). Read in the player itself, they recomposed all of it on every tick.
+ */
+@androidx.compose.runtime.Stable
+internal class PlayerClock {
+    var pos by androidx.compose.runtime.mutableLongStateOf(0L)
+    var dur by androidx.compose.runtime.mutableLongStateOf(0L)
+    var buf by androidx.compose.runtime.mutableLongStateOf(0L)
+    var liveOff by androidx.compose.runtime.mutableLongStateOf(0L)     // behind the live edge (0 when unknown)
+    var speed by androidx.compose.runtime.mutableFloatStateOf(1f)
+    var ended by mutableStateOf(false)
+}
+
+/** "9:41 pm · Ends 11:12 pm" — just the clock on live, or while the length is unknown, or on a narrow screen. */
+@Composable
+private fun ClockText(clock: PlayerClock, isLive: Boolean, narrow: Boolean, modifier: Modifier) {
+    val ctx = LocalContext.current
+    val line = clockLine(ctx, clock.dur - clock.pos, clock.speed, live = isLive || clock.dur <= 0)
+    Text(
+        if (narrow) line.substringBefore(" · ") else line, color = DimInk, fontFamily = Mono, fontSize = 12.sp,
+        fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End,
+        modifier = modifier,
+    )
+}
+
+/** The scrubber, fed from the clock. */
+@Composable
+private fun ClockedScrubber(
+    clock: PlayerClock, isLive: Boolean, frame: State<Bitmap?>?,
+    onSeekBy: (Long) -> Unit, onSeekTo: (Long) -> Unit, onScrub: (Long?) -> Unit,
+    stepMs: Long, kick: Pair<Int, Int>?, onKickTaken: (Int) -> Unit,
+) {
+    Scrubber(
+        positionMs = clock.pos, durationMs = clock.dur, bufferedMs = clock.buf,
+        isLive = isLive, liveOffsetMs = clock.liveOff, frame = frame,
+        onSeekBy = onSeekBy, onSeekTo = onSeekTo, onScrub = onScrub, stepMs = stepMs,
+        kick = kick, onKickTaken = onKickTaken,
+    )
+}
+
+/** Elapsed at the left end of the bar, remaining (or the total) at the right — LIVE and how far behind it on a live one. */
+@Composable
+private fun TimePills(clock: PlayerClock, isLive: Boolean, showTotal: Boolean, onGoLive: () -> Unit, onToggleTotal: () -> Unit) {
+    val pos = clock.pos
+    val dur = clock.dur
+    val off = clock.liveOff
+    Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        TimePill(
+            when {
+                !isLive -> fmtTime(pos)
+                off > 12_000 -> "−" + fmtTime(off) + " behind live"
+                else -> "At the live edge"
+            }
+        )
+        Spacer(Modifier.weight(1f))
+        // the way back to the edge, one press: focusable, so the remote can reach it too
+        if (isLive) TimePill("LIVE") { onGoLive() }
+        else TimePill(if (showTotal) fmtTime(dur) else "−" + fmtTime((dur - pos).coerceAtLeast(0L))) { onToggleTotal() }
+    }
+}
+
+/**
+ * The pause board with its facts — time left, when it ends, how far behind live, what plays next — built from the
+ * clock only while the board is up (it fades out with the last ones it showed), so a hidden board costs no tick.
+ */
+@Composable
+internal fun PauseBoardHost(
+    visible: Boolean,
+    clock: PlayerClock,
+    isLive: Boolean,
+    sleepFired: Boolean,
+    next: Episode?,
+    title: String,
+    sub: String?,
+    desc: String?,
+    modifier: Modifier = Modifier,
+) {
+    val ctx = LocalContext.current
+    val kept = remember { arrayOfNulls<Pair<String, List<Pair<String, Boolean>>>>(1) }
+    val shown = if (visible) {
+        val ended = clock.ended
+        val meta = mutableListOf<Pair<String, Boolean>>()
+        if (!ended) {
+            if (isLive) {
+                val off = clock.liveOff
+                meta += (if (off > 12_000) fmtTime(off) + " behind live" else "At the live edge") to false
+            } else if (clock.dur > 0) {
+                val remain = (clock.dur - clock.pos).coerceAtLeast(0L)
+                meta += (if (remain >= 60_000) "${remain / 60_000} min left" else "Under a minute left") to false
+                // the same clock as the controls' top line (the device's 12/24-hour setting), so the two never disagree
+                meta += "Ends " + clockAt(ctx, System.currentTimeMillis() + (remain / clock.speed.coerceAtLeast(0.1f)).toLong()) to false
+            }
+        }
+        next?.let { n -> meta += upNextLabel(n.season, n.episode, n.name) to true }
+        val kicker = (if (sleepFired) "Sleep timer · " else "") +
+            when { ended -> "Finished"; isLive -> "Live · Paused"; else -> "Paused" }
+        (kicker to meta.toList()).also { kept[0] = it }
+    } else kept[0] ?: ("Paused" to emptyList())
+    PauseBoard(
+        visible = visible, kicker = shown.first, title = title, sub = sub, desc = desc, meta = shown.second,
+        modifier = modifier,
+    )
 }

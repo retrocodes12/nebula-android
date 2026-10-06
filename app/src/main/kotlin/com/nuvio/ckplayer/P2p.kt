@@ -393,7 +393,7 @@ internal fun P2pSheet(title: String, onCancel: () -> Unit) {
                     .navigationBarsPadding().padding(22.dp),
             ) {
                 Text(
-                    "FINDING A TORRENT", color = MutedC, fontFamily = Mono, fontSize = 10.sp,
+                    "FINDING A TORRENT", color = MutedC, fontFamily = Mono, fontSize = tinySp(10f),
                     fontWeight = FontWeight.Medium, letterSpacing = 1.6.sp,
                 )
                 Text(

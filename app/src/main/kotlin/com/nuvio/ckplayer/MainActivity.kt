@@ -40,6 +40,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.onFocusedBoundsChanged
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.clickable
@@ -147,6 +148,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -162,14 +164,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
@@ -178,6 +185,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -254,6 +262,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -306,6 +315,31 @@ internal object PlayerKeys {
     @Volatile var handler: ((android.view.KeyEvent) -> Boolean)? = null
 }
 
+/**
+ * The browse screens' remote (no player up), heard where the Activity hears every key. The media buttons used to
+ * fall through to whatever other app last played (a TV's Play started someone's music); now Play is OK on the lit
+ * card or row — it opens, resumes or plays — and on a title page it presses Play, and the other media buttons are
+ * taken. Menu opens the lit card's hold sheet; the remote's Search opens Search; a keyboard's Backspace is Back.
+ */
+internal object BrowseKeys {
+    /** The lit card or row that takes Play (FocusCard): its hold, for Menu — null when it has none. */
+    class Card(val hold: (() -> Unit)?)
+    @Volatile var card: Card? = null
+    /** A title page's own Play, while that page is up. */
+    @Volatile var titlePlay: (() -> Unit)? = null
+    /** AppRoot: open the Search tab. */
+    @Volatile var search: (() -> Unit)? = null
+    /** Media buttons with nothing to play here: taken, so they reach no other app's player. */
+    val MEDIA = setOf(
+        android.view.KeyEvent.KEYCODE_MEDIA_PAUSE, android.view.KeyEvent.KEYCODE_MEDIA_STOP,
+        android.view.KeyEvent.KEYCODE_MEDIA_REWIND, android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
+        android.view.KeyEvent.KEYCODE_MEDIA_NEXT, android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS,
+        android.view.KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD, android.view.KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD,
+        android.view.KeyEvent.KEYCODE_MEDIA_STEP_FORWARD, android.view.KeyEvent.KEYCODE_MEDIA_STEP_BACKWARD,
+        android.view.KeyEvent.KEYCODE_MEDIA_RECORD,
+    )
+}
+
 /** A remote's other buttons: each shows the player's controls (the web wakes them on any key) and still does its own job. */
 private val REMOTE_WAKE_KEYS = setOf(
     android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, android.view.KeyEvent.KEYCODE_MEDIA_PLAY,
@@ -324,7 +358,50 @@ class MainActivity : ComponentActivity() {
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         KeyWatch.note(event)
         if (PlayerKeys.handler?.invoke(event) == true) return true
+        if (PlayerKeys.handler == null && browseKey(event)) return true
         return super.dispatchKeyEvent(event)
+    }
+
+    /** No player up: the remote's media buttons, Menu, Search and a keyboard's Backspace ([BrowseKeys]). */
+    private fun browseKey(e: android.view.KeyEvent): Boolean {
+        val down = e.action == android.view.KeyEvent.ACTION_DOWN
+        val first = down && e.repeatCount == 0
+        when (e.keyCode) {
+            android.view.KeyEvent.KEYCODE_MEDIA_PLAY, android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                // OK on the lit card or row, press and release alike (a held Play is a held OK: the hold sheet)
+                if (BrowseKeys.card != null) super.dispatchKeyEvent(android.view.KeyEvent(
+                    e.downTime, e.eventTime, e.action, android.view.KeyEvent.KEYCODE_DPAD_CENTER, e.repeatCount,
+                    e.metaState, e.deviceId, e.scanCode, e.flags, e.source,
+                ))
+                else if (first) BrowseKeys.titlePlay?.invoke()
+                return true
+            }
+            android.view.KeyEvent.KEYCODE_MENU -> {
+                val hold = BrowseKeys.card?.hold ?: return false
+                if (first) hold()
+                return true
+            }
+            android.view.KeyEvent.KEYCODE_SEARCH -> {
+                val open = BrowseKeys.search ?: return false
+                if (e.action == android.view.KeyEvent.ACTION_UP && !e.isCanceled) open()
+                return true
+            }
+            // Back from a keyboard, never inside a text field (where it deletes)
+            android.view.KeyEvent.KEYCODE_DEL -> {
+                if (TextFocus.anyField()) return false
+                if (e.action == android.view.KeyEvent.ACTION_UP && !e.isCanceled) onBackPressedDispatcher.onBackPressed()
+                return true
+            }
+        }
+        return e.keyCode in BrowseKeys.MEDIA
+    }
+
+    // the remote's Search button where the system routes it here as a search request (not as a key): the Search tab,
+    // on a browse screen; with a player up it does what it always did
+    override fun onSearchRequested(): Boolean {
+        val open = BrowseKeys.search
+        if (PlayerKeys.handler == null && open != null) { open(); return true }
+        return super.onSearchRequested()
     }
 
     override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
@@ -334,6 +411,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Account.isTv(this)                  // read once for the process (Account.tvKnown, the TV text sizes)
         Prefs.load(this)
         Cloud.load(this)
         Support.restore(this)
@@ -344,6 +422,9 @@ class MainActivity : ComponentActivity() {
         // (process restore, config change) must not jump back into the player
         pendingPlay.value = if (savedInstanceState == null) parsePlayIntent(intent) else null
         setContent { AppRoot(pendingPlay.value) { pendingPlay.value = null } }
+        // the window's own black fill under a screen that paints every pixel itself (AppRoot's Surface): one full-screen
+        // fill per frame for nothing. The theme's background still shows while the app starts.
+        window.setBackgroundDrawable(null)
     }
 
     // Nebula has left the screen: an app icon chosen in Appearance takes over now (AppIcons.settle — turning off the
@@ -489,6 +570,15 @@ private val NebulaTypography: Typography get() = Typography().run {
     )
 }
 
+/** The tiniest labels (8.5–10.5 sp: a plate's tag, the rail's names, a badge), raised on a television, where they read
+    as specks from a sofa — a step or two, never a new layout. A phone keeps its sizes. */
+internal fun tinySp(phone: Float): androidx.compose.ui.unit.TextUnit = (if (!Account.tvKnown) phone else when {
+    phone <= 8.5f -> 10.5f
+    phone <= 9f -> 11f
+    phone <= 10f -> 11.5f
+    else -> 12f
+}).sp
+
 /** Secondary label: same family, lighter colour, tight tracking. */
 internal fun labelStyle(size: Int = 13, color: Color = MutedC) = TextStyle(
     fontFamily = Sans,
@@ -588,8 +678,6 @@ internal fun isUnaired(ep: Episode): Boolean {
 /** The card radius Settings › Appearance chose: Square 4 · Rounded 12 · Round 18 (dp). */
 internal fun cardRadius(): Int = when (Prefs.cardCorners) { "square" -> 4; "round" -> 18; else -> 12 }
 internal fun cardShape() = RoundedCornerShape(cardRadius().dp)
-// which item auto stream selection already fired for (survives the screen)
-private var autoPlayedFor: String? = null
 
 /** A protected stream's licence address per manifest address, for the session (thirty minutes, in case it carries a
     token): reading the manifest for it is a whole extra round trip before the player can start. */
@@ -635,11 +723,12 @@ private fun seriesResumeRec(ctx: Context, seriesId: String): ProgressRec? =
 /** An episode's air date as "23 Jun 2022", or null when it has none or it will not parse.
     One copy: the row and the sheet must never disagree about a date. */
 private fun epAirDate(ep: Episode): String? = ep.released?.let {
-    runCatching {
-        java.time.LocalDate.parse(it.take(10))
-            .format(java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy", java.util.Locale.US))
-    }.getOrNull()
+    runCatching { java.time.LocalDate.parse(it.take(10)).format(AIR_DATE) }.getOrNull()
 }
+/** Built once (it was built per row, per composition); a formatter is immutable and shared safely. */
+private val AIR_DATE: java.time.format.DateTimeFormatter = java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy", java.util.Locale.US)
+/** "Episode 3" as an episode's whole name — the row drops the number from its eyebrow then. */
+private val GENERIC_EP_NAME = Regex("""^episode\s*\d+$""", RegexOption.IGNORE_CASE)
 
 /** How an episode was asked for: a plain row tap decides nothing, a sheet row does. */
 private enum class PlayIntent { TAP, RESUME, START_OVER }
@@ -748,6 +837,8 @@ private class SearchUiState {
     var submitted by mutableStateOf("")
     var sections by mutableStateOf<List<CatRow>>(emptyList())
     var searching by mutableStateOf(false)
+    var unreachable by mutableStateOf(false)   // the last search found nothing because no add-on could be asked
+    var retry by mutableStateOf(0)
     var searchedFor: String? = null
     val rowStates = HashMap<String, LazyListState>()          // each result row's sideways place, for Back
     val listState = LazyListState()
@@ -908,11 +999,16 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
             val scope = rememberCoroutineScope()
             // the next-episode hop in flight (playEpisode): Back, a tab or the Up next card's Dismiss calls it off
             var hopJob by remember { mutableStateOf<Job?>(null) }
+            var relayWarmFor by remember { mutableStateOf<String?>(null) }      // the next episode the relay was looked up for
             fun cancelHop() { hopJob?.cancel(); hopJob = null }
+            // a player on its way out (the screen change fades on a phone) takes no more keys: the remote's next press
+            // belongs to the screen coming in (its Back above all), not to the controls fading away
+            fun leavingPlayer() { if (stack.lastOrNull() is Screen.Play) PlayerKeys.handler = null }
             fun push(s: Screen) { ReturnFocus.clear(); stack = stack + s }
             fun pop() {
                 cancelHop()
                 if (stack.size > 1) {
+                    leavingPlayer()
                     // the screen beneath gets the remote back where it left it (TvFocus.kt)
                     ReturnFocus.aim(stack[stack.size - 2])
                     // a viewer backing out of playback leaves the party (the host keeps it alive)
@@ -922,7 +1018,13 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                     stack = stack.dropLast(1)
                 }
             }
-            fun setTab(s: Screen) { cancelHop(); ReturnFocus.clear(); stack = listOf(s) }
+            fun setTab(s: Screen) { cancelHop(); leavingPlayer(); ReturnFocus.clear(); stack = listOf(s) }
+            // the remote's Search button and the system's search request (MainActivity → BrowseKeys)
+            DisposableEffect(Unit) {
+                val open: () -> Unit = { setTab(Screen.Search) }
+                BrowseKeys.search = open
+                onDispose { if (BrowseKeys.search === open) BrowseKeys.search = null }
+            }
 
             // ---- watch party wiring ----
             fun partyEvent(ev: PartyEvent) {
@@ -1178,6 +1280,14 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
             fun prefetchNext() {
                 val next = seriesChain.next() ?: return
                 NextEp.prefetch(ctx, scope, seriesChain.addon, seriesChain.type, next)
+                // Play through your PC (a TV): the next play asks for the sharing computer before it starts; asked now,
+                // the hop finds the answer waiting (Relay.resolve keeps it five minutes) — once per next episode
+                if (relayWarmFor != next.id && Relay.wanted(ctx)) {
+                    relayWarmFor = next.id
+                    scope.launch {
+                        try { Relay.resolve(ctx) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { }
+                    }
+                }
             }
 
             // Home used to appear the instant the shell was ready and then fill
@@ -1231,9 +1341,10 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                             // one 180 ms cross-fade per screen change; the in-place episode hop (Play → Play)
                             // keeps the same player composition, so it is not a change here
                             contentKey = { s -> if (s is Screen.Play) "play" else s },
-                            // Motion: Reduced cuts between screens instead of fading
+                            // Motion: Reduced cuts between screens instead of fading — and so does a TV: a cross-fade
+                            // draws BOTH full screens every frame for its length, which a TV box cannot afford
                             transitionSpec = {
-                                val ms = if (Prefs.reducedMotion) 0 else 180
+                                val ms = if (Prefs.reducedMotion || isTv) 0 else 180
                                 fadeIn(tween(ms)) togetherWith fadeOut(tween(ms))
                             },
                             label = "screen",
@@ -1241,8 +1352,44 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                             // per screen: its entry (Back's return, TvFocus.kt) and its landing slot (the fallback landing)
                             val landing = remember { LandingSlot() }
                             LandingFallback(landing, s)
-                            CompositionLocalProvider(LocalScreenEntry provides s, LocalLandingSlot provides landing) {
-                            Box(Modifier.fillMaxSize().onFocusChanged { landing.hasFocus = it.hasFocus }) {
+                            // CH+/− and Page Up/Down on a browse screen: the remote's focus a screen at a time — as many
+                            // moves as the lit item's height fits in 80 % of the screen, focus following each
+                            val pageFocus = LocalFocusManager.current
+                            val pageScope = rememberCoroutineScope()
+                            val litH = remember { IntArray(2) }                 // [the lit item's height, this screen's], px
+                            val pageJob = remember { arrayOfNulls<Job>(1) }
+                            fun pageStep(down: Boolean) {
+                                if (pageJob[0]?.isActive == true) return          // a held key: one page at a time
+                                val h = litH[0]
+                                val n = if (h <= 0 || litH[1] <= 0) 1 else ((litH[1] * 0.8f) / (h * 1.1f)).toInt().coerceIn(1, 12)
+                                pageJob[0] = pageScope.launch {
+                                    repeat(n) {
+                                        if (!pageFocus.moveFocus(if (down) FocusDirection.Down else FocusDirection.Up)) return@launch
+                                        withFrameNanos {}
+                                    }
+                                }
+                            }
+                            // the screen's one skeleton sweep (Modifier.skeleton), ticking only while a skeleton shows
+                            val shimmer = remember { Shimmer() }
+                            ShimmerClock(shimmer)
+                            CompositionLocalProvider(LocalScreenEntry provides s, LocalLandingSlot provides landing, LocalShimmer provides shimmer) {
+                            Box(
+                                Modifier.fillMaxSize()
+                                    .onSizeChanged { litH[1] = it.height }
+                                    .onFocusedBoundsChanged { litH[0] = it?.size?.height ?: 0 }
+                                    .onPreviewKeyEvent { ev ->
+                                        val code = ev.nativeKeyEvent.keyCode
+                                        val down = code == android.view.KeyEvent.KEYCODE_CHANNEL_DOWN || code == android.view.KeyEvent.KEYCODE_PAGE_DOWN
+                                        val up = code == android.view.KeyEvent.KEYCODE_CHANNEL_UP || code == android.view.KeyEvent.KEYCODE_PAGE_UP
+                                        if ((!down && !up) || s is Screen.Play) false
+                                        else { if (ev.type == KeyEventType.KeyDown) pageStep(down); true }
+                                    }
+                                    .onFocusChanged { landing.hasFocus = it.hasFocus }
+                                    // Right from the TV's rail comes back to what was lit on the screen, not to whatever
+                                    // sits level with the tab the remote left from
+                                    .focusRestorer()
+                                    .focusGroup()
+                            ) {
                             when (s) {
                                 is Screen.Home -> HomeScreen(
                                     homeState,
@@ -1436,6 +1583,8 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                     // the chrome's Back button: what AppRoot's Back does, reached directly, because the
                                     // player's own Back handler (peeling the controls away on a remote) sits in front of it
                                     onExit = { if (stack.size > 1) pop() else setTab(Screen.Home) },
+                                    // a player fading out under the next screen answers no Back of its own
+                                    onTop = current is Screen.Play,
                                 )
                             }
                             }
@@ -1543,6 +1692,8 @@ internal fun FocusCard(
     interactionSource: MutableInteractionSource? = null,
     // may this card be the screen's fallback landing (TvFocus.kt)? Never a Back button
     landing: Boolean = true,
+    // does the remote's Play press it, and Menu hold it, while it is lit (BrowseKeys)? Not a Back button either
+    playKey: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val own = remember { MutableInteractionSource() }
@@ -1550,15 +1701,29 @@ internal fun FocusCard(
     val focused by interaction.collectIsFocusedAsState()
     val haptics = LocalHapticFeedback.current
     // Focus zoom (Settings › Appearance) sets how much a card grows; Motion: Reduced grows nothing
-    // and draws the white ring instead, so focus stays visible from the couch
+    // and draws the white ring instead, so focus stays visible from the couch. The growth is read in the layer, not in
+    // composition: a remote's every move animated two cards, and each recomposed itself on every frame of it (with a
+    // 22 dp shadow nobody could see, black on black, redrawn each frame too — gone).
     val reduced = Prefs.reducedMotion || !zoom
-    val zoom by animateFloatAsState(if (focused && !reduced) Prefs.focusScale else 1f, tween(if (reduced) 0 else 300), label = "zoom")
-    val lift by animateFloatAsState(if (focused && !reduced) 22f else 0f, tween(if (reduced) 0 else 300), label = "lift")
+    val grow = animateFloatAsState(if (focused && !reduced) Prefs.focusScale else 1f, tween(if (reduced) 0 else 180), label = "zoom")
+    // one long-press lambda for the card's life (the caller's latest is read when it fires)
+    val longNow by rememberUpdatedState(onLongClick)
+    val hasLong = onLongClick != null
+    val long = remember(hasLong, haptics) {
+        if (!hasLong) null else ({ haptics.performHapticFeedback(HapticFeedbackType.LongPress); longNow?.invoke(); Unit })
+    }
+    // the remote's Play and Menu reach the lit card through the Activity (BrowseKeys): registered while it is lit
+    if (playKey && focused) {
+        val keys = remember(long) { BrowseKeys.Card(long) }
+        DisposableEffect(keys) {
+            BrowseKeys.card = keys
+            onDispose { if (BrowseKeys.card === keys) BrowseKeys.card = null }
+        }
+    }
     Box(
         modifier
             .then(if (landing) Modifier.landingSlot() else Modifier)
-            .scale(zoom)
-            .shadow(lift.dp, shape, clip = false)
+            .graphicsLayer { val g = grow.value; scaleX = g; scaleY = g }
             .then(if (reduced) Modifier.border(2.dp, if (focused) Color.White else Color.Transparent, shape) else Modifier)
             .clip(shape)
             .combinedClickable(
@@ -1571,9 +1736,7 @@ internal fun FocusCard(
                 hapticFeedbackEnabled = false,
                 // the buzz is the whole affordance here — nothing on the card
                 // itself advertises that a hold does anything
-                onLongClick = onLongClick?.let {
-                    { haptics.performHapticFeedback(HapticFeedbackType.LongPress); it() }
-                },
+                onLongClick = long,
                 onClick = onClick,
             )
     ) { content() }
@@ -1649,7 +1812,10 @@ internal fun LandOnFirstControl() {
  * dead screen.
  */
 @Composable
-internal fun navPadBottom(): Dp = if (Account.isTv(LocalContext.current)) 24.dp else 140.dp   // clears the nav and its fade
+internal fun navPadBottom(): Dp {
+    val ctx = LocalContext.current
+    return if (remember(ctx) { Account.isTv(ctx) }) 24.dp else 140.dp   // clears the nav and its fade
+}
 
 /**
  * A round icon button for the title page's action row. Four of these fit where two
@@ -1883,7 +2049,7 @@ internal fun BackBar(title: String, sub: String?, onBack: () -> Unit) {
     ) {
         // zoom = false is FocusCard's white-ring path: grown with an invisible shadow over black, a focused Back read as
         // nothing lit at all (android-tv-29)
-        FocusCard(shape = RoundedCornerShape(50), onClick = onBack, landing = false, zoom = false) {
+        FocusCard(shape = RoundedCornerShape(50), onClick = onBack, landing = false, zoom = false, playKey = false) {
             Box(
                 Modifier.size(42.dp).background(Surface2, CircleShape),
                 contentAlignment = Alignment.Center,
@@ -1996,7 +2162,7 @@ internal fun MetaCard(
                 }
                 if (Prefs.ratings) m.imdbRating?.let {
                     Text(
-                        "★ $it", color = Color.White, fontFamily = Mono, fontSize = 10.sp,
+                        "★ $it", color = Color.White, fontFamily = Mono, fontSize = tinySp(10f),
                         modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
                             .background(Color(0x9E000000), RoundedCornerShape(6.dp))
                             .padding(horizontal = 5.dp, vertical = 2.dp),
@@ -2133,7 +2299,7 @@ private fun ContinuePosterCard(
                         color = Color(0xFF3A3A45), fontSize = 22.sp, fontWeight = FontWeight.Black)
                 }
                 if (left > 0) Text(
-                    fmtLeft(left), color = Ink, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, fontFamily = Sans, maxLines = 1,
+                    fmtLeft(left), color = Ink, fontSize = tinySp(10f), fontWeight = FontWeight.SemiBold, fontFamily = Sans, maxLines = 1,
                     modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
                         .background(BarGlass, Pill).border(1.dp, Hairline, Pill).padding(horizontal = 7.dp, vertical = 3.dp),
                 )
@@ -2657,7 +2823,7 @@ private fun FriendRow(title: String, items: List<JSONObject>, onOpen: (MetaItem)
 /** A single shimmering block. */
 @Composable
 private fun SkelBox(modifier: Modifier, shape: RoundedCornerShape = RoundedCornerShape(12.dp)) {
-    Box(modifier.clip(shape).background(shimmerBrush()))
+    Box(modifier.skeleton(shape))
 }
 
 /** Placeholder shaped like a stream or episode row: leading block, two text lines. */
@@ -2800,7 +2966,7 @@ private fun ProfileTab(on: Boolean, modifier: Modifier = Modifier, onClick: () -
             )
         }
         // one line whatever the font scale: squeezed, a label wrapped a letter at a time down the pill
-        Text("Profile", color = tint, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false, modifier = Modifier.padding(top = 2.dp))
+        Text("Profile", color = tint, fontSize = tinySp(10.5f), fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false, modifier = Modifier.padding(top = 2.dp))
     }
 }
 
@@ -2822,23 +2988,44 @@ private fun TabItem(label: String, icon: androidx.compose.ui.graphics.vector.Ima
             contentAlignment = Alignment.Center,
         ) { Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp)) }
         // one line whatever the font scale (the pill and the TV rail both use this): squeezed, it wrapped a letter at a time
-        Text(label, color = tint, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false, modifier = Modifier.padding(top = 2.dp))
+        Text(label, color = tint, fontSize = tinySp(10.5f), fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false, modifier = Modifier.padding(top = 2.dp))
     }
 }
 
-/** The skeleton material: a soft band sweeping left to right every 1.2 s over the tertiary surface. */
+/** The skeleton sweep's position, one per screen (AppRoot provides it) — its clock runs only while a skeleton is
+    composed. Every block used to run an animation of its own and recompose itself on each of its frames. */
+internal class Shimmer {
+    val x = androidx.compose.runtime.mutableFloatStateOf(-600f)
+    var users by mutableIntStateOf(0)
+}
+internal val LocalShimmer = androidx.compose.runtime.staticCompositionLocalOf<Shimmer?> { null }
+
+/** AppRoot, per screen: the frames of the one sweep its skeletons share; nothing ticks while none is on screen. */
 @Composable
-internal fun shimmerBrush(): Brush {
-    if (Prefs.reducedMotion) return Brush.linearGradient(listOf(Surface2, Surface2))   // a still placeholder, no sweep
-    val t = rememberInfiniteTransition(label = "sk")
-    val x by t.animateFloat(
-        initialValue = -600f, targetValue = 1800f,
-        animationSpec = infiniteRepeatable(tween(1200, easing = LinearEasing), RepeatMode.Restart), label = "x",
-    )
-    return Brush.linearGradient(
-        colors = listOf(Surface2, Color(0xFF3A3A40), Surface2),
-        start = Offset(x, 0f), end = Offset(x + 600f, 0f),
-    )
+internal fun ShimmerClock(s: Shimmer) {
+    val running by remember(s) { derivedStateOf { s.users > 0 } }
+    if (running && !Prefs.reducedMotion) LaunchedEffect(s) {
+        val t0 = androidx.compose.runtime.withFrameMillis { it }
+        while (true) androidx.compose.runtime.withFrameMillis { t -> s.x.floatValue = -600f + ((t - t0) % 1200L) / 1200f * 2400f }
+    }
+}
+
+/** The skeleton material: a soft band sweeping left to right every 1.2 s over the tertiary surface, drawn from the
+    screen's one sweep — read while drawing, never in composition. Motion: Reduced = a still placeholder. */
+internal fun Modifier.skeleton(shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(12.dp)): Modifier = composed {
+    val s = LocalShimmer.current
+    if (s != null) DisposableEffect(s) { s.users++; onDispose { s.users-- } }
+    val base = Surface2
+    this.clip(shape).drawWithCache {
+        val colors = listOf(base, Color(0xFF3A3A40), base)
+        onDrawBehind {
+            if (s == null || Prefs.reducedMotion) drawRect(base)
+            else {
+                val x = s.x.floatValue
+                drawRect(Brush.linearGradient(colors, start = Offset(x, 0f), end = Offset(x + 600f, 0f)))
+            }
+        }
+    }
 }
 
 private fun thumbRatio(shape: String): Float = when (shape) {
@@ -3008,7 +3195,7 @@ private fun ReleaseNotesSheet(version: String, notes: String, onDismiss: () -> U
     through the top five of the first catalogue. The scrim exists only so the
     type stays legible over the artwork. */
 @Composable
-private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit, detailsModifier: Modifier = Modifier) {
+private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit, detailsModifier: Modifier = Modifier, hold: Boolean = false) {
     // Featured from (Settings › Home): the first row, every row taking turns, or one chosen row
     val source = Prefs.heroSource
     val feed: List<CatRow> = remember(rows, source) {
@@ -3036,9 +3223,11 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit, de
     val heroBtn = remember { MutableInteractionSource() }
     val heroFocused by heroBtn.collectIsFocusedAsState()
     // never flips under a lit View Details (android-tv-2: with no key pressed the hero moved on, so OK opened a title
-    // the viewer was not reading — the web already skips its ticks under focus); focus leaving restarts the full wait
-    LaunchedEffect(picks, every, heroFocused) {
-        if (!heroAdvances(every, heroFocused)) return@LaunchedEffect   // Featured changes every · Off, or held
+    // the viewer was not reading — the web already skips its ticks under focus); focus leaving restarts the full wait.
+    // [hold]: the remote is down in the rows, or the hero is scrolled away — nobody is reading it, so nothing changes
+    val held = heroFocused || hold
+    LaunchedEffect(picks, every, held) {
+        if (!heroAdvances(every, held)) return@LaunchedEffect   // Featured changes every · Off, or held
         while (true) { delay(every * 1000L); idx = (idx + 1) % picks.size }
     }
     val (from, m) = picks[idx]
@@ -3148,6 +3337,7 @@ private fun HomeScreen(
 ) {
     val ctx = LocalContext.current
     val screenEntry = LocalScreenEntry.current
+    val navPad = navPadBottom()
     var update by remember { mutableStateOf<Updates.Release?>(null) }
     // the card held down, if any — Home's only long-press surface is Continue watching
     var sheetFor by remember { mutableStateOf<ProgressRec?>(null) }
@@ -3183,7 +3373,8 @@ private fun HomeScreen(
     // so finishing an episode is reflected the moment you come back.
     LaunchedEffect(st.continueKey) { st.continueRows = Progress.continueList(ctx) }
 
-    // Best-effort update check (the cloud's feed, GitHub as the fallback), once per Home entry. Early builds are offered
+    // Best-effort update check (the cloud's feed, GitHub as the fallback): its answer is kept for the process
+    // (Updates.latestCached), so a Home entry no longer asks the network each time. Early builds are offered
     // only at the Plus level with the switch on (Perks.early); the release when it is the newer of the two.
     LaunchedEffect(Unit) {
         val current = runCatching {
@@ -3192,7 +3383,7 @@ private fun HomeScreen(
         if (current.isEmpty()) return@LaunchedEffect
         val dismissed = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getString("updateDismissed", "").orEmpty()
-        val rel = Updates.latest(early = Perks.early()) ?: return@LaunchedEffect
+        val rel = Updates.latestCached(early = Perks.early()) ?: return@LaunchedEffect
         if (Updates.isNewer(rel.version, current) && rel.version != dismissed) update = rel
     }
 
@@ -3224,28 +3415,40 @@ private fun HomeScreen(
             }
             if (keep.size != st.rows.size) st.rows = keep
         }
+        // Every add-on's manifest at once (most are cached), then the catalogs a few at a time, all add-ons together: they
+        // were asked one after another, so the last row waited for the sum of every add-on's answers. Each row lands in
+        // its place in Home's order (oi) the moment it arrives; a REBUILD still swaps in the whole set at the end.
+        val mans = kotlinx.coroutines.coroutineScope {
+            addons.map { a ->
+                async {
+                    runCatching { manifestFor(a.manifestUrl) }
+                        .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
+                }
+            }.map { it.await() }
+        }
+        val asks = mutableListOf<Triple<Addon, CatalogRef, Int>>()
         for ((ai, a) in addons.withIndex()) {
-            runCatching {
-                val all = manifestFor(a.manifestUrl).catalogs.filter { it.browsable }
-                val seenCat = HashSet<String>()
-                val wanted = mutableListOf<Pair<CatalogRef, Int>>()
-                all.forEachIndexed { ci, c ->
-                    if (!seenCat.add(c.type + "/" + c.id)) return@forEachIndexed
-                    val k = HomeRows.key(a, c)
-                    if (HomeRows.visible(ctx, k, ci)) wanted.add(c to HomeRows.orderIndex(ctx, k, ai, ci)) else st.hidden++
-                }
-                st.wanted += wanted.size
-                for ((c, oi) in wanted) {
-                    runCatching {
-                        // one card per title: the row is keyed by it (a catalogue listing a title twice would crash it)
-                        val items = Stremio.loadCatalog(a.base, c, null).distinctBy { it.type + ":" + it.id }.take(15)
-                        if (items.isNotEmpty()) {
-                            rows.add(CatRow(a, c, items, oi)); rows.sortBy { it.oi }
-                            if (!rebuilding) st.rows = rows.toList()
-                        }
-                    }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
-                }
-            }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+            val all = mans[ai]?.catalogs?.filter { it.browsable } ?: continue
+            val seenCat = HashSet<String>()
+            all.forEachIndexed { ci, c ->
+                if (!seenCat.add(c.type + "/" + c.id)) return@forEachIndexed
+                val k = HomeRows.key(a, c)
+                if (HomeRows.visible(ctx, k, ci)) { asks.add(Triple(a, c, HomeRows.orderIndex(ctx, k, ai, ci))); st.wanted++ } else st.hidden++
+            }
+        }
+        val gate = kotlinx.coroutines.sync.Semaphore(4)
+        kotlinx.coroutines.coroutineScope {
+            for ((a, c, oi) in asks) launch {
+                runCatching {
+                    // one card per title: the row is keyed by it (a catalogue listing a title twice would crash it)
+                    val items = gate.withPermit { Stremio.loadCatalog(a.base, c, null) }.distinctBy { it.type + ":" + it.id }.take(15)
+                    // back on the main thread here (this effect's): the list needs no lock
+                    if (items.isNotEmpty()) {
+                        rows.add(CatRow(a, c, items, oi)); rows.sortBy { it.oi }
+                        if (!rebuilding) st.rows = rows.toList()
+                    }
+                }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+            }
         }
         if (rebuilding) st.rows = rows.toList()
         // stamped only once the set is whole: a build cut off by leaving Home must run again, not pass for done
@@ -3301,17 +3504,16 @@ private fun HomeScreen(
             }
             st.rows.isEmpty() && st.loading && st.continueRows.isEmpty() -> {
                 // the page's shape before its pictures: the hero's footprint, then two rows of cards
-                val br = shimmerBrush()
                 Column(Modifier.fillMaxWidth()) {
-                    Box(Modifier.fillMaxWidth().height((LocalConfiguration.current.screenHeightDp * 0.34f).dp).background(br))
+                    Box(Modifier.fillMaxWidth().height((LocalConfiguration.current.screenHeightDp * 0.34f).dp).skeleton(RectangleShape))
                     Column(Modifier.padding(horizontal = 16.dp)) {
                         repeat(2) { i ->
                             Box(Modifier.padding(top = 22.dp, bottom = 10.dp).width(160.dp).height(18.dp)
-                                .clip(RoundedCornerShape(9.dp)).background(br))
+                                .skeleton(RoundedCornerShape(9.dp)))
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 repeat(if (i == 0) 3 else 5) {
                                     Box(Modifier.width(if (i == 0) 210.dp else 124.dp).aspectRatio(if (i == 0) 16f / 9f else 2f / 3f)
-                                        .clip(RoundedCornerShape(12.dp)).background(br))
+                                        .skeleton(RoundedCornerShape(12.dp)))
                                 }
                             }
                         }
@@ -3327,24 +3529,49 @@ private fun HomeScreen(
             else -> {
             val heroOn = st.rows.isNotEmpty() && Prefs.showHero
             val cwOn = st.continueRows.isNotEmpty() && Prefs.showContinue
-            val land = tvFirstFocus(
-                ready = st.listState.firstVisibleItemIndex == 0 && st.listState.firstVisibleItemScrollOffset == 0 &&
-                    (st.rows.isNotEmpty() || !st.loading),
-            )
+            // read as derived state: reading the scroll offset here recomposed all of Home on every frame of a scroll
+            val atTop by remember { derivedStateOf { st.listState.firstVisibleItemIndex == 0 && st.listState.firstVisibleItemScrollOffset == 0 } }
+            val heroInView by remember { derivedStateOf { st.listState.firstVisibleItemIndex == 0 } }
+            val land = tvFirstFocus(ready = atTop && (st.rows.isNotEmpty() || !st.loading))
+            // where the landing is lit, and whether anything on the list is (the hero holds still under both)
+            var landLit by remember { mutableStateOf(false) }
+            var listLit by remember { mutableStateOf(false) }
+            val landMod = Modifier.onFocusChanged { landLit = it.hasFocus }.focusRequester(land)
+            // Back on Home with a remote and nothing left to peel (web parity, 10-07): first to the top, the remote on
+            // View Details (or the first card); the next Back leaves the app. A peel that could not land does not ask
+            // again until the remote has been somewhere since.
+            val remoteHere = remoteMode()
+            var peeled by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) {
+                var was = false
+                snapshotFlow { atTop && landLit }.collect { now -> if (was && !now) peeled = false; was = now }
+            }
+            val homeScope = rememberCoroutineScope()
+            BackHandler(enabled = remoteHere && !peeled && !(atTop && landLit)) {
+                peeled = true
+                homeScope.launch {
+                    runCatching { st.listState.scrollToItem(0) }
+                    repeat(10) {
+                        withFrameNanos {}
+                        if (runCatching { land.requestFocus() }.getOrDefault(false)) return@launch
+                    }
+                }
+            }
             LazyColumn(
                 state = st.listState,
-                contentPadding = PaddingValues(bottom = navPadBottom()),
-                modifier = Modifier.focusGroup(),
+                contentPadding = PaddingValues(bottom = navPad),
+                modifier = Modifier.onFocusChanged { listLit = it.hasFocus }.focusGroup(),
             ) {
                 // the hero's slot is ALWAYS the first item, empty until the rows arrive: Continue watching paints
                 // first, and a hero inserted above it later left the list anchored on Continue watching — the hero
                 // sat off-screen above, for anyone with something in progress
                 // (1 dp, not nothing: a list treats a zero-height first item as off-screen and anchors on the next one)
-                item(key = "hero") {
-                    if (heroOn) HeroHeader(st.rows, onOpen, detailsModifier = Modifier.focusRequester(land))
+                item(key = "hero", contentType = "hero") {
+                    // it holds still while the remote is anywhere on the list below it, and while it is scrolled away
+                    if (heroOn) HeroHeader(st.rows, onOpen, detailsModifier = landMod, hold = (listLit && !landLit) || !heroInView)
                     else Spacer(Modifier.fillMaxWidth().height(1.dp))
                 }
-                if (cwOn) item(key = "continue") {
+                if (cwOn) item(key = "continue", contentType = "continue") {
                     Column {
                         Box(Modifier.padding(horizontal = 16.dp)) { RowHeader("Continue watching", null, null) }
                         LazyRow(
@@ -3352,11 +3579,11 @@ private fun HomeScreen(
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                             contentPadding = PaddingValues(horizontal = 16.dp),
                         ) {
-                            itemsIndexed(st.continueRows, key = { _, rec -> Progress.key(rec.type, rec.id) }) { ci, r ->
+                            itemsIndexed(st.continueRows, key = { _, rec -> Progress.key(rec.type, rec.id) }, contentType = { _, _ -> "cw" }) { ci, r ->
                                 ContinueCard(
                                     r,
                                     Modifier.returnTo("cw/" + Progress.key(r.type, r.id))
-                                        .then(if (!heroOn && ci == 0) Modifier.focusRequester(land) else Modifier)
+                                        .then(if (!heroOn && ci == 0) landMod else Modifier)
                                         .width(continueCardWidth()),
                                     onClick = { onResume(r) },
                                     onLongClick = { sheetFor = r },
@@ -3365,7 +3592,7 @@ private fun HomeScreen(
                         }
                     }
                 }
-                itemsIndexed(st.rows, key = { _, row -> row.addon.manifestUrl + "/" + row.catalog.type + "/" + row.catalog.id }) { ri, r ->
+                itemsIndexed(st.rows, key = { _, row -> row.addon.manifestUrl + "/" + row.catalog.type + "/" + row.catalog.id }, contentType = { _, _ -> "row" }) { ri, r ->
                     val rowKey = r.addon.manifestUrl + "/" + r.catalog.type + "/" + r.catalog.id
                     val mine = st.rows.filter { it.addon.manifestUrl == r.addon.manifestUrl }
                     val multi = mine.size > 1
@@ -3388,11 +3615,11 @@ private fun HomeScreen(
                             contentPadding = PaddingValues(horizontal = 16.dp),
                         ) {
                             // keyed by title: a rebuild that reorders a catalogue keeps focus on the same title
-                            itemsIndexed(r.items, key = { _, m -> m.type + ":" + m.id }) { mi, m ->
+                            itemsIndexed(r.items, key = { _, m -> m.type + ":" + m.id }, contentType = { _, _ -> "card" }) { mi, m ->
                                 MetaCard(
                                     m,
                                     Modifier.returnTo("row/$rowKey/${m.type}:${m.id}")
-                                        .then(if (!heroOn && !cwOn && ri == 0 && mi == 0) Modifier.focusRequester(land) else Modifier)
+                                        .then(if (!heroOn && !cwOn && ri == 0 && mi == 0) landMod else Modifier)
                                         .width(rowCardWidth(m)),
                                 ) { onOpen(r.addon, m) }
                             }
@@ -3400,11 +3627,11 @@ private fun HomeScreen(
                     }
                 }
                 // add-ons unreachable but Continue watching kept the screen useful
-                if (st.rows.isEmpty() && !st.loading) item(key = "retry") {
+                if (st.rows.isEmpty() && !st.loading) item(key = "retry", contentType = "retry") {
                     Box(Modifier.padding(top = 24.dp)) { HomeNoRows(st, onCustomise) }
                 }
                 // the way into the arrangement, at the foot of the rows it arranges
-                if (st.rows.isNotEmpty()) item(key = "foot") {
+                if (st.rows.isNotEmpty()) item(key = "foot", contentType = "foot") {
                     Box(Modifier.fillMaxWidth().padding(top = 18.dp), contentAlignment = Alignment.Center) {
                         TextAction("Customise Home", onClick = onCustomise)
                     }
@@ -3442,41 +3669,57 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
         if (q != st.submitted) st.submitted = q
     }
     val ctx = LocalContext.current
-    LaunchedEffect(st.submitted) {
+    LaunchedEffect(st.submitted, st.retry) {
         val q = st.submitted.trim()
         // cleared mid-search: the run this key change cancelled never reached its `searching = false`,
         // and a stuck flag would hold the skeleton up in place of Discover
-        if (q.isEmpty()) { st.sections = emptyList(); st.searchedFor = null; st.searching = false; return@LaunchedEffect }
+        if (q.isEmpty()) { st.sections = emptyList(); st.searchedFor = null; st.searching = false; st.unreachable = false; return@LaunchedEffect }
         if (q == st.searchedFor && st.sections.isNotEmpty() && !st.searching) return@LaunchedEffect
         // the sections on screen belong to no finished query until this one ends: a refine cancelled mid-way left another
         // query's partial rows standing under this one's name, and the early return above then kept them
-        st.searching = true; st.searchedFor = null
-        val out = mutableListOf<CatRow>()
+        st.searching = true; st.searchedFor = null; st.unreachable = false
         st.sections = emptyList()
-        for (a in activeAddons(ctx)) {
-            runCatching {
-                // An add-on usually advertises search on several catalogs (Cinemeta
-                // has one for movies and one for series) — query them all, or a
-                // search for a show only ever returns films.
-                val cats = manifestFor(a.manifestUrl).catalogs.filter { it.search }.take(4)
-                if (cats.isEmpty()) return@runCatching
-                val merged = mutableListOf<MetaItem>()
-                val seen = HashSet<String>()
-                for (sc in cats) {
-                    val items = runCatching { Stremio.loadCatalog(a.base, sc, null, q) }
+        // Every add-on at once, their catalogs a few at a time (they were asked one add-on after another). One section
+        // per add-on, in the add-ons' own order (oi), refreshed as each of its catalogs answers.
+        val addons = activeAddons(ctx)
+        val merged = HashMap<Int, Pair<CatalogRef, MutableList<MetaItem>>>()
+        val seen = HashMap<Int, HashSet<String>>()
+        var answered = 0          // add-ons that searched (found something or not)
+        var failed = 0            // add-ons that could not be read or whose every search failed
+        val gate = kotlinx.coroutines.sync.Semaphore(4)
+        kotlinx.coroutines.coroutineScope {
+            addons.forEachIndexed { oi, a ->
+                launch {
+                    // An add-on usually advertises search on several catalogs (Cinemeta has one for movies and one for
+                    // series) — query them all, or a search for a show only ever returns films.
+                    val cats = runCatching { manifestFor(a.manifestUrl).catalogs.filter { it.search }.take(4) }
                         .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
-                        .getOrDefault(emptyList())
-                    for (m in items) if (seen.add(m.type + ":" + m.id)) merged.add(m)
-                    if (merged.isNotEmpty()) {
-                        // one section per add-on, refreshed as its catalogs answer
-                        val row = CatRow(a, cats.first(), merged.toList())
-                        val idx = out.indexOfFirst { it.addon.manifestUrl == a.manifestUrl }
-                        if (idx >= 0) out[idx] = row else out.add(row)
-                        st.sections = out.toList()
-                    }
+                        .getOrNull()
+                    if (cats == null) { failed++; return@launch }
+                    if (cats.isEmpty()) return@launch
+                    var ok = 0
+                    cats.map { sc ->
+                        launch {
+                            val items = runCatching { gate.withPermit { Stremio.loadCatalog(a.base, sc, null, q) } }
+                                .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+                                .getOrNull() ?: return@launch
+                            ok++
+                            // back on the main thread (this effect's): the maps need no lock
+                            val have = seen.getOrPut(oi) { HashSet() }
+                            val list = merged.getOrPut(oi) { cats.first() to mutableListOf() }.second
+                            for (m in items) if (have.add(m.type + ":" + m.id)) list.add(m)
+                            if (list.isNotEmpty()) st.sections = merged.keys.sorted().mapNotNull { k ->
+                                val (c, l) = merged.getValue(k)
+                                if (l.isEmpty()) null else CatRow(addons[k], c, l.toList(), k)
+                            }
+                        }
+                    }.forEach { it.join() }
+                    if (ok > 0) answered++ else failed++
                 }
-            }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+            }
         }
+        // nothing found because nothing could be asked (offline, every add-on down): not "No matches"
+        st.unreachable = st.sections.isEmpty() && answered == 0 && failed > 0
         st.searchedFor = q
         st.searching = false
     }
@@ -3542,6 +3785,12 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     repeat(4) { SkeletonCell(Modifier.width(210.dp)) }
                 }
+            }
+            // offline, or every add-on down: say so, with the way to ask again (a remote can reach it: a chip)
+            st.submitted.isNotBlank() && st.sections.isEmpty() && st.unreachable -> Column(Modifier.padding(top = 8.dp)) {
+                Text("Couldn’t reach your add-ons to search — check the connection.", color = MutedC, fontSize = 14.sp,
+                    modifier = Modifier.padding(bottom = 10.dp))
+                Chip("Retry", false) { st.retry++ }
             }
             st.submitted.isNotBlank() && st.sections.isEmpty() ->
                 Text("No matches for “${st.submitted.trim()}”.", color = MutedC, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
@@ -3619,7 +3868,7 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                 val list = (addons.filterNot { it.manifestUrl == a.manifestUrl } + a)
                 saveAddons(ctx, list); addons = list; url = ""; onAddonsChanged()
                 status = "Added ${a.name}"; statusErr = false; statusDone = true
-            }.onFailure { status = "Could not load: ${it.message}"; statusErr = true; statusDone = false }
+            }.onFailure { status = "Couldn’t add it. " + addonTrouble(it); statusErr = true; statusDone = false }
         }
     }
     /** Move an add-on and persist the new ranking. Returns where it landed. */
@@ -3736,7 +3985,7 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     FocusCard(
-                        shape = RoundedCornerShape(10.dp), zoom = false,
+                        shape = RoundedCornerShape(10.dp), zoom = false, playKey = false,
                         modifier = Modifier.weight(1f).padding(vertical = 4.dp)
                             .returnTo("addon/" + a.manifestUrl)
                             .then(if (i == 0) Modifier.focusRequester(firstRow) else Modifier),
@@ -4568,10 +4817,12 @@ private fun DetailScreen(
     var inList by remember(ck) { mutableStateOf(Library.inList(ctx, item.type, item.id)) }
     var recOpen by remember(ck) { mutableStateOf(false) }
     var moreOpen by remember(ck) { mutableStateOf(false) }
+    // "Couldn't load the episodes · Retry": asks for the title and its episodes again
+    var reload by remember(ck) { mutableIntStateOf(0) }
     val pageScope = rememberCoroutineScope()
     if (recOpen) RecommendSheet(item.type, item, pageScope) { recOpen = false }
 
-    LaunchedEffect(ck) {
+    LaunchedEffect(ck, reload) {
         if (full != null) return@LaunchedEffect
         val order = listOf(addon) + activeAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
         for (a in order) {
@@ -4622,14 +4873,28 @@ private fun DetailScreen(
             )
         }
         // series episodes live inline on this page (one scroll, like the big apps)
-        var episodes by remember(ck) { mutableStateOf<List<Episode>>(emptyList()) }
-        var selectedSeason by remember(ck) { mutableStateOf<Int?>(null) }
-        var upNextId by remember(ck) { mutableStateOf<String?>(null) }
-        var epsLoading by remember(ck) { mutableStateOf(item.type == "series") }
-        if (item.type == "series") LaunchedEffect(ck, full, metaTried) {
+        // A title already in the cache (Back to it, above all) opens with its episodes, season and Up next at once, worked
+        // out here exactly as the effect below does — it used to show four skeleton rows for a frame first.
+        val cachedEps = remember(ck) {
+            val vids = metaFullCache[ck]?.videos.orEmpty()
+            if (item.type != "series" || vids.isEmpty()) null else {
+                val cur = seriesCursor(ctx, item.type, vids)
+                val kept = if (backHere) screenEntry?.let { keptSeasons[it] }?.takeIf { k -> vids.any { it.season == k } } else null
+                Triple(vids, cur?.upNext?.id, kept ?: cur?.seat?.season
+                    ?: vids.map { it.season }.distinct().sortedWith(compareBy({ it == 0 }, { it })).firstOrNull())
+            }
+        }
+        var episodes by remember(ck) { mutableStateOf(cachedEps?.first ?: emptyList()) }
+        var selectedSeason by remember(ck) { mutableStateOf(cachedEps?.third) }
+        var upNextId by remember(ck) { mutableStateOf(cachedEps?.second) }
+        var epsLoading by remember(ck) { mutableStateOf(item.type == "series" && cachedEps == null) }
+        // the title's own data could not be fetched at all (offline, the add-on down): said so, with Retry
+        var epsFailed by remember(ck) { mutableStateOf(false) }
+        if (item.type == "series") LaunchedEffect(ck, full, metaTried, reload) {
             // the full meta comes from the same /meta endpoint and already carries
             // the videos — re-fetching them was a second identical request per open
             var found: List<Episode> = full?.videos.orEmpty()
+            var answered = full != null
             if (found.isEmpty()) {
                 if (!metaTried) return@LaunchedEffect            // still loading — wait for it
                 val order = listOf(addon) + activeAddons(ctx).filterNot { it.manifestUrl == addon.manifestUrl }
@@ -4637,12 +4902,14 @@ private fun DetailScreen(
                     val ok = runCatching {
                         if (a.manifestUrl != addon.manifestUrl && !manifestFor(a.manifestUrl).canMeta(item.type, item.id)) return@runCatching false
                         val vids = Stremio.loadSeriesVideos(a.base, item.type, item.id)
+                        answered = true
                         if (vids.isNotEmpty()) { found = vids; true } else false
                     }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrDefault(false)
                     if (ok) break
                 }
             }
             epsLoading = false
+            epsFailed = found.isEmpty() && !answered
             if (found.isEmpty()) return@LaunchedEffect
             episodes = found
             seriesChain.set(item.type, item.name, addon, found)
@@ -4676,6 +4943,32 @@ private fun DetailScreen(
         }
         DisposableEffect(Unit) {
             onDispose { if (screenEntry != null) keptDetailPlaces[screenEntry] = detailList.firstVisibleItemIndex to detailList.firstVisibleItemScrollOffset }
+        }
+        /** The page's Play: what is half-watched, else Up next (or the first episode), else the film. */
+        fun playTitle() {
+            // recompute at click time — the remembered copy can lag a
+            // just-finished episode when returning from playback
+            val r = if (item.type == "series") seriesResumeRec(ctx, item.id) else null
+            when {
+                item.type == "series" && r != null -> onResumeEpisode(
+                    if (r.addonUrl.isEmpty()) r.copy(addonUrl = addon.manifestUrl) else r
+                )
+                item.type == "series" -> {
+                    // nothing half-watched, but episodes may still be ticked off —
+                    // continue the show from up next rather than restarting it at episode 1
+                    val go = seriesUpNext(ctx, item.type, episodes)
+                        ?: episodes.sortedWith(compareBy({ it.season == 0 }, { it.season }, { it.episode ?: 0 })).firstOrNull()
+                    if (go != null) onPlayEpisode(go, PlayIntent.TAP) else onEpisodes()
+                }
+                else -> onPlayMovie()
+            }
+        }
+        // the remote's Play anywhere on this page presses it (a lit episode row or card takes it as its own OK first)
+        val playLatest by rememberUpdatedState<() -> Unit>({ playTitle() })
+        DisposableEffect(Unit) {
+            val press: () -> Unit = { playLatest() }
+            BrowseKeys.titlePlay = press
+            onDispose { if (BrowseKeys.titlePlay === press) BrowseKeys.titlePlay = null }
         }
         LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp), state = detailList) {
         item { Column {
@@ -4733,24 +5026,7 @@ private fun DetailScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Button(
-                onClick = {
-                    // recompute at click time — the remembered copy can lag a
-                    // just-finished episode when returning from playback
-                    val r = if (item.type == "series") seriesResumeRec(ctx, item.id) else null
-                    when {
-                        item.type == "series" && r != null -> onResumeEpisode(
-                            if (r.addonUrl.isEmpty()) r.copy(addonUrl = addon.manifestUrl) else r
-                        )
-                        item.type == "series" -> {
-                            // nothing half-watched, but episodes may still be ticked off —
-                            // continue the show from up next rather than restarting it at episode 1
-                            val go = seriesUpNext(ctx, item.type, episodes)
-                                ?: episodes.sortedWith(compareBy({ it.season == 0 }, { it.season }, { it.episode ?: 0 })).firstOrNull()
-                            if (go != null) onPlayEpisode(go, PlayIntent.TAP) else onEpisodes()
-                        }
-                        else -> onPlayMovie()
-                    }
-                },
+                onClick = { playTitle() },
                 interactionSource = playPill,
                 colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
                 shape = RoundedCornerShape(50),
@@ -4904,6 +5180,18 @@ private fun DetailScreen(
                 }
             }
             if (epsLoading) items(4) { SkeletonRow(112.dp, 63.dp, circle = false) }
+            // the title could not be fetched at all: said so, with the way to ask again (a chip: the remote reaches it)
+            if (!epsLoading && epsFailed && episodes.isEmpty()) item(key = "eps-failed") {
+                Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Couldn’t load the episodes.", color = MutedC, fontSize = 14.sp, modifier = Modifier.weight(1f, fill = false))
+                    Spacer(Modifier.width(12.dp))
+                    Chip("Retry", false) {
+                        epsLoading = true; epsFailed = false
+                        if (full == null) metaTried = false      // the title first, then its episodes
+                        reload++
+                    }
+                }
+            }
             items(eps.size, key = { eps[it].id }) { i ->
                 val ep = eps[i]
                 EpisodeRow(
@@ -5030,7 +5318,7 @@ private fun EpisodeRow(
                     // "Episode 3 · 23 Jun 2022"; the number is dropped when the
                     // name is only "Episode 3" already
                     val date = epAirDate(ep)
-                    val generic = Regex("""^episode\s*\d+$""", RegexOption.IGNORE_CASE).matches(ep.name.trim())
+                    val generic = GENERIC_EP_NAME.matches(ep.name.trim())
                     val kick = listOfNotNull(ep.episode?.takeIf { !generic }?.let { "Episode $it" }, date).joinToString(" · ")
                     if (kick.isNotEmpty()) Eyebrow(kick, Modifier.padding(bottom = 3.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -5149,7 +5437,7 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
                 current = initial?.let { i -> it.firstOrNull { c -> c.type == i.type && c.id == i.id } } ?: it.firstOrNull()
                 if (it.isEmpty()) { status = "No catalogs."; loading = false }
             }
-            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; status = "Failed: ${it.message}"; loading = false }
+            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; status = addonTrouble(it); loading = false }
     }
     // A run cancelled by a newer genre, catalog or query must not write over it: every onFailure below rethrows
     // cancellation, or a stale run would print "Failed: … was cancelled" and stop paging on the new list.
@@ -5165,7 +5453,7 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
             loading = true; status = "Searching…"; items = emptyList()
             runCatching { Stremio.loadCatalog(addon.base, sc, null, q) }
                 .onSuccess { items = it; status = if (it.isEmpty()) "No matches for “$q”." else "${it.size} result${if (it.size > 1) "s" else ""} for “$q”"; loading = false; st.loadedFor = want }
-                .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; status = "Failed: ${it.message}"; loading = false; st.loadedFor = null }
+                .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; status = addonTrouble(it); loading = false; st.loadedFor = null }
         } else {
             val c = current ?: return@LaunchedEffect
             loading = true; status = "Loading…"; items = emptyList()
@@ -5179,7 +5467,7 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
                     status = if (it.isEmpty()) "No items." else "${it.size} items" + (if (st.pageDone) "" else " — scroll for more")
                     loading = false; st.loadedFor = want
                 }
-                .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; status = "Failed: ${it.message}"; loading = false; st.loadedFor = null; st.pageDone = true }
+                .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; status = addonTrouble(it); loading = false; st.loadedFor = null; st.pageDone = true }
         }
     }
 
@@ -5233,8 +5521,8 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
     val ctx = LocalContext.current
     val tvBox = remember(ctx) { Account.isTv(ctx) }
     val clearable = query.isNotEmpty() || submitted.isNotEmpty()
-    // the skeleton's shimmer, only while there is a skeleton (the grid's builder is not a composable)
-    val br = if (loading && items.isEmpty()) shimmerBrush() else null
+    // a skeleton grid while the first page loads (the screen's one sweep, Modifier.skeleton)
+    val skel = loading && items.isEmpty()
     // search and the chip rows: on a TV they ride at the top of the grid and scroll away with it (fixed above it they
     // took ~226 dp of the 540, leaving one row of posters with the focused one cut off); a phone keeps them fixed
     val header: @Composable () -> Unit = {
@@ -5296,11 +5584,11 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
             contentPadding = PaddingValues(bottom = 20.dp),
         ) {
             if (tvBox) item(key = "head", span = { GridItemSpan(maxLineSpan) }) { header() }
-            if (br != null) {
+            if (skel) {
                 items(12) {
                     Column {
-                        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)).background(br))
-                        Box(Modifier.padding(top = 8.dp).fillMaxWidth(0.7f).height(12.dp).clip(RoundedCornerShape(12.dp)).background(br))
+                        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).skeleton(RoundedCornerShape(12.dp)))
+                        Box(Modifier.padding(top = 8.dp).fillMaxWidth(0.7f).height(12.dp).skeleton(RoundedCornerShape(12.dp)))
                     }
                 }
             } else {
@@ -5444,8 +5732,6 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
     var pending by remember { mutableStateOf<Pair<StreamItem, Addon>?>(null) }    // a play waiting on the sheet
     var pendingByHand by remember { mutableStateOf(true) }
     fun play(s: StreamItem, from: Addon, byHand: Boolean) {
-        // a row chosen by hand settles it for this title: auto-pick never overrides that choice on the way back
-        if (byHand) autoPlayedFor = item.id
         if (!chosen) { pending = s to from; pendingByHand = byHand; return }
         onPlay(s, from, byHand, startOver)
     }
@@ -5484,19 +5770,19 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
         if (sections.isEmpty()) status = "Loading streams…"
         val pf = NextEp.picked(ctx)
         // Play the best stream by itself (Settings › Streams): decide once — when every add-on has
-        // answered, or when the wait for slow ones runs out, whichever comes first. Guarded by id, not
-        // screen state — this screen's state dies while the player is up, and re-firing on the way
-        // back would trap the viewer in playback forever.
+        // answered, or when the wait for slow ones runs out, whichever comes first. Never on the way BACK to this page
+        // (from the player, above all): re-firing there would trap the viewer in playback forever, and a row chosen by
+        // hand is not overridden on the way back either. A fresh visit to the same title decides again — the old
+        // per-title latch kept auto-pick off for that title for the rest of the session.
         var picked = false
         fun decide() {
-            if (picked || Prefs.autoPick == "off" || autoPlayedFor == item.id) return
+            if (picked || Prefs.autoPick == "off" || backHere) return
             // a viewer already walking the list — remote or finger — is choosing by hand (web: autoPickNow's lastKeyAt
             // and lastPointerAt); the list now arrives well inside the wait, so this matters more than it did
             if (KeyWatch.lastDownAt > openedAt || KeyWatch.lastTouchAt > openedAt) return
             val secs = sections
             if (secs.isEmpty()) return
             picked = true
-            autoPlayedFor = item.id
             // Same as last time: the add-on picked last (if it answered) and the row closest to that pick;
             // First stream: the top row of the highest-ranked add-on that answered
             val (a, list) = if (Prefs.autoPick == "last") (secs.firstOrNull { it.first.manifestUrl == pf?.addonUrl } ?: secs.first()) else secs.first()
@@ -5518,7 +5804,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             loading = false; answered = true; noStreamer = false
             return@LaunchedEffect
         }
-        val timer = if (Prefs.autoPick != "off" && autoPlayedFor != item.id) launch { delay(Prefs.pickWait * 1000L); decide() } else null
+        val timer = if (Prefs.autoPick != "off" && !backHere) launch { delay(Prefs.pickWait * 1000L); decide() } else null
         val slowTimer = launch { delay(12_000); waitSlow = true }
         // Every add-on at once (web parity). They were asked one after another, so the page waited for the SUM of
         // every add-on's answer time and one slow add-on held up all the ones after it — the "very slow" on issue #1.
@@ -5830,6 +6116,18 @@ internal fun partyDisplayName(ctx: Context): String {
         ?: android.os.Build.MODEL.take(24).ifBlank { "Android" }
 }
 
+/** What went wrong asking an add-on, as a sentence — an exception's own text ("Failed: Unable to resolve host …",
+    "Could not load: Value <!DOCTYPE of type java.lang.String…") is never shown. */
+internal fun addonTrouble(t: Throwable): String {
+    val code = Regex("^HTTP (\\d{3})").find(t.message.orEmpty())?.groupValues?.get(1)
+    return when {
+        code != null -> "The add-on answered with an error (HTTP $code)."
+        t is org.json.JSONException -> "The add-on’s answer could not be read."
+        t is java.io.IOException -> "Couldn’t reach the add-on — check the connection."
+        else -> "Something went wrong asking the add-on."
+    }
+}
+
 /** Quiet outlined filter — only the active one carries fill. */
 @Composable
 private fun StreamFilterChip(label: String, on: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
@@ -5892,7 +6190,7 @@ private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual
                 ) {
                     Text(plate.res, color = TextC, fontFamily = Mono, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     if (plate.tag.isNotEmpty()) Text(
-                        plate.tag, color = MutedC, fontFamily = Mono, fontSize = 8.5.sp,
+                        plate.tag, color = MutedC, fontFamily = Mono, fontSize = tinySp(8.5f),
                         letterSpacing = 1.sp, modifier = Modifier.padding(top = 2.dp),
                     )
                 }
@@ -5909,7 +6207,7 @@ private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual
                     "P2P".takeIf { s.isTorrent },
                 ).joinToString(" · ")
                 if (eyebrow.isNotEmpty()) Text(
-                    eyebrow, color = if (usual) Red else MutedC, fontFamily = Mono, fontSize = 9.sp,
+                    eyebrow, color = if (usual) Red else MutedC, fontFamily = Mono, fontSize = tinySp(9f),
                     fontWeight = FontWeight.Medium, letterSpacing = 1.3.sp, modifier = Modifier.padding(bottom = 3.dp),
                 )
                 Text(name, color = TextC, fontSize = 15.sp, fontFamily = Sans, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -5935,7 +6233,7 @@ private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual
                     if (facts) f.size?.let { Text(it, color = TextC, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
                     val line2 = if (facts) listOfNotNull(f.bitrate, f.seeds?.let { "$it seeds" }).joinToString(" · ") else ""
                     if (line2.isNotEmpty()) Text(line2, color = MutedC, fontFamily = Mono, fontSize = 11.sp, modifier = Modifier.padding(top = 2.dp))
-                    if (slow || stutter) Text(if (stutter) "may stutter here" else "may stall here", color = FaintC, fontFamily = Mono, fontSize = 10.sp, letterSpacing = 0.5.sp, modifier = Modifier.padding(top = 2.dp))
+                    if (slow || stutter) Text(if (stutter) "may stutter here" else "may stall here", color = FaintC, fontFamily = Mono, fontSize = tinySp(10f), letterSpacing = 0.5.sp, modifier = Modifier.padding(top = 2.dp))
                 }
             }
             // Add-on on each row: its initial in an accent ring, its name in the mono register, or nothing
@@ -5944,7 +6242,7 @@ private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual
                     Text(addonName.trim().take(1).uppercase().ifEmpty { "•" }, color = TextC, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
                 "name" -> Text(
-                    addonName.uppercase(), color = FaintC, fontFamily = Mono, fontSize = 9.sp, letterSpacing = 1.2.sp,
+                    addonName.uppercase(), color = FaintC, fontFamily = Mono, fontSize = tinySp(9f), letterSpacing = 1.2.sp,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 72.dp),
                 )
             }
@@ -6041,6 +6339,7 @@ private fun PlayerScreen(
     onPartyStart: (PartyStreamDesc) -> Unit = {},
     onPartyLeave: () -> Unit = {},
     onExit: (() -> Unit)? = null,
+    onTop: Boolean = true,               // the screen on top; false while it fades out under the next one (no Back of its own)
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -6055,6 +6354,7 @@ private fun PlayerScreen(
     var subSearching by remember { mutableStateOf(false) }
     var subPanelOpen by remember { mutableStateOf(false) }       // the one Subtitles panel: languages · tracks · style
     val subsFocus = remember { FocusRequester() }                 // the toolbar's Subtitles item, to hand focus back to
+    var subsBack by remember { mutableIntStateOf(0) }             // bumped when the panel closes under a remote
     var subBusy by remember { mutableStateOf(false) }
     var activeAddonSub by remember { mutableStateOf<String?>(null) }
     // the Title Card chrome replaces Media3's controller entirely
@@ -6063,9 +6363,10 @@ private fun PlayerScreen(
     var trackListOpen by remember { mutableStateOf(false) }   // the Audio or Quality list is up over the video
     var isPlayingState by remember { mutableStateOf(false) }
     var isLiveState by remember { mutableStateOf(false) }
-    var posMs by remember { mutableStateOf(0L) }
-    var durMs by remember { mutableStateOf(0L) }
-    var bufMs by remember { mutableStateOf(0L) }
+    // the 400 ms clock (PlayerChrome.kt): read only by the pills, the scrubber, the clock and the pause board's facts —
+    // read here, it recomposed this whole screen on every tick. Here only whether the length is known yet.
+    val clock = remember { PlayerClock() }
+    var durKnown by remember { mutableStateOf(false) }
     var qualityLabel by remember { mutableStateOf<String?>(null) }
     // Speed when a video starts (Settings › Playback): a fixed rate, or the one chosen last time
     val startSpeed = remember { if (Prefs.speedDefault == "last") Prefs.lastSpeed else (Prefs.speedDefault.toFloatOrNull() ?: 1f) }
@@ -6089,7 +6390,6 @@ private fun PlayerScreen(
     var subOffsetMs by remember { mutableStateOf(0L) }
     // "Pick the line you just heard" (PickLine.kt): the line list while it is up in the Subtitles panel
     var pickLine by remember { mutableStateOf<PickLineState?>(null) }
-    var liveOffMs by remember { mutableStateOf(0L) }                            // behind the live edge, for the left pill
     // the add-on subtitle showing: its cues, drawn by our own overlay over the video (null = the stream's tracks, or off)
     var overlayCues by remember { mutableStateOf<List<SubCue>?>(null) }
     var overlaySubView by remember { mutableStateOf<SubtitleView?>(null) }
@@ -6115,8 +6415,8 @@ private fun PlayerScreen(
     val seekrNow by rememberUpdatedState(seekrFrames)      // for the clock loop below, which outlives an episode hop
     // a few seconds into playback, once the length is known, the reader opens and sweeps frames across
     // the film in the background — so a phone's one-second drag has a picture at once (ScrubPreview.warm)
-    LaunchedEffect(scrubPreview, durMs > 0, isPlayingState) {
-        if (scrubPreview == null || durMs <= 0 || !isPlayingState || !Prefs.scrubFrames) return@LaunchedEffect
+    LaunchedEffect(scrubPreview, durKnown, isPlayingState) {
+        if (scrubPreview == null || !durKnown || !isPlayingState || !Prefs.scrubFrames) return@LaunchedEffect
         // not on a TV: up to 120 frames through a second reader competes with the film for a weak box's one decoder
         // and its memory, and a one-connection host may refuse either reader (the web gave frames up on webOS for the
         // same reason). A TV still gets a frame for the position it asks for.
@@ -6127,7 +6427,7 @@ private fun PlayerScreen(
             repeat(16) { if (!seekrFrames.settled) delay(500) }
             if (seekrFrames.ready) return@LaunchedEffect
         }
-        scrubPreview.warm(context, durMs)      // eligible() already rules out manifests, and keys ride on .mpd here
+        scrubPreview.warm(context, clock.dur)      // eligible() already rules out manifests, and keys ride on .mpd here
     }
     // the tip's picture: Seekr's while its previews load, else the app's own reader's
     val scrubFrameState = remember(seekrFrames, scrubPreview) {
@@ -6182,9 +6482,9 @@ private fun PlayerScreen(
             }
     }
     // the lookup, and the sheets nearest where playback is downloaded first (Seekr.kt)
-    LaunchedEffect(seekrFrames, durMs > 0, isLiveState, Prefs.scrubFrames) {
-        if (seekrFrames == null || durMs <= 0 || isLiveState || !Prefs.scrubFrames) return@LaunchedEffect
-        seekrFrames.start(durMs, exo.currentPosition.coerceAtLeast(0L))
+    LaunchedEffect(seekrFrames, durKnown, isLiveState, Prefs.scrubFrames) {
+        if (seekrFrames == null || !durKnown || isLiveState || !Prefs.scrubFrames) return@LaunchedEffect
+        seekrFrames.start(clock.dur, exo.currentPosition.coerceAtLeast(0L))
     }
     var subForced by remember { mutableStateOf(false) }      // "Always" already switched a text track on for this item
     // "Show · S1E2 · Episode name" is how the chain labels an episode; take it apart again
@@ -6192,10 +6492,12 @@ private fun PlayerScreen(
     val showName = nameParts.firstOrNull()?.takeIf { it.isNotEmpty() } ?: title
     val episodeName = if (contentType == "series" && nameParts.size >= 3) nameParts.drop(2).joinToString(" · ") else null
     // "S1 E1 · Pilot" when the name is known, else "Season 1 · Episode 1" — the web player's wording
-    val episodeTag = contentId?.takeIf { contentType == "series" }?.let { episodeNumbersOf(it) }?.let { (s, e) ->
-        val short = if (s != null) "S$s E$e" else "E$e"
-        val long = if (s != null) "Season $s · Episode $e" else "Episode $e"
-        if (episodeName != null) "$short · $episodeName" else long
+    val episodeTag = remember(contentId, contentType, episodeName) {
+        contentId?.takeIf { contentType == "series" }?.let { episodeNumbersOf(it) }?.let { (s, e) ->
+            val short = if (s != null) "S$s E$e" else "E$e"
+            val long = if (s != null) "Season $s · Episode $e" else "Episode $e"
+            if (episodeName != null) "$short · $episodeName" else long
+        }
     }
     // the stream's add-on, named on the subtitle cards it side-loaded
     val streamSource = remember(addonUrl, subs) {
@@ -6206,9 +6508,18 @@ private fun PlayerScreen(
     // the player below, and deliberately before it — a session outliving its
     // player is a crash. The id is stamped because a screen replacement can
     // briefly overlap two players, and duplicate session ids throw.
+    // What it drives is the player less three things (SessionPlayer): no Play while the app is off screen (a headset or
+    // a TV launcher's Play started the film invisibly behind it), Previous is a step back (not the start, which can
+    // drop the title from Continue watching), and Stop leaves the player.
+    val exitNow by rememberUpdatedState(onExit)
     val session = remember(exo) {
         runCatching {
-            MediaSession.Builder(context, exo)
+            MediaSession.Builder(context, SessionPlayer(
+                exo,
+                onScreen = { (activity as? androidx.lifecycle.LifecycleOwner)?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.STARTED) != false },
+                stepBack = { exo.seekTo((exo.currentPosition - Prefs.seekStep * 1000L).coerceAtLeast(0L)) },
+                leave = { exo.pause(); exitNow?.invoke() },
+            ))
                 .setId("nebula-" + System.currentTimeMillis())
                 .apply {
                     val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
@@ -6451,7 +6762,7 @@ private fun PlayerScreen(
             if (startAtMs < 0 && !inPipMode.value && (resume > 0 || (startOver && saved > 0))) {
                 Toasts.show(if (resume > 0) "Resumed from ${fmtTime(resume)}" else "Starting from the beginning")
             }
-        }.onFailure { error = it.message }
+        }.onFailure { error = "This stream's address could not be opened." }   // a sentence, never the exception's text
     }
 
     // Ask every subtitle-capable add-on what it has for this title (web parity).
@@ -6487,10 +6798,11 @@ private fun PlayerScreen(
         } finally { subSearching = false }
     }
 
-    // Keep the resume point roughly current while playing.
+    // Keep the resume point roughly current while playing: every ten seconds (stopping, leaving and the end each write
+    // their own exact point as well) — every five rewrote the whole settings file twice as often for nothing.
     if (contentId != null) LaunchedEffect(contentId) {
         while (true) {
-            delay(5000)
+            delay(10_000)
             if (exo.isPlaying) snapshotProgress()
         }
     }
@@ -6539,13 +6851,24 @@ private fun PlayerScreen(
             if (ev == Lifecycle.Event.ON_STOP) {
                 runCatching { snapshotProgress() }
                 runCatching { WatchLog.flush(context) }
+                runCatching { Prefs.saveBandwidth(context) }
                 upnextCounting = false
                 exo.pause()
+                // a host's room hears the pause now: the loop that tells it stops with the app (below)
+                if (partyUi.active() && partyUi.isHost) runCatching {
+                    val live = exo.isCurrentMediaItemLive
+                    partyUi.session?.sendState(false, (if (live) exo.currentLiveOffset.coerceAtLeast(0L) else exo.currentPosition.coerceAtLeast(0L)) / 1000.0, live)
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(obs)
         onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
     }
+    // The player's timers (the clock, the subtitle overlay, the watch log, a party's sync) run only while the app is on
+    // screen — picture-in-picture counts — and stop with it: the player is paused then, and a party viewer's sync used to
+    // start the film again behind the launcher a second after it stopped.
+    val lifeState by lifecycleOwner.lifecycle.currentStateFlow.collectAsState()
+    val started = lifeState.isAtLeast(Lifecycle.State.STARTED)
     DisposableEffect(Unit) {
         val l = object : Player.Listener {
             override fun onPlayerError(e: PlaybackException) {
@@ -6754,6 +7077,7 @@ private fun PlayerScreen(
             // last word on the resume point before the player goes away
             runCatching { snapshotProgress() }
             runCatching { WatchLog.flush(context) }
+            runCatching { Prefs.saveBandwidth(context) }     // the connection this play measured, written once
             runCatching { Social.publishSoon(context) }   // friends see the freshly watched title
             exo.removeListener(l); exo.removeAnalyticsListener(decoderSeen); runCatching { session?.release() }; runCatching { decoders.detach() }; exo.release()
             Relay.via = null            // the next play asks again
@@ -6780,17 +7104,21 @@ private fun PlayerScreen(
 
     // the month's recap (WatchLog, on this device only), under the name the chrome shows: its own small clock, kept out
     // of this function's body (PlayerScreen is one very large method — see the launch gate)
-    WatchLogTicker(exo, showName)
-    // one clock drives the chrome: position, buffered, playing, live
-    LaunchedEffect(Unit) {
+    WatchLogTicker(exo, showName, started)
+    // one clock drives the chrome: position, buffered, playing, live — while the app is on screen (`started`, above)
+    LaunchedEffect(started) {
+        if (!started) return@LaunchedEffect
         while (true) {
             delay(400)
             isPlayingState = exo.isPlaying
             isLiveState = exo.isCurrentMediaItemLive
-            posMs = exo.currentPosition.coerceAtLeast(0L)
-            durMs = if (exo.duration == C.TIME_UNSET) 0L else exo.duration
-            bufMs = exo.bufferedPosition.coerceAtLeast(0L)
-            liveOffMs = if (exo.isCurrentMediaItemLive && exo.currentLiveOffset != C.TIME_UNSET) exo.currentLiveOffset.coerceAtLeast(0L) else 0L
+            clock.pos = exo.currentPosition.coerceAtLeast(0L)
+            clock.dur = if (exo.duration == C.TIME_UNSET) 0L else exo.duration
+            clock.buf = exo.bufferedPosition.coerceAtLeast(0L)
+            clock.liveOff = if (exo.isCurrentMediaItemLive && exo.currentLiveOffset != C.TIME_UNSET) exo.currentLiveOffset.coerceAtLeast(0L) else 0L
+            clock.speed = exo.playbackParameters.speed
+            clock.ended = exo.playbackState == Player.STATE_ENDED
+            durKnown = clock.dur > 0
             val now = System.currentTimeMillis()
             // what this line carries (Settings › Streams): the engine's estimate, 20 s in, every ~5 s of play — a P2P
             // play would measure the loopback, so it is left out
@@ -6862,9 +7190,10 @@ private fun PlayerScreen(
 
     // The overlay's clock: the add-on cues on at the film's position less the timing nudge (+ = later), redrawn only
     // when that set changes. A nudge counts from the next tick — nothing is re-fed or re-prepared.
-    LaunchedEffect(overlayCues) {
+    LaunchedEffect(overlayCues, started) {
         val all = overlayCues
         if (all == null) { overlaySubView?.setCues(null); return@LaunchedEffect }
+        if (!started) return@LaunchedEffect              // off screen: nothing to draw, nothing playing (it resumes on return)
         val on = ArrayList<Int>()
         var shown: List<Int>? = null
         var shownOn: SubtitleView? = null
@@ -7020,8 +7349,11 @@ private fun PlayerScreen(
             partyUi.session?.sendStream(PartyStreamDesc(url, title, subs, contentType, contentId, contentName, poster, addonUrl))
         }
     }
-    // Watch-party sync loop: hosts broadcast state, viewers glide to the host's position.
-    LaunchedEffect(Unit) {
+    // Watch-party sync loop: hosts broadcast state, viewers glide to the host's position — only during a party, and only
+    // while the app is on screen (`started`)
+    val partyOn = partyUi.code != null
+    LaunchedEffect(started, partyOn) {
+        if (!started || !partyOn) return@LaunchedEffect
         var n = 0
         while (true) {
             delay(1000)
@@ -7145,6 +7477,23 @@ private fun PlayerScreen(
                     if (repeat == 0) { upnextCounting = false; autoRun = 0; onPlayNext(n) }
                     swallowUp[0] = code; return true
                 }
+                // Previous is a step back, as on the transport — the session's own "previous" went to 0:00, which the
+                // next autosave then read as "rewound to the start" and the title left Continue watching
+                android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                    if (repeat == 0) seekBy(-Prefs.seekStep * 1000L)
+                    chromeVisible = true; chromeTouchedAt = now
+                    swallowUp[0] = code; return true
+                }
+                // Stop leaves the player (the session's stop left a dead picture behind)
+                android.view.KeyEvent.KEYCODE_MEDIA_STOP -> {
+                    if (repeat == 0) onExit?.invoke()
+                    swallowUp[0] = code; return true
+                }
+                // Info: the playback-info panel on and off, the web's ⓘ
+                android.view.KeyEvent.KEYCODE_INFO -> {
+                    if (repeat == 0) pinfoOn = !pinfoOn
+                    swallowUp[0] = code; return true
+                }
             }
             // the remote's other buttons (play/pause, rewind, fast-forward, next, menu, info, captions) show the
             // controls, so what they did is on screen; the key itself goes on — media keys to the session, as before.
@@ -7194,7 +7543,7 @@ private fun PlayerScreen(
     // Back peels one layer on a remote, as on the web: the sleep menu, then the Up next card, then the controls —
     // and only then leaves. A phone's back gesture still leaves at once. The Subtitles panel and a seek-bar preview
     // register their own Back later, so they are peeled first.
-    BackHandler(enabled = remoteNow && !pip && (sleepMenuOpen || upnextOpen || chromeVisible)) {
+    BackHandler(enabled = onTop && remoteNow && !pip && (sleepMenuOpen || upnextOpen || chromeVisible)) {
         when {
             sleepMenuOpen -> { sleepMenuOpen = false; chromeTouchedAt = System.currentTimeMillis() }
             upnextOpen -> { upnextCounting = false; upnextOpen = false; upnextDismissed = true; onCancelNext() }
@@ -7336,16 +7685,16 @@ private fun PlayerScreen(
         // a scrim under the pause board, so the words read over any picture
         if (boardUp && !pip) Box(Modifier.fillMaxSize().background(Color(0x7A000000)))
         if (!pip) Box(Modifier.fillMaxSize().onFocusChanged { chromeHasFocus = it.hasFocus }) { TitleCardChrome(
-            visible = chromeVisible,
+            // the Subtitles panel is a dim over the picture: the controls step away while it is open (the web's P0-6)
+            visible = chromeVisible && !subPanelOpen,
             title = showName,
             isPlaying = isPlayingState,
             isLive = isLiveState,
-            positionMs = posMs, durationMs = durMs, bufferedMs = bufMs,
+            clock = clock,
             episodeTag = episodeTag,
             sourceLine = sourceLine,
-            clockLine = if (Prefs.clock) clockLine(context, durMs - posMs, exo.playbackParameters.speed, live = isLiveState || durMs <= 0) else null,
+            showClock = Prefs.clock,
             seekStepMs = Prefs.seekStep * 1000L,
-            liveOffsetMs = liveOffMs,
             subtitlesFocus = subsFocus,
             playFocus = playFocus,
             sleepFocus = sleepFocus,
@@ -7441,32 +7790,17 @@ private fun PlayerScreen(
         ) }
         // The pause board (top-left, under the back button) and the playback HUD (top-right)
         if (!pip) {
-            val remain = (durMs - posMs).coerceAtLeast(0L)
-            val ended = exo.playbackState == Player.STATE_ENDED
-            val meta = mutableListOf<Pair<String, Boolean>>()
-            if (!ended) {
-                if (isLiveState) {
-                    val off = exo.currentLiveOffset
-                    meta += (if (off != C.TIME_UNSET && off > 12_000) fmtTime(off) + " behind live" else "At the live edge") to false
-                } else if (durMs > 0) {
-                    meta += (if (remain >= 60_000) "${remain / 60_000} min left" else "Under a minute left") to false
-                    // the same clock as the controls' top line (the device's 12/24-hour setting), so the two never disagree
-                    meta += "Ends " + clockAt(context, System.currentTimeMillis() + (remain / exo.playbackParameters.speed.coerceAtLeast(0.1f)).toLong()) to false
-                }
-            }
-            nextEpisode?.let { n -> meta += upNextLabel(n.season, n.episode, n.name) to true }
-            PauseBoard(
-                visible = boardUp,
-                kicker = (if (sleepFired) "Sleep timer · " else "") +
-                    when { ended -> "Finished"; isLiveState -> "Live · Paused"; else -> "Paused" },
+            // its facts (time left, Ends, behind live, Up next) come from the clock, read only while the board is up
+            PauseBoardHost(
+                visible = boardUp, clock = clock, isLive = isLiveState, sleepFired = sleepFired, next = nextEpisode,
                 title = showName,
                 sub = episodeTag,
                 desc = currentEpisode?.overview?.takeIf { it.isNotBlank() } ?: description,
-                meta = meta,
                 // end: a phone's board takes the whole width (pauseBoardWidth) and keeps the same margin at both sides
                 modifier = Modifier.align(Alignment.TopStart).padding(start = 20.dp, top = 84.dp, end = 20.dp),
             )
-            if (pinfoOn) PlaybackInfoHud(infoRows, Modifier.align(Alignment.TopEnd).padding(end = 20.dp, top = 76.dp))
+            // the Subtitles panel puts the playback info away with the controls
+            if (pinfoOn && !subPanelOpen) PlaybackInfoHud(infoRows, Modifier.align(Alignment.TopEnd).padding(end = 20.dp, top = 76.dp))
         }
         // Party reactions float up from the bottom
         partyUi.reactions.forEach { r ->
@@ -7506,16 +7840,25 @@ private fun PlayerScreen(
         }
         // The Subtitles panel (SubtitlesPanel.kt): languages · that language's tracks · style, over the
         // still-playing video. One layer: Back closes it, not the player; focus goes back to its opener.
+        // the panel closed under a remote: the controls come back with it, and the remote to its opener once that is
+        // composed again (the controls were away while the panel was up)
+        LaunchedEffect(subsBack) {
+            if (subsBack == 0) return@LaunchedEffect
+            repeat(10) {
+                withFrameNanos {}
+                if (runCatching { subsFocus.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+            }
+        }
         if (subPanelOpen && !pip) {
             val keysMode = LocalInputModeManager.current.inputMode == InputMode.Keyboard
             fun closePanel() {
                 subPanelOpen = false
                 chromeTouchedAt = System.currentTimeMillis()
-                if (keysMode) runCatching { subsFocus.requestFocus() }
+                if (keysMode) subsBack++
             }
-            BackHandler { closePanel() }
+            BackHandler(enabled = onTop) { closePanel() }
             // Back while the line list is up returns to the timing (declared later, so it is asked first)
-            if (pickLine != null) BackHandler { pickEnd() }
+            if (pickLine != null) BackHandler(enabled = onTop) { pickEnd() }
             SubtitlesPanel(
                 player = exo,
                 embedded = embeddedSubs,
@@ -7582,8 +7925,10 @@ private fun PlayerScreen(
                     .padding(18.dp),
             ) {
                 Text(if (stillAsk) "Still watching?" else "Up next", color = Color(0xA8EBEBF5), fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                // what it will play from — chosen while this one still runs
-                val srcLine = NextEp.sourceLine(context, nextEpisode.id)
+                // what it will play from — chosen while this one still runs (worked out when that choice changes, not on
+                // every redraw)
+                val nextReady = NextEp.ready
+                val srcLine = remember(nextEpisode.id, nextReady) { NextEp.sourceLine(context, nextEpisode.id) }
                 Text(
                     "S${nextEpisode.season}" + (nextEpisode.episode?.let { "E$it" } ?: "") +
                         (if (nextEpisode.name.isNotEmpty()) " · ${nextEpisode.name}" else ""),
@@ -7694,6 +8039,26 @@ private fun PlayerScreen(
 
 /** "1.0×" / "1.25×" — the speed as the toolbar shows it. */
 private fun speedText(v: Float): String = (if (v == 1f) "1.0" else v.toString().trimEnd('0').trimEnd('.')) + "×"
+
+/**
+ * What the platform's media session drives — headsets, a TV launcher's Play, the lock screen, a watch: the player,
+ * less three things. Play is refused while the app is off screen ([onScreen]; picture-in-picture is on screen): a
+ * headset's or the launcher's Play used to start the film invisibly behind it. Previous is a step back ([stepBack]):
+ * the stock "previous" of a one-item player went to 0:00, which the next autosave read as "rewound to the start" and
+ * the title left Continue watching. Stop leaves the player ([leave]) instead of leaving a dead picture.
+ */
+@OptIn(UnstableApi::class)
+private class SessionPlayer(
+    exo: ExoPlayer,
+    private val onScreen: () -> Boolean,
+    private val stepBack: () -> Unit,
+    private val leave: () -> Unit,
+) : androidx.media3.common.ForwardingPlayer(exo) {
+    override fun play() { if (onScreen()) super.play() }
+    override fun setPlayWhenReady(playWhenReady: Boolean) { if (!playWhenReady || onScreen()) super.setPlayWhenReady(playWhenReady) }
+    override fun seekToPrevious() = stepBack()
+    override fun stop() = leave()
+}
 
 /**
  * Settings › Playback applied to Media3's track choice: the preferred audio language, the subtitle
