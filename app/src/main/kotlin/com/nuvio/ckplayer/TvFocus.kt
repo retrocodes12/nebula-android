@@ -88,6 +88,16 @@ internal object ReturnFocus {
         last[entry] = key
     }
     fun keyFor(entry: Any): String? = last[entry]
+    /** The returnTo items composed right now, per screen — what the TV rail's Right goes back to ([lastLit]). */
+    private val live = HashMap<Any, HashMap<String, FocusRequester>>()
+    fun register(entry: Any, key: String, req: FocusRequester) { live.getOrPut(entry) { HashMap() }[key] = req }
+    fun unregister(entry: Any, key: String, req: FocusRequester) {
+        val m = live[entry] ?: return
+        if (m[key] === req) m.remove(key)
+        if (m.isEmpty()) live.remove(entry)
+    }
+    /** The item the remote was last on, on the screen [entry], when it is composed now; else null. */
+    fun lastLit(entry: Any?): FocusRequester? = entry?.let { e -> last[e]?.let { k -> live[e]?.get(k) } }
     /** Is the screen composing now one Back returned to? Read once, at its first composition. */
     fun backTo(entry: Any?): Boolean = pending(entry)
     /** …and with an item noted there to hand focus back to. */
@@ -133,6 +143,11 @@ internal fun Modifier.returnTo(key: String): Modifier = composed {
     val entry = LocalScreenEntry.current
     val remote = remoteMode()
     val req = remember { FocusRequester() }
+    // listed while composed, so Right from the TV rail can come back to it (AppRoot's screen container)
+    if (entry != null) DisposableEffect(entry, key, req) {
+        ReturnFocus.register(entry, key, req)
+        onDispose { ReturnFocus.unregister(entry, key, req) }
+    }
     // keyed on every hand-back too, so a removal naming this item after composition still reaches it
     if (entry != null) LaunchedEffect(entry, key, remote, ReturnFocus.aimSerial) {
         if (!remote || !ReturnFocus.pending(entry) || ReturnFocus.keyFor(entry) != key) return@LaunchedEffect

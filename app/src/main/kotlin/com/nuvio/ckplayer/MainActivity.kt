@@ -168,7 +168,6 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.input.InputMode
@@ -1385,9 +1384,18 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                         else { if (ev.type == KeyEventType.KeyDown) pageStep(down); true }
                                     }
                                     .onFocusChanged { landing.hasFocus = it.hasFocus }
-                                    // Right from the TV's rail comes back to what was lit on the screen, not to whatever
-                                    // sits level with the tab the remote left from
-                                    .focusRestorer()
+                                    // Right from the TV's rail comes back to what was lit on the screen (the item its
+                                    // returnTo noted last), not to whatever sits level with the tab the remote left from.
+                                    // (Compose's focusRestorer here could not: it restores a direct child, and every
+                                    // screen's items sit inside a list's own focus group.) Only for a move from the rail:
+                                    // a screen's own requests for focus (its landing, Back's hand-back) enter as asked.
+                                    .focusProperties {
+                                        onEnter = {
+                                            if (requestedFocusDirection == FocusDirection.Right) {
+                                                ReturnFocus.lastLit(s)?.let { r -> runCatching { r.requestFocus() } }
+                                            }
+                                        }
+                                    }
                                     .focusGroup()
                             ) {
                             when (s) {
@@ -3551,9 +3559,12 @@ private fun HomeScreen(
                 peeled = true
                 homeScope.launch {
                     runCatching { st.listState.scrollToItem(0) }
+                    // until the landing is really lit (a request can be granted and still land elsewhere on its way in
+                    // from the rail), then the very top again — bringing it into view may have scrolled a little
                     repeat(10) {
                         withFrameNanos {}
-                        if (runCatching { land.requestFocus() }.getOrDefault(false)) return@launch
+                        runCatching { land.requestFocus() }
+                        if (landLit) { runCatching { st.listState.scrollToItem(0) }; return@launch }
                     }
                 }
             }
