@@ -14,3 +14,4 @@
 
 # made by device-tests.yml from Tears of Steel (downloaded in CI), never committed
 /app/src/androidTest/assets/
+__pycache__/
