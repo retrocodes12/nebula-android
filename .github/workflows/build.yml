@@ -53,6 +53,18 @@ jobs:
           gradle assembleRelease --no-daemon -PemulatorAbis
           cp "$(find app/build/outputs/apk/release -name '*.apk' | head -1)" "$RUNNER_TEMP/gate.apk"
 
+      # The release is shrunk by R8 (app/proguard-rules.pro), so the gate also plays AV1 through the FFmpeg decoder (the
+      # emulator has no AV1 chip, so the app hands AV1 to nextlib's dav1d at once): native code calling Java by name is
+      # what a shrinker breaks without a word until it runs. A 40 s 720p clip of ffmpeg's own test picture — no download.
+      - name: Make the AV1 test clip
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null
+          mkdir -p "$RUNNER_TEMP/av1"
+          ffmpeg -v error -y -f lavfi -i "testsrc2=s=1280x720:r=24" -t 40 -c:v libsvtav1 -preset 10 -crf 40 -g 48 \
+            -pix_fmt yuv420p -an -movflags +faststart "$RUNNER_TEMP/av1/av1.mp4"
+          ffprobe -v error -show_entries stream=codec_name,width,height,r_frame_rate -of csv=p=0 "$RUNNER_TEMP/av1/av1.mp4"
+          ls -la "$RUNNER_TEMP/av1"
+
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -71,7 +83,7 @@ jobs:
           ram-size: 3072M
           heap-size: 512M
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
-          script: python3 scripts/launch-gate.py ${{ runner.temp }}/gate.apk
+          script: python3 scripts/launch-gate.py ${{ runner.temp }}/gate.apk ${{ runner.temp }}/av1/av1.mp4
 
       # the same gate on Android 9 (a TV box or an older phone): proven there by the Screens gate28 job first
       - name: Launch gate on Android 9

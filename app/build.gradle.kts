@@ -47,7 +47,12 @@ android {
             // debug-signed by default so local/dev builds need no keystore
         }
         release {
-            isMinifyEnabled = false
+            // R8 shrinks the release (unused code and resources out) and renames nothing: proguard-rules.pro keeps the
+            // native bridges (libtorrent4j, nextlib's FFmpeg) whole, and the launch gate plays AV1 through FFmpeg on an
+            // emulator before anything is signed (scripts/launch-gate.py)
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // One fixed release key in CI (from repo secrets) so every build shares
             // a signature and updates install over the top — no uninstall. Falls
             // back to debug signing for local builds without the keystore.
