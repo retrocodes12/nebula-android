@@ -58,16 +58,10 @@ def crashes():
     return out
 
 
-def tap_node(desc):
-    for n in nodes():
-        if (n.get('content-desc') or '') == desc:
-            x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds'))); adb('shell', 'input', 'tap', str((x1 + x2) // 2), str((y1 + y2) // 2))
-            return True
-    return False
-
-
 def av1_phase(path):
-    """The AV1 file through the release's FFmpeg decoder: [failures]. Logged step by step."""
+    """The AV1 file through the release's FFmpeg decoder: [failures]. Logged step by step. Read with the controls held
+    still: the remote's Info key opens the playback info (a key first takes the app out of touch mode, as a remote does)
+    and each reading is taken paused, so neither fades while uiautomator takes its slow dumps."""
     fails = []
     d, name = os.path.dirname(os.path.abspath(path)), os.path.basename(path)
     srv = http.server.ThreadingHTTPServer(('127.0.0.1', 8765), functools.partial(http.server.SimpleHTTPRequestHandler, directory=d))
@@ -81,36 +75,28 @@ def av1_phase(path):
         if any(n.get('content-desc') == 'Video' for n in nodes()): up = True; break
     print('av1: player', 'open' if up else 'NEVER OPENED', flush=True)
     if not up: return ['AV1: the player screen never opened']
-    time.sleep(8)
-    size = re.search(r'(\d+)x(\d+)', sh('wm', 'size'))
-    w, h = (int(size.group(1)), int(size.group(2))) if size else (1080, 2400)
-
-    def controls():
-        # the controls fade while it plays: a tap in the middle brings them (and a second tap if the first hid them)
-        for _ in range(3):
-            if any((n.get('content-desc') or '') == 'Playback info' for n in nodes()): return True
-            adb('shell', 'input', 'tap', str(w // 2), str(h // 2)); time.sleep(1.5)
-        return False
+    time.sleep(3)
+    adb('shell', 'input', 'keyevent', 'KEYCODE_DPAD_UP'); time.sleep(1.5)     # the remote's way in: the controls wake
+    adb('shell', 'input', 'keyevent', 'KEYCODE_INFO'); time.sleep(1.5)        # the playback info, on
 
     def read():
-        """(the Decoding line, rendered frames, the elapsed clock in s) from the info panel and the time pill"""
-        controls()
+        """paused: (the Decoding line, frames drawn, the elapsed clock in s, what was on screen)"""
+        adb('shell', 'input', 'keyevent', 'KEYCODE_MEDIA_PAUSE'); time.sleep(2.5)
         t = [((n.get('text') or '') + (n.get('content-desc') or '')).strip() for n in nodes()]
         dec = next((x for x in t if x.startswith('on the processor')), '')
-        fr = next((re.match(r'^(\d+) of (\d+)$', x) for x in t if re.match(r'^(\d+) of (\d+)$', x)), None)
-        pos = next((re.match(r'^(\d+):(\d\d)$', x) for x in t if re.match(r'^(\d+):(\d\d)$', x)), None)
-        shown = (int(fr.group(2)) - int(fr.group(1))) if fr else -1
-        return dec, shown, (int(pos.group(1)) * 60 + int(pos.group(2))) if pos else -1, [x for x in t if x][:40]
+        fr = next((m for m in (re.match(r'^(\d+) of (\d+)$', x) for x in t) if m), None)
+        pos = next((m for m in (re.match(r'^(\d+):(\d\d)$', x) for x in t) if m), None)
+        drawn = (int(fr.group(2)) - int(fr.group(1))) if fr else -1
+        return dec, drawn, (int(pos.group(1)) * 60 + int(pos.group(2))) if pos else -1, [x for x in t if x]
 
-    if not controls() or not tap_node('Playback info'): fails.append('AV1: the playback info could not be opened')
-    time.sleep(2)
     d1, f1, p1, t1 = read()
-    print('av1: first read — decoding %r, rendered %d, clock %ds' % (d1, f1, p1), flush=True)
-    time.sleep(6)
+    print('av1: first reading — decoding %r, frames drawn %d, clock %d s' % (d1, f1, p1), flush=True)
+    adb('shell', 'input', 'keyevent', 'KEYCODE_MEDIA_PLAY'); time.sleep(8)
     d2, f2, p2, t2 = read()
-    print('av1: second read — decoding %r, rendered %d, clock %ds' % (d2, f2, p2), flush=True)
-    if not (d1 or d2): fails.append('AV1: the picture is not on the processor (no "on the processor" decoding line): ' + ' | '.join(t2)[:300])
-    if not (f2 > f1 > 0): fails.append('AV1: frames did not keep rendering (%d, then %d)' % (f1, f2))
+    print('av1: second reading — decoding %r, frames drawn %d, clock %d s' % (d2, f2, p2), flush=True)
+    print('av1: on screen: ' + ' | '.join(t2)[:400], flush=True)
+    if not (d1 or d2): fails.append('AV1: the picture is not on the processor (no "on the processor" decoding line)')
+    if not (f2 > f1 > 0): fails.append('AV1: frames did not keep being drawn (%d, then %d)' % (f1, f2))
     if not (p2 > p1 >= 0): fails.append('AV1: the clock did not move (%d s, then %d s)' % (p1, p2))
     srv.shutdown()
     return fails

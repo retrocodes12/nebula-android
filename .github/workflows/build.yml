@@ -55,12 +55,12 @@ jobs:
 
       # The release is shrunk by R8 (app/proguard-rules.pro), so the gate also plays AV1 through the FFmpeg decoder (the
       # emulator has no AV1 chip, so the app hands AV1 to nextlib's dav1d at once): native code calling Java by name is
-      # what a shrinker breaks without a word until it runs. A 40 s 720p clip of ffmpeg's own test picture — no download.
+      # what a shrinker breaks without a word until it runs. Two minutes of ffmpeg's own 720p test picture — no download.
       - name: Make the AV1 test clip
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null
           mkdir -p "$RUNNER_TEMP/av1"
-          ffmpeg -v error -y -f lavfi -i "testsrc2=s=1280x720:r=24" -t 40 -c:v libsvtav1 -preset 10 -crf 40 -g 48 \
+          ffmpeg -v error -y -f lavfi -i "testsrc2=s=1280x720:r=24" -t 120 -c:v libsvtav1 -preset 10 -crf 40 -g 48 \
             -pix_fmt yuv420p -an -movflags +faststart "$RUNNER_TEMP/av1/av1.mp4"
           ffprobe -v error -show_entries stream=codec_name,width,height,r_frame_rate -of csv=p=0 "$RUNNER_TEMP/av1/av1.mp4"
           ls -la "$RUNNER_TEMP/av1"
