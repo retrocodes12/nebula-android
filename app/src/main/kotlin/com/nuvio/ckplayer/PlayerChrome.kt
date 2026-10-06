@@ -342,7 +342,8 @@ internal fun PauseBoard(
 
 /** Picture, codec, rates, buffer, dropped frames — read like a camera HUD, not a debug dump. */
 @Composable
-internal fun PlaybackInfoHud(rows: List<InfoRow>, modifier: Modifier = Modifier) {
+internal fun PlaybackInfoHud(rowsState: State<List<InfoRow>>, modifier: Modifier = Modifier) {
+    val rows = rowsState.value          // read here: the rows change every tick while the panel is open
     Column(
         modifier
             .width(270.dp)

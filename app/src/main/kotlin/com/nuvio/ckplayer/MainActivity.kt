@@ -6396,7 +6396,9 @@ private fun PlayerScreen(
     var pauseBoardOn by remember { mutableStateOf(false) }
     var pausedSince by remember { mutableStateOf(0L) }
     var pinfoOn by remember { mutableStateOf(false) }
-    var infoRows by remember { mutableStateOf<List<InfoRow>>(emptyList()) }
+    // the info panel's rows, refreshed by the clock while it is open: a State read only inside the panel (PlaybackInfoHud),
+    // so the rows changing every tick redraw the panel, not this screen
+    val infoRows = remember { mutableStateOf<List<InfoRow>>(emptyList()) }
     var viaRelay by remember { mutableStateOf<Relay.Live?>(null) }             // Play through your PC: the sharing computer this play goes through
     var subOffsetMs by remember { mutableStateOf(0L) }
     // "Pick the line you just heard" (PickLine.kt): the line list while it is up in the Subtitles panel
@@ -7179,7 +7181,7 @@ private fun PlayerScreen(
             }
             if (sleepFired && exo.isPlaying) sleepFired = false     // played on: the board reads Paused again
             pauseBoardOn = boardCan && now - pausedSince > 1600 && now - chromeTouchedAt > 1600
-            if (pinfoOn) infoRows = playbackInfoRows(
+            if (pinfoOn) infoRows.value = playbackInfoRows(
                 exo, bandwidth, subOffsetMs,
                 if (Prefs.scrubFrames && !isLiveState && seekrNow?.ready == true) "Ready · from Seekr" else scrubStatusLine(
                     Prefs.scrubFrames, isLiveState,
