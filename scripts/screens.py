@@ -423,6 +423,22 @@ else:
     key('KEYCODE_DPAD_DOWN', 2); time.sleep(2)
     shot('05-home-rows')
 
+    # smoothness, measured: the frames the app drew while the remote walked Home (dumpsys gfxinfo). This emulator draws in
+    # software, so the numbers are slow in themselves — compare runs of this walk, not devices. Reported, never failed.
+    def jank(label, moves):
+        sh('dumpsys', 'gfxinfo', PKG, 'reset')
+        for k, n in moves: key(k, n, wait=0.3)
+        time.sleep(1.5)
+        out = sh('dumpsys', 'gfxinfo', PKG)
+        got = []
+        for k in ['Total frames rendered', 'Janky frames', '50th percentile', '90th percentile', '95th percentile', '99th percentile']:
+            m = re.search(re.escape(k) + r':\s*([^\n]+)', out); got.append(k + ' ' + (m.group(1).strip() if m else '?'))
+        line = 'JANK ' + label + ' | ' + ' | '.join(got)
+        say(line); open(os.path.join(OUT, MODE + '-jank.txt'), 'a').write(line + '\n')
+    jank('home: right x12 along a row', [('KEYCODE_DPAD_RIGHT', 12)])
+    jank('home: down x4 then up x4', [('KEYCODE_DPAD_DOWN', 4), ('KEYCODE_DPAD_UP', 4)])
+    jank('home: left x12 back along the row', [('KEYCODE_DPAD_LEFT', 12)])
+
     def lands(what, name=None):
         """the page opened on a control of its own, never on its Back circle (android-tv-29: OK there left the page)"""
         time.sleep(1.5)
