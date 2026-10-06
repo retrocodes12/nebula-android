@@ -52,6 +52,18 @@ object Updates {
         } catch (e: Exception) {
             null
         }
+    }.also { checked = Checked(early, it, System.currentTimeMillis()) }
+
+    private class Checked(val early: Boolean, val rel: Release?, val at: Long)
+    @Volatile private var checked: Checked? = null
+
+    /** Home's check: the last answer this process got, while it is fresh (a found release six hours, nothing found or an
+        unreachable feed a quarter of an hour), else [latest]. Home asked the network on every visit. */
+    suspend fun latestCached(early: Boolean = false): Release? {
+        val c = checked
+        if (c != null && c.early == early &&
+            System.currentTimeMillis() - c.at < (if (c.rel != null) 6L * 3600_000 else 15L * 60_000)) return c.rel
+        return latest(early)
     }
 
     /** The cloud's `{ android: { version, tag, notes, assets: [{name, url, size}], beta: {…} | null } }`; null on any miss. */

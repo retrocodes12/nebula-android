@@ -278,8 +278,9 @@ object Cloud {
     /** Mark a key changed and schedule a debounced push. Safe to call constantly. */
     fun noteChanged(ctx: Context, key: String) {
         if (!linked(ctx) || applying) return
-        val d = jsonPref(ctx, "cloud_dirty").put(key, 1)
-        putJsonPref(ctx, "cloud_dirty", d)
+        // already marked: no rewrite (every write rewrites the whole settings file, and playback's autosave lands here)
+        val d = jsonPref(ctx, "cloud_dirty")
+        if (!d.has(key)) putJsonPref(ctx, "cloud_dirty", d.put(key, 1))
         val app = ctx.applicationContext
         pushJobs[key]?.cancel()
         pushJobs[key] = scope.launch {
@@ -356,9 +357,14 @@ object Cloud {
                     continue
                 }
                 val rec = runCatching { api(ctx, "GET", "/v1/kv/$key", null) }.getOrNull() ?: continue
-                val remote = runCatching { JSONObject(rec.getString("v")) }.getOrNull() ?: continue
+                // the doc is read, and the progress records built, off the main thread; only the merge into the
+                // stores (which the main thread owns) runs here
+                val remote = withContext(Dispatchers.Default) { runCatching { JSONObject(rec.getString("v")) }.getOrNull() } ?: continue
+                val wire = if (key == "progress") withContext(Dispatchers.Default) { progressWire(remote) } else null
                 applying = true
-                val (changed, localNewer) = try { merge(ctx, key, remote) } finally { applying = false }
+                val (changed, localNewer) = try {
+                    if (wire != null) applyProgress(ctx, wire) else merge(ctx, key, remote)
+                } finally { applying = false }
                 putJsonPref(ctx, "cloud_revs", jsonPref(ctx, "cloud_revs").put(key, rec.optInt("rev")))
                 if (changed) applied.add(key)
                 if (localNewer) pushKey(ctx, key)
@@ -520,34 +526,42 @@ object Cloud {
         return changed to localNewer
     }
 
-    private fun mergeProgress(ctx: Context, remote: JSONObject): Pair<Boolean, Boolean> {
+    private fun mergeProgress(ctx: Context, remote: JSONObject): Pair<Boolean, Boolean> = applyProgress(ctx, progressWire(remote))
+
+    /** The remote progress doc as records (pure: pullAll builds it off the main thread). */
+    private fun progressWire(remote: JSONObject): Map<String, ProgressRec> {
+        val out = HashMap<String, ProgressRec>()
+        for (k in remote.keys()) {
+            val r = remote.optJSONObject(k) ?: continue
+            out[k] = ProgressRec(
+                type = r.optString("type"), id = r.optString("id"),
+                name = r.optString("name"),
+                poster = r.optString("poster").ifEmpty { null },
+                shape = r.optString("shape", "poster"),
+                addonUrl = r.optString("addonUrl"),
+                pos = (r.optDouble("pos", 0.0) * 1000).toLong(),   // wire = seconds
+                dur = (r.optDouble("dur", 0.0) * 1000).toLong(),
+                done = r.optBoolean("done"),
+                dismissed = r.optBoolean("dismissed"),
+                hand = r.optBoolean("hand"),
+                at = r.optLong("at"),
+            )
+        }
+        return out
+    }
+
+    /** Newest wins per record, into the store the main thread owns. */
+    private fun applyProgress(ctx: Context, wire: Map<String, ProgressRec>): Pair<Boolean, Boolean> {
         val local = HashMap(Progress.all(ctx))
         var changed = false
         var localNewer = false
-        for (k in remote.keys()) {
-            val r = remote.optJSONObject(k) ?: continue
-            val rAt = r.optLong("at")
+        for ((k, r) in wire) {
             val l = local[k]
-            if (l == null || rAt > l.at) {
-                local[k] = ProgressRec(
-                    type = r.optString("type"), id = r.optString("id"),
-                    name = r.optString("name"),
-                    poster = r.optString("poster").ifEmpty { null },
-                    shape = r.optString("shape", "poster"),
-                    addonUrl = r.optString("addonUrl"),
-                    pos = (r.optDouble("pos", 0.0) * 1000).toLong(),   // wire = seconds
-                    dur = (r.optDouble("dur", 0.0) * 1000).toLong(),
-                    done = r.optBoolean("done"),
-                    dismissed = r.optBoolean("dismissed"),
-                    hand = r.optBoolean("hand"),
-                    at = rAt,
-                )
-                changed = true
-            }
+            if (l == null || r.at > l.at) { local[k] = r; changed = true }
         }
         local.forEach { (k, l) ->
-            val r = remote.optJSONObject(k)
-            if (r == null || l.at > r.optLong("at")) localNewer = true
+            val r = wire[k]
+            if (r == null || l.at > r.at) localNewer = true
         }
         if (changed) Progress.replaceAll(ctx, local)
         return changed to localNewer

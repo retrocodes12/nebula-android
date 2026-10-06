@@ -64,11 +64,16 @@ object Account {
     }
 
     // ---------- identity ----------
-    fun isTv(ctx: Context): Boolean {
+    /** Read once per process: a television stays one, and this was a system-service call plus a package-manager query
+        on every composition that asked (the nav padding, remoteMode(), every focus helper). */
+    @Volatile private var tvCache: Boolean? = null
+    fun isTv(ctx: Context): Boolean = tvCache ?: run {
         val ui = ctx.getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager
-        return ui?.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION ||
-            ctx.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+        (ui?.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION ||
+            ctx.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)).also { tvCache = it }
     }
+    /** The cached answer, for code with no Context at hand (text sizes): MainActivity asks [isTv] in onCreate. */
+    val tvKnown: Boolean get() = tvCache == true
     /** How this device is listed on the profile. */
     fun deviceInfo(ctx: Context): JSONObject {
         val tv = isTv(ctx)

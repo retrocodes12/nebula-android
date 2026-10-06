@@ -206,10 +206,12 @@ object WatchLog {
 /** The player's side of the log: every half second, is the picture moving, and under what name ([title] follows the
     player — an episode hop keeps the series, a new title brings its own). */
 @Composable
-internal fun WatchLogTicker(player: Player, title: String) {
+internal fun WatchLogTicker(player: Player, title: String, on: Boolean = true) {
     val ctx = LocalContext.current
     val name by rememberUpdatedState(title)
-    LaunchedEffect(player) {
+    // [on]: the app is on screen — off it the player is paused, and the beat has nothing to count
+    LaunchedEffect(player, on) {
+        if (!on) return@LaunchedEffect
         while (true) {
             delay(500)
             WatchLog.tick(ctx, name, player.isPlaying)

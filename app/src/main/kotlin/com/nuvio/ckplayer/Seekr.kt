@@ -189,21 +189,25 @@ internal object Seekr {
 internal class SeekrFrames internal constructor(
     private val q: List<Pair<String, String>>,
     private val get: (String) -> Pair<Int, ByteArray?> = ::httpGet,    // a sheet: status + bytes (tests pass their own)
+    tv: Boolean = false,                                                // a TV box: a smaller share of a smaller memory
 ) {
+    // what is held: a phone keeps a whole title's sheets and plenty decoded; a TV box (often 1 GB, the film's buffer on
+    // the same heap) a third of it — the web's TV keeps half the tiles too
+    private val cropsMax = if (tv) 80 else 160           // 320×180 RGB 565 = 115 KB each → ≤ 18 MB (9 MB on a TV)
+    private val decodersMax = if (tv) 4 else 12          // region decoders kept (each holds its sheet's bytes)
+    private val bytesMax = if (tv) 24L * 1024 * 1024 else 64L * 1024 * 1024   // a title's sheets, compressed
+
     companion object {
-        private const val CROPS = 160                    // 320×180 RGB 565 = 115 KB each → ≤ 18 MB
-        private const val DECODERS = 12                  // region decoders kept (each holds its sheet's bytes)
         private const val NEAR = 6                       // a crop this many cues away stands in at once
         private const val AHEAD = 4                      // crops made past the wanted one, the way the scrub moves
         private const val WARM = 6                       // crops made either side of where the viewer is, when idle
         private const val GIVE_UP = 3                    // sheets failing before any worked
-        private const val BYTES_MAX = 64L * 1024 * 1024  // all of a title's sheets, compressed
 
         /** Null when no key is connected or the title cannot be looked up (live, kitsu, no id…). */
         fun forPlay(ctx: Context, type: String?, id: String?): SeekrFrames? {
             Seekr.load(ctx)
             if (Seekr.key.isEmpty()) return null
-            return SeekrWire.query(type, id)?.let { SeekrFrames(it) }
+            return SeekrWire.query(type, id)?.let { SeekrFrames(it, tv = Account.isTv(ctx)) }
         }
 
         /** Worker thread. One sheet's bytes; no key on this hop. */
@@ -231,13 +235,13 @@ internal class SeekrFrames internal constructor(
     private var held = 0L                                // their total size (under lock)
     private val decoders = object : LinkedHashMap<String, BitmapRegionDecoder>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, BitmapRegionDecoder>?): Boolean {
-            if (size <= DECODERS) return false
+            if (size <= decodersMax) return false
             runCatching { eldest?.value?.recycle() }
             return true
         }
     }                                                    // decode thread only
     private val crops = object : LinkedHashMap<Int, Bitmap>(64, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, Bitmap>?) = size > CROPS
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, Bitmap>?) = size > cropsMax
     }
     private val bad = HashSet<String>()                  // sheet URLs that would not load (under lock)
     private val skip = HashSet<Int>()                    // cues whose region would not decode (under lock)
@@ -344,7 +348,7 @@ internal class SeekrFrames internal constructor(
             val u = t.cues[w].sheet
             if (!bytes.containsKey(u) && u !in bad) return@synchronized u
         }
-        if (held >= BYTES_MAX) return@synchronized null
+        if (held >= bytesMax) return@synchronized null
         order.firstOrNull { !bytes.containsKey(it) && it !in bad }
     }
 

@@ -117,7 +117,27 @@ object Library {
      * Episodes dated within the last week or the next 45 days across every saved
      * series — fetched four series at a time so a big library doesn't crawl.
      */
+    /** The last list, for the saved series it was built for, kept ten minutes: the tab asked every saved series' add-on
+        again on each visit (a meta call per series). */
+    private class UpCache(val key: String, val at: Long, val rows: List<UpRow>)
+    @Volatile private var upCache: UpCache? = null
+    private fun upKey(ctx: Context) = list(ctx).filter { it.type == "series" }.take(25).joinToString("|") { it.id }
+
+    /** The list built in the last ten minutes for the same saved series, or null (then [upcoming] asks). */
+    fun upcomingCached(ctx: Context): List<UpRow>? {
+        val c = upCache ?: return null
+        return if (System.currentTimeMillis() - c.at < 600_000 && c.key == upKey(ctx)) c.rows else null
+    }
+
     suspend fun upcoming(ctx: Context): List<UpRow> {
+        val key = upKey(ctx)
+        val rows = upcomingFresh(ctx)
+        // an empty answer may be an outage (each series' failure reads as nothing): asked again next time
+        upCache = if (rows.isNotEmpty()) UpCache(key, System.currentTimeMillis(), rows) else null
+        return rows
+    }
+
+    private suspend fun upcomingFresh(ctx: Context): List<UpRow> {
         val series = list(ctx).filter { it.type == "series" }.take(25)
         if (series.isEmpty()) return emptyList()
         val addons = activeAddons(ctx)

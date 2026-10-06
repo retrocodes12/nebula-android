@@ -292,10 +292,19 @@ object Prefs {
     fun setAddonMark(ctx: Context, v: String) { addonMark = v; edit(ctx).putString("pref_addonmark", v).apply() }
     fun setSlowMark(ctx: Context, v: String) { slowMark = v; edit(ctx).putString("pref_slowmark", v).apply() }
     /** One sample of the engine's bandwidth estimate: weighted toward the newest play, never a single reading. */
-    fun noteBandwidth(ctx: Context, bps: Long) {
+    /** A sample of the connection (the player's clock, every ~5 s of play): kept in memory — [saveBandwidth] writes it
+        once when the play ends (every sample used to rewrite the whole settings file). */
+    fun noteBandwidth(@Suppress("UNUSED_PARAMETER") ctx: Context, bps: Long) {
         val v = if (bw > 0) (bw * 0.6 + bps * 0.4).toLong() else bps
         bw = v
-        edit(ctx).putLong("bw_bps", v).putLong("bw_at", System.currentTimeMillis()).apply()
+        bwUnsaved = true
+    }
+    private var bwUnsaved = false
+    /** The play is over, or the app left the screen: the last measured connection, written once. */
+    fun saveBandwidth(ctx: Context) {
+        if (!bwUnsaved) return
+        bwUnsaved = false
+        edit(ctx).putLong("bw_bps", bw).putLong("bw_at", System.currentTimeMillis()).apply()
     }
     fun setP2p(ctx: Context, v: Boolean) { p2p = v; edit(ctx).putBoolean("pref_p2p", v).apply() }
     fun setP2pKeep(ctx: Context, v: Boolean) { p2pKeep = v; edit(ctx).putBoolean("pref_p2pkeep", v).apply() }

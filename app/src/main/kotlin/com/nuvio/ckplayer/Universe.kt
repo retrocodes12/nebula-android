@@ -62,7 +62,7 @@ object Universe {
                         else -> year.toString()
                     }
                     Item(o.optString("rel"), MetaItem(tid, type, name, (if (o.isNull("poster")) "" else o.optString("poster")).ifEmpty { null }, releaseInfo = span))
-                }
+                }.distinctBy { it.meta.id }      // the row is keyed by title: one title named twice (two relations) would crash it
             }
         }.getOrNull()
         if (got != null) synchronized(cache) {

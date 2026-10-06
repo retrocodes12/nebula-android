@@ -127,15 +127,19 @@ object Stremio {
 
     /** Subtitle add-on query: /subtitles/{type}/{id}.json -> [{url, lang}] */
     suspend fun loadSubtitles(base: String, type: String, id: String): List<SubTrack> {
-        val j = JSONObject(httpGetText("$base/subtitles/${enc(type)}/${enc(id)}.json"))
-        val arr = j.optJSONArray("subtitles") ?: return emptyList()
-        val out = mutableListOf<SubTrack>()
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            val u = webUrl(o.optString("url"))
-            if (u.isNotEmpty()) out.add(SubTrack(u, o.optString("lang", o.optString("language", "und"))))
+        val text = httpGetText("$base/subtitles/${enc(type)}/${enc(id)}.json")
+        // read off the main thread, as every answer below is (the callers sit on it)
+        return withContext(Dispatchers.Default) {
+            val j = JSONObject(text)
+            val arr = j.optJSONArray("subtitles") ?: return@withContext emptyList()
+            val out = mutableListOf<SubTrack>()
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val u = webUrl(o.optString("url"))
+                if (u.isNotEmpty()) out.add(SubTrack(u, o.optString("lang", o.optString("language", "und"))))
+            }
+            out
         }
-        return out
     }
 
     /** How long a stream list may take to START arriving. Some add-ons look every source up live and answer only when
@@ -175,7 +179,12 @@ object Stremio {
         a?.let { arr -> (0 until arr.length()).map { arr.getString(it) } }
 
     suspend fun loadManifest(url: String): ManifestInfo {
-        val j = JSONObject(httpGetText(url))
+        val text = httpGetText(url)
+        return withContext(Dispatchers.Default) { parseManifest(url, text) }
+    }
+
+    private fun parseManifest(url: String, text: String): ManifestInfo {
+        val j = JSONObject(text)
         val logo = j.optString("logo").ifEmpty { j.optString("icon") }.ifEmpty { null }
         val addon = Addon(url, j.optString("name", "Add-on"), baseOf(url), logo)
         val cats = mutableListOf<CatalogRef>()
@@ -251,7 +260,12 @@ object Stremio {
     /** Full meta for one title, or null when the add-on has nothing. */
     suspend fun loadFullMeta(base: String, type: String, id: String): FullMeta? {
         val u = "$base/meta/${enc(type)}/${enc(id)}.json"
-        val meta = JSONObject(httpGetText(u)).optJSONObject("meta") ?: return null
+        val text = httpGetText(u)
+        return withContext(Dispatchers.Default) { parseFullMeta(text) }
+    }
+
+    private fun parseFullMeta(text: String): FullMeta? {
+        val meta = JSONObject(text).optJSONObject("meta") ?: return null
         val genres = mutableListOf<String>()
         (meta.optJSONArray("genres") ?: meta.optJSONArray("genre"))?.let { g ->
             for (i in 0 until g.length()) genres.add(g.optString(i))
@@ -303,8 +317,11 @@ object Stremio {
     /** Fetch a series' episode list (the meta `videos` array). Empty if none. */
     suspend fun loadSeriesVideos(base: String, type: String, id: String): List<Episode> {
         val u = "$base/meta/${enc(type)}/${enc(id)}.json"
-        val meta = JSONObject(httpGetText(u)).optJSONObject("meta") ?: return emptyList()
-        return parseVideos(meta.optJSONArray("videos"))
+        val text = httpGetText(u)
+        return withContext(Dispatchers.Default) {
+            val meta = JSONObject(text).optJSONObject("meta") ?: return@withContext emptyList()
+            parseVideos(meta.optJSONArray("videos"))
+        }
     }
 
     private fun parseVideos(vids: JSONArray?): List<Episode> {
@@ -351,7 +368,12 @@ object Stremio {
         if (skip > 0) extras.add("skip=$skip")
         if (extras.isNotEmpty()) u += "/" + extras.joinToString("&")
         u += ".json"
-        val j = JSONObject(httpGetText(u))
+        val text = httpGetText(u)
+        return withContext(Dispatchers.Default) { parseCatalog(text, c) }
+    }
+
+    private fun parseCatalog(text: String, c: CatalogRef): List<MetaItem> {
+        val j = JSONObject(text)
         val metas = j.optJSONArray("metas") ?: return emptyList()
         val out = mutableListOf<MetaItem>()
         for (i in 0 until metas.length()) {

@@ -78,7 +78,8 @@ internal fun LibraryScreen(
     val ctx = LocalContext.current
     val screenEntry = LocalScreenEntry.current
     var items by remember(version) { mutableStateOf(Library.list(ctx)) }
-    var upcoming by remember(version) { mutableStateOf<List<Library.UpRow>?>(null) }
+    // the list built in the last ten minutes for the same saved series is shown at once (Library.upcomingCached)
+    var upcoming by remember(version) { mutableStateOf(Library.upcomingCached(ctx)) }
     var continueRows by remember(version) { mutableStateOf(Progress.continueList(ctx)) }
     var sheetFor by remember { mutableStateOf<LibItem?>(null) }
     var cwSheet by remember { mutableStateOf<ProgressRec?>(null) }

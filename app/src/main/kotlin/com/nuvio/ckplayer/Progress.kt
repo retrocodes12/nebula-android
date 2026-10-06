@@ -103,19 +103,31 @@ object Progress {
                 .take(m.size - MAX).map { it.key }
                 .forEach { m.remove(it) }
         }
-        val o = JSONObject()
-        m.forEach { (k, r) ->
-            o.put(
-                k,
-                JSONObject()
-                    .put("type", r.type).put("id", r.id).put("name", r.name)
-                    .put("poster", r.poster ?: "").put("shape", r.shape)
-                    .put("addonUrl", r.addonUrl).put("pos", r.pos).put("dur", r.dur)
-                    .put("done", r.done).put("dismissed", r.dismissed).put("hand", r.hand).put("at", r.at)
-            )
+        // The records are written out on a thread of their own, the newest copy only: building the JSON of a few
+        // hundred records on the main thread at every autosave of a playing film showed up as dropped frames. The
+        // records are immutable, so a copy of the map is all that crosses over.
+        val snap = LinkedHashMap(m)
+        val my = writeGen.incrementAndGet()
+        val p = prefs(ctx)
+        writer.execute {
+            if (writeGen.get() != my) return@execute          // a newer copy is already queued behind this one
+            val o = JSONObject()
+            snap.forEach { (k, r) ->
+                o.put(
+                    k,
+                    JSONObject()
+                        .put("type", r.type).put("id", r.id).put("name", r.name)
+                        .put("poster", r.poster ?: "").put("shape", r.shape)
+                        .put("addonUrl", r.addonUrl).put("pos", r.pos).put("dur", r.dur)
+                        .put("done", r.done).put("dismissed", r.dismissed).put("hand", r.hand).put("at", r.at)
+                )
+            }
+            p.edit().putString(KEY, o.toString()).apply()
         }
-        prefs(ctx).edit().putString(KEY, o.toString()).apply()
     }
+
+    private val writer = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "progress-write").apply { isDaemon = true } }
+    private val writeGen = java.util.concurrent.atomic.AtomicLong()
 
     fun get(ctx: Context, type: String, id: String): ProgressRec? = load(ctx)[key(type, id)]
 

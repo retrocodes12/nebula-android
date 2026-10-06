@@ -236,6 +236,8 @@ internal object TextFocus {
     private var on: Any? = null
     /** a text field on the screen [entry] has focus */
     fun typingIn(entry: Any?): Boolean = on != null && on == (entry ?: none)
+    /** a text field anywhere has focus (a keyboard's Backspace deletes there instead of going Back) */
+    fun anyField(): Boolean = on != null
     fun note(entry: Any?, focused: Boolean) {
         val k = entry ?: none
         if (focused) on = k else if (on == k) on = null
