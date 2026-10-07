@@ -20,6 +20,8 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -31,11 +33,13 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -224,8 +228,8 @@ internal fun rememberKeptGrid(key: String): LazyGridState {
  * A text field on a TV types only after OK. Compose starts the keyboard the moment a writable field takes focus,
  * and on a TV the keyboard then covers the screen and takes the D-pad — so arriving on Search, or merely walking
  * past Party name in Settings, threw the keyboard up. Read-only until OK (Compose starts the keyboard when the
- * field turns writable while focused), and read-only again once focus leaves; Compose's own D-pad handling still
- * walks focus out of a field. A phone is untouched.
+ * field turns writable while focused), and read-only again once focus leaves. The D-pad walks out of a field not
+ * being typed in ([walkOut]). A phone is untouched.
  */
 internal class TvTyping(val readOnly: Boolean, val modifier: Modifier, private val end: () -> Unit = {}) {
     /** The keyboard's own Search/Done was pressed: typing is over, the field is read-only again (Compose ends the input
@@ -272,6 +276,7 @@ internal fun tvTyping(): TvTyping {
     val ctx = LocalContext.current
     val tv = remember(ctx) { Account.isTv(ctx) }
     var editing by remember { mutableStateOf(false) }
+    val focus = LocalFocusManager.current
     if (!tv) return TvTyping(false, Modifier.notesTextFocus())
     return TvTyping(
         readOnly = !editing,
@@ -284,13 +289,40 @@ internal fun tvTyping(): TvTyping {
             }
             .onPreviewKeyEvent { e ->
                 val ok = e.key == Key.DirectionCenter || e.key == Key.Enter || e.key == Key.NumPadEnter
-                if (editing || !ok) false
-                else {
-                    if (e.type == KeyEventType.KeyDown) editing = true
-                    true
+                when {
+                    editing -> false
+                    ok -> {
+                        if (e.type == KeyEventType.KeyDown) editing = true
+                        true
+                    }
+                    else -> walkOut(e, focus)
                 }
             },
     )
+}
+
+/**
+ * A field not being typed in lets the D-pad walk out of it. Compose does that itself only for a key from a real D-pad
+ * device (foundation's `interceptDPadAndMoveFocus`); a key from the system's virtual keyboard moved the read-only
+ * field's cursor instead and the remote stayed in the field — that is how `adb shell input` presses arrive (the Screens
+ * walk sat on Settings › Playback's Seekr key field for fifteen Downs, 1.86.0 as well), and how Android hands on a TV
+ * remote's keys over HDMI-CEC. Those keys move focus here; the ones Compose handles are left to it, unchanged.
+ */
+private fun walkOut(e: KeyEvent, focus: FocusManager): Boolean {
+    val dir = when (e.key) {
+        Key.DirectionUp -> FocusDirection.Up
+        Key.DirectionDown -> FocusDirection.Down
+        Key.DirectionLeft -> FocusDirection.Left
+        Key.DirectionRight -> FocusDirection.Right
+        else -> return false
+    }
+    val native = e.nativeKeyEvent
+    val dev = native.device
+    val composeWalks = dev != null && dev.supportsSource(android.view.InputDevice.SOURCE_DPAD) && !dev.isVirtual &&
+        native.source != android.view.InputDevice.SOURCE_KEYBOARD
+    if (composeWalks) return false
+    if (e.type == KeyEventType.KeyDown) focus.moveFocus(dir)
+    return true
 }
 
 /** A ring drawn [gap] outside [shape] — for a control whose own focused look is lost on its fill (white on white). */

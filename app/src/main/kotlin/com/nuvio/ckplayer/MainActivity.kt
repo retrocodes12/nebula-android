@@ -3788,7 +3788,7 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
                 focusedTextColor = TextC, unfocusedTextColor = TextC,
             ),
             // the remote lands on the box the screen exists for; Down from it reaches Discover
-            modifier = typing.modifier.weight(1f)
+            modifier = Modifier.weight(1f)
                 .returnTo("search-field")
                 .focusRequester(tvFirstFocus())
                 // a TV not typing: Down goes to result 1 — the focus search picked whichever card sat under the middle
@@ -3796,7 +3796,9 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
                 .onPreviewKeyEvent { e ->
                     if (!typing.readOnly || e.key != Key.DirectionDown || e.type != KeyEventType.KeyDown || st.sections.isEmpty()) false
                     else runCatching { firstResult.requestFocus() }.getOrDefault(false)
-                },
+                }
+                // after that Down: the typing handler walks a remote out of the field with any other D-pad key
+                .then(typing.modifier),
         )
         if (clearable && tvBox) IconButton(
             onClick = { st.query = ""; st.submitted = "" },
