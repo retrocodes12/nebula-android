@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -40,6 +41,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -72,6 +74,9 @@ private val LANE_H = 62.dp
 private val BLOCK_H = 56.dp
 private val RULER_H = 30.dp
 private val BLOCK_GAP = 4.dp
+
+/** The grid's scroll, kept for Back from a title page (the screen leaves composition while the title page is up). */
+private object GuideKept { var sx = 0f; var sy = 0f }
 
 private val MOVE_KEYS = setOf(
     AKey.KEYCODE_DPAD_LEFT, AKey.KEYCODE_DPAD_RIGHT, AKey.KEYCODE_DPAD_UP, AKey.KEYCODE_DPAD_DOWN,
@@ -111,8 +116,12 @@ internal fun GuideScreen(onOpen: (Addon, MetaItem) -> Unit) {
 
     var viewW by remember { mutableIntStateOf(0) }
     var viewH by remember { mutableIntStateOf(0) }
-    val sx = remember { Animatable(0f) }
-    val sy = remember { Animatable(0f) }
+    // Back from a title page comes back to the same scroll (and the same block: its returnTo claims focus)
+    val entry = LocalScreenEntry.current
+    val back = remember { ReturnFocus.backTo(entry) }
+    val sx = remember { Animatable(if (back) GuideKept.sx else 0f) }
+    val sy = remember { Animatable(if (back) GuideKept.sy else 0f) }
+    DisposableEffect(Unit) { onDispose { GuideKept.sx = sx.targetValue; GuideKept.sy = sy.targetValue } }
     fun maxSx() = maxOf(0f, totalWpx - viewW)
     fun maxSy() = maxOf(0f, totalHpx + with(density) { 16.dp.toPx() } - viewH)
 
@@ -147,13 +156,19 @@ internal fun GuideScreen(onOpen: (Addon, MetaItem) -> Unit) {
         scope.launch { if (ms == 0) sy.snapTo(ty) else sy.animateTo(ty, tween(ms)) }
     }
 
-    // on open: the now line about an hour in from the label column
+    // on open: the now line about an hour in from the label column; a block lit before the grid was measured (Back's
+    // hand-back claims at once) is brought into view now
     LaunchedEffect(viewW > 0) {
-        if (viewW > 0 && focusedId == null) sx.snapTo((xOf(now) - hourPx).coerceIn(0f, maxSx()))
+        if (viewW <= 0) return@LaunchedEffect
+        val f = focusedId
+        val at = f?.let { pos[it] }
+        if (at != null) reveal(lanes[at.first].blocks[at.second], at.first, true)
+        else if (!back) sx.snapTo((xOf(now) - hourPx).coerceIn(0f, maxSx()))
     }
-    // the landing: the first live block (top-most lane), else the earliest upcoming one; Back's hand-back wins over it
+    // the landing: the first live block (top-most lane), else the earliest upcoming one — never over a block already
+    // lit (Back's hand-back claims before the grid is measured, and the landing waits for the measure)
     val landing = remember(lanes.isNotEmpty()) { GuidePlan.landing(lanes, now) }
-    tvFirstFocus(ready = landing != null && viewW > 0, target = landing?.let { reqFor(it.id) })
+    tvFirstFocus(ready = landing != null && viewW > 0 && focusedId == null, target = landing?.let { reqFor(it.id) })
     // a refresh that dropped the lit block (it ended): land again, as on open
     LaunchedEffect(lanes) {
         val f = focusedId ?: return@LaunchedEffect
@@ -224,10 +239,13 @@ internal fun GuideScreen(onOpen: (Addon, MetaItem) -> Unit) {
                         .size(dp(totalWpx), RULER_H),
                 ) {
                     var t = winStart
+                    val pillFrom = nowX - with(density) { 64.dp.toPx() }
+                    val pillTo = nowX + with(density) { 44.dp.toPx() }
                     while (t <= winEnd) {
                         val x = dp(xOf(t))
                         Box(Modifier.offset(x, RULER_H - 7.dp).size(1.dp, 7.dp).background(Line2))
-                        Text(
+                        // a time the Now pill would cover is left out
+                        if (xOf(t) !in pillFrom..pillTo) Text(
                             clockAt(ctx, t), color = MutedC, fontFamily = Mono, fontSize = 11.sp, maxLines = 1,
                             modifier = Modifier.offset(x + 5.dp, 4.dp),
                         )
@@ -290,6 +308,8 @@ internal fun GuideScreen(onOpen: (Addon, MetaItem) -> Unit) {
                                 val w = maxOf(xOf(b.end) - x - with(density) { BLOCK_GAP.toPx() }, with(density) { 24.dp.toPx() })
                                 GuideTile(
                                     b, dp(x), dp(li * laneHpx) + (LANE_H - BLOCK_H) / 2, dp(w), reqFor(b.id),
+                                    // the words stay in view while the block runs on past the grid's left edge
+                                    textShift = { (sx.value - x).coerceIn(0f, maxOf(0f, w - with(density) { 90.dp.toPx() })) },
                                     lit = focusedId == b.id,
                                     onFocus = {
                                         focusedId = b.id
@@ -309,7 +329,7 @@ internal fun GuideScreen(onOpen: (Addon, MetaItem) -> Unit) {
 
 @Composable
 private fun GuideTile(
-    b: GuideBlock, x: Dp, y: Dp, w: Dp, req: FocusRequester, lit: Boolean,
+    b: GuideBlock, x: Dp, y: Dp, w: Dp, req: FocusRequester, textShift: () -> Float, lit: Boolean,
     onFocus: () -> Unit, onOpen: () -> Unit,
 ) {
     val ctx = LocalContext.current
@@ -330,7 +350,16 @@ private fun GuideTile(
     ) {
         Box(Modifier.fillMaxSize().background(SurfaceC)) {
             if (b.live) Box(Modifier.align(Alignment.CenterStart).fillMaxHeight().width(3.dp).background(Red))
-            Column(Modifier.fillMaxSize().padding(start = if (b.live) 11.dp else 9.dp, end = 8.dp, top = 6.dp, bottom = 6.dp)) {
+            Column(
+                Modifier.fillMaxSize()
+                    // read in layout only: a sideways scroll re-places the words without recomposing the grid
+                    .layout { m, c ->
+                        val shift = textShift().roundToInt().coerceIn(0, c.maxWidth)
+                        val p = m.measure(c.copy(minWidth = 0, maxWidth = c.maxWidth - shift))
+                        layout(c.maxWidth, p.height) { p.place(shift, 0) }
+                    }
+                    .padding(start = if (b.live) 11.dp else 9.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+            ) {
                 Text(
                     b.item.entry.meta.name, color = TextC, fontFamily = Sans, fontWeight = FontWeight.Medium, fontSize = 12.5.sp,
                     lineHeight = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,

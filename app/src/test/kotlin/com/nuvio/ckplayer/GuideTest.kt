@@ -47,7 +47,8 @@ class GuideTest {
             {"id":"c","type":"sports","name":"By time","time":"2026-10-07 21:00 UTC","genres":["Tennis"]},
             {"id":"d","type":"sports","name":"By released","released":"2026-10-07T22:00:00.000Z","runtime":"1h 35m"},
             {"id":"e","type":"sports","name":"Not live","isLive":"False","genre":"Golf"},
-            {"id":"f","type":"sports","name":"Live words","releaseInfo":"live now"}
+            {"id":"f","type":"sports","name":"Live words","releaseInfo":"live now"},
+            {"id":"g","type":"sports","name":"Untimed live label","releaseInfo":"🔴 LIVE"}
         ]}"""
         val es = GuidePlan.parseCatalog(json, "sports").associateBy { it.meta.id }
         assertTrue(es.getValue("a").live); assertNull(es.getValue("a").start)
@@ -60,8 +61,21 @@ class GuideTest {
         assertEquals(95, es.getValue("d").minutes)
         assertEquals("Other", es.getValue("d").label)
         assertFalse(es.getValue("e").live); assertNull(es.getValue("e").start)
-        assertTrue(es.getValue("f").live)
+        assertFalse(es.getValue("f").live)          // more than the word live: not an event
+        assertTrue(es.getValue("g").live)           // "🔴 LIVE" with isLive absent
         assertEquals(180, es.getValue("a").minutes)
+    }
+
+    @Test fun liveTv_withIsLiveFalse_isNotLive_butTheRedLiveLabelIs() {
+        val es = GuidePlan.parseCatalog("""{"metas":[
+            {"id":"ch","type":"tv","name":"Sky Sports","releaseInfo":"Live TV","isLive":false},
+            {"id":"ev","type":"sports","name":"Match","releaseInfo":"🔴 LIVE"},
+            {"id":"lw","type":"sports","name":"Match 2","releaseInfo":" live "}
+        ]}""", "tv").associateBy { it.meta.id }
+        assertFalse(es.getValue("ch").live)
+        assertFalse(GuidePlan.isSchedule(listOf(es.getValue("ch"))))
+        assertTrue(es.getValue("ev").live)
+        assertTrue(es.getValue("lw").live)
     }
 
     @Test fun runtime_andTheSportTable() {
@@ -91,7 +105,7 @@ class GuideTest {
 
     @Test fun live_withoutAStart_sitsAroundNow() {
         val b = GuidePlan.blocks(listOf(entry("x", null, live = true)), now).single()
-        assertEquals(now - 30 * M, b.start)
+        assertEquals(now - 90 * M, b.start)
         assertEquals(now + 60 * M, b.end)
     }
 

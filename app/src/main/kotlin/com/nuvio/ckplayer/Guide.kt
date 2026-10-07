@@ -42,7 +42,7 @@ data class GuideEntry(
     val meta: MetaItem,
     /** The start, epoch ms — `released` (ISO with a time part), else `releaseInfo`/`time` in the "YYYY-MM-DD HH:MM UTC" form. */
     val start: Long?,
-    /** `isLive` the boolean true, or a releaseInfo saying LIVE with no parsable time. */
+    /** `isLive` the boolean true, or (with no start) a releaseInfo that is just the word LIVE ("🔴 LIVE", not "Live TV"). */
     val live: Boolean,
     /** How long it runs (no end times exist anywhere): the runtime, else the sport's usual length. */
     val minutes: Int,
@@ -72,6 +72,8 @@ object GuidePlan {
 
     private val TIME_RE = Regex("""^\s*(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?\s*(UTC|GMT|Z)?\s*$""")
     private val ISO_HAS_TIME = Regex("""^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}""")
+    /** A releaseInfo that says live and nothing else: the channel list's "Live TV" (isLive false) is not an event. */
+    private val LIVE_WORD = Regex("""^[^A-Za-z0-9]*live[^A-Za-z0-9]*$""", RegexOption.IGNORE_CASE)
 
     /** "2026-10-07 20:00 UTC" (also "…T20:00", ":SS", GMT, Z, or no zone — all UTC). */
     fun parseScheduleTime(s: String?): Long? {
@@ -156,8 +158,9 @@ object GuidePlan {
             val start = parseIsoDateTime(str(m, "released"))
                 ?: parseScheduleTime(releaseInfo)
                 ?: parseScheduleTime(str(m, "time"))
-            // a real boolean only: the string "False" (or "true") is not live
-            val live = m.opt("isLive") == true || (start == null && releaseInfo?.contains("LIVE", ignoreCase = true) == true)
+            // a real boolean only: the string "False" (or "true") is not live; else, untimed, a releaseInfo that is only
+            // the word live — 709 channel metas say "Live TV" with isLive false and must not become 709 live events
+            val live = m.opt("isLive") == true || (start == null && releaseInfo != null && LIVE_WORD.matches(releaseInfo))
             val sportText = genre ?: genres.firstOrNull() ?: description?.split(Regex("\\s+"))?.firstOrNull()
             val minutes = runtimeMinutes(if (m.isNull("runtime")) null else m.opt("runtime")) ?: sportMinutes(sportText)
             val meta = MetaItem(
@@ -195,7 +198,7 @@ object GuidePlan {
         val st = e.start
         val dur = e.minutes * MIN
         val (s, end) = when {
-            e.live && st == null -> (now - 30 * MIN) to (now + 60 * MIN)
+            e.live && st == null -> (now - 90 * MIN) to (now + 60 * MIN)
             st == null -> return@mapNotNull null
             e.live -> st to maxOf(st + dur, now + 15 * MIN)
             else -> st to st + dur
