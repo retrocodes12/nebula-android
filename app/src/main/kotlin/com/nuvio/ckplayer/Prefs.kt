@@ -149,6 +149,11 @@ object Prefs {
     // what this device measured its connection to be, in bits per second, while something played (0 = nothing yet);
     // a measurement, not a choice — it lives outside the pref_ keys so Reset all settings leaves it alone
     var bw by mutableStateOf(0L); private set
+    // the connection test's last answer (Settings › Playback › Connection speed, SpeedTest.kt): bits per second, the round
+    // trip in ms, and when (epoch ms, 0 = never) — a measurement too, outside the pref_ keys
+    var speedBps by mutableStateOf(0L); private set
+    var speedPing by mutableStateOf(0L); private set
+    var speedAt by mutableStateOf(0L); private set
     // P2P (P2p.kt): off until someone turns it on — BitTorrent shows your address to the whole swarm
     var p2p by mutableStateOf(false); private set                 // list and play torrent streams
     var p2pKeep by mutableStateOf(false); private set             // leave a download on the phone after watching
@@ -220,6 +225,9 @@ object Prefs {
         addonMark = p.getString("pref_addonmark", "initial") ?: "initial"
         slowMark = p.getString("pref_slowmark", "move") ?: "move"
         bw = if (System.currentTimeMillis() - p.getLong("bw_at", 0L) < 30L * 86_400_000L) p.getLong("bw_bps", 0L) else 0L
+        speedBps = p.getLong("speed_bps", 0L)
+        speedPing = p.getLong("speed_ms", 0L)
+        speedAt = p.getLong("speed_at", 0L)
         // the old on/off switch becomes "same as last time" once, then the new key is the truth
         p2p = p.getBoolean("pref_p2p", false)
         p2pKeep = p.getBoolean("pref_p2pkeep", false)
@@ -305,6 +313,20 @@ object Prefs {
         if (!bwUnsaved) return
         bwUnsaved = false
         edit(ctx).putLong("bw_bps", bw).putLong("bw_at", System.currentTimeMillis()).apply()
+    }
+    /** A measured connection that REPLACES the one plays have built up (the connection test): written at once, and the
+        rows' "may stall here" (StreamBadges.slow) follow it from the next look at a Streams page. */
+    fun setBandwidth(ctx: Context, bps: Long) {
+        bw = bps
+        bwUnsaved = false
+        edit(ctx).putLong("bw_bps", bps).putLong("bw_at", System.currentTimeMillis()).apply()
+    }
+    /** The connection test's answer: kept with its time, and it becomes the measured connection ([setBandwidth]). */
+    fun setSpeedTest(ctx: Context, bps: Long, pingMs: Long) {
+        val now = System.currentTimeMillis()
+        speedBps = bps; speedPing = pingMs; speedAt = now
+        edit(ctx).putLong("speed_bps", bps).putLong("speed_ms", pingMs).putLong("speed_at", now).apply()
+        setBandwidth(ctx, bps)
     }
     fun setP2p(ctx: Context, v: Boolean) { p2p = v; edit(ctx).putBoolean("pref_p2p", v).apply() }
     fun setP2pKeep(ctx: Context, v: Boolean) { p2pKeep = v; edit(ctx).putBoolean("pref_p2pkeep", v).apply() }

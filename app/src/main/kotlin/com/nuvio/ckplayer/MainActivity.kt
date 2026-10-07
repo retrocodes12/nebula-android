@@ -123,6 +123,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Search
@@ -689,6 +690,9 @@ private suspend fun licenceUrlFor(mpd: String): String? {
 /** A streams page's answers, kept for Back (StreamsScreen). */
 private class StreamsMemo(val at: Long, val sections: List<Pair<Addon, List<StreamItem>>>, val status: String, val usual: String?)
 private val streamsMemo = HashMap<String, StreamsMemo>()
+/** A streams page's speed-test answers per row address (branch speedtest), kept for Back like [streamsMemo]. */
+private class SpeedMemo(val at: Long, val rows: Map<String, RowSpeed>)
+private val speedMemo = HashMap<String, SpeedMemo>()
 
 /** One catalog's worth of content, tagged with where it came from and, on
     Home, where it sits (see [HomeRows.orderIndex]). */
@@ -4664,8 +4668,9 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
             SettingsChips(
                 "Buffer ahead", "How much video is loaded ahead of you · Longer rides out a shaky connection but takes more memory · From the next video on",
                 listOf("0" to "Auto", "60" to "1 min", "120" to "2 min", "240" to "4 min"), Prefs.buffer.toString(),
-                divider = Account.isTv(ctx),
             ) { Prefs.setBuffer(ctx, it.toInt()) }
+            // the connection test (branch speedtest, SpeedTestUi.kt): its answer is the connection "may stall here" goes by
+            ConnectionSpeedRow(divider = Account.isTv(ctx))
             // Play through your PC (Relay.kt): the TV only — a computer on the network holds the video for it
             if (Account.isTv(ctx)) {
                 LaunchedEffect(Prefs.relay) { Relay.refresh(ctx) }
@@ -5773,6 +5778,69 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
     // Back returned here (from the player, most often) — read at the first composition, before anything claims focus
     val streamsEntry = LocalScreenEntry.current
     val backHere = remember { ReturnFocus.backTo(streamsEntry) }
+    // Speed tests (branch speedtest, SpeedTest.kt): Test speeds measures the rows in their order on screen, ONE AT A TIME
+    // (two at once would split the line between them), up to ten, P2P rows skipped; a row's hold sheet tests that one.
+    // The answers stay for the page's life and come back with it on Back (ten minutes, like the rows themselves);
+    // leaving the page stops a test under way (its scope goes with the page).
+    val speedKey = item.type + "\n" + item.id
+    val speeds = remember(speedKey) {
+        androidx.compose.runtime.mutableStateMapOf<String, RowSpeed>().apply {
+            if (backHere) speedMemo[speedKey]?.takeIf { System.currentTimeMillis() - it.at < 600_000 }?.let { putAll(it.rows) }
+        }
+    }
+    val speedScope = rememberCoroutineScope()
+    var speedJob by remember { mutableStateOf<Job?>(null) }
+    fun keepSpeeds() {
+        speedMemo[speedKey] = SpeedMemo(System.currentTimeMillis(), speeds.filterValues { it !is RowSpeed.Testing })
+        while (speedMemo.size > 24) speedMemo.remove(speedMemo.minByOrNull { it.value.at }!!.key)
+    }
+    fun stopSpeeds() {
+        speedJob?.cancel()
+        speedJob = null
+        speeds.keys.filter { speeds[it] is RowSpeed.Testing }.forEach { speeds.remove(it) }
+    }
+    fun testSpeeds(rows: List<StreamItem>) {
+        stopSpeeds()
+        if (rows.isEmpty()) return
+        speedJob = speedScope.launch {
+            try {
+                for (s in rows) {
+                    speeds[s.url] = RowSpeed.Testing()
+                    val pulse = java.util.concurrent.atomic.AtomicLong()
+                    // the rate so far, read here on the main thread (the reading happens on the IO threads)
+                    val ticker = launch {
+                        while (true) { delay(300); pulse.get().takeIf { it > 0 }?.let { speeds[s.url] = RowSpeed.Testing(it) } }
+                    }
+                    val r = try { SpeedTest.testStream(ctx, s, item.runtime, pulse) } finally { ticker.cancel() }
+                    speeds[s.url] = r.toRow()
+                    keepSpeeds()
+                }
+            } finally {
+                // a stopped run leaves no "Testing…" behind — unless a newer run (a row's own test) already owns the lines
+                val me = coroutineContext[Job]
+                if (speedJob === me || speedJob == null) speeds.keys.filter { speeds[it] is RowSpeed.Testing }.forEach { speeds.remove(it) }
+                if (speedJob === me) speedJob = null
+            }
+        }
+    }
+    var holdFor by remember { mutableStateOf<Pair<StreamItem, Addon>?>(null) }
+    // a stream row's hold sheet (a long press, a held OK, the remote's Menu): play it, or test this one's speed — the
+    // test's row keeps one id while its words change, so the remote stays on it as the answer comes in
+    holdFor?.let { (s, from) ->
+        CardSheet(
+            title = StreamBadges.cleanName(s.name, from.name).ifEmpty { "Stream" },
+            sub = s.title.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() } ?: from.name,
+            poster = item.poster, shape = item.posterShape,
+            actions = listOf(
+                // the player and a test must not share the line (nor the host): playing stops the test
+                SheetAction(Icons.Filled.PlayArrow, "Play") { stopSpeeds(); play(s, from, true) },
+                SheetAction(Icons.Filled.Speed, speeds[s.url]?.words() ?: "Test this stream’s speed", keepOpen = true, id = "speed") {
+                    if (speeds[s.url] !is RowSpeed.Testing) testSpeeds(listOf(s))
+                },
+            ),
+            onDismiss = { holdFor = null },
+        )
+    }
     LaunchedEffect(item, reload) {
         loading = true
         usualUrl = null
@@ -6007,6 +6075,14 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                         StreamFilterChip("↻", false, Modifier.semantics { contentDescription = "Reload streams" }
                             .then(if (!noStreamer) Modifier.focusRequester(chipLand) else Modifier)) { filter = null; reload++ }
                     }
+                    // speed tests (branch speedtest): the rows on screen, in their order, one at a time; Stop while it runs
+                    if (sections.isNotEmpty()) item(key = "speed") {
+                        val running = speedJob != null
+                        StreamFilterChip(if (running) "Stop" else "Test speeds", running) {
+                            if (running) stopSpeeds()
+                            else testSpeeds(shown.flatMap { it.second }.filter { SpeedTest.testable(it) }.take(10))
+                        }
+                    }
                     // nothing installed and on plays this: the way out, beside the retry that would only say so again
                     if (noStreamer && sections.isEmpty()) item(key = "addons") { StreamFilterChip("Add-ons", false, Modifier.focusRequester(chipLand)) { onAddons() } }
                     if (sections.size > 1) {
@@ -6041,7 +6117,9 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                         s, from.name, item.name, usual = s.url == usualUrl, slow = StreamBadges.slow(s, item.runtime), stutter = StreamBadges.stutter(s),
                         modifier = Modifier.returnTo("stream/" + from.manifestUrl + "/" + s.url)
                             .then(if (sectionIndex == 0 && i == 0) Modifier.focusRequester(firstRow) else Modifier),
-                        onPlay = { play(it, from, true) },
+                        speed = speeds[s.url],
+                        onHold = { holdFor = s to from },
+                        onPlay = { stopSpeeds(); play(it, from, true) },
                     )
                 }
             }
@@ -6178,7 +6256,13 @@ private fun StreamFilterChip(label: String, on: Boolean, modifier: Modifier = Mo
 /** A stream row: resolution plate, release name, badges, and a right-hand
     spec column — the parts you actually choose by, nothing said twice. */
 @Composable
-private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual: Boolean = false, slow: Boolean = false, stutter: Boolean = false, modifier: Modifier = Modifier, onPlay: (StreamItem) -> Unit) {
+private fun StreamRow(
+    s: StreamItem, addonName: String, pageTitle: String, usual: Boolean = false, slow: Boolean = false, stutter: Boolean = false,
+    modifier: Modifier = Modifier,
+    // its speed test's answer (branch speedtest), and its hold sheet (a long press, a held OK, the remote's Menu)
+    speed: RowSpeed? = null, onHold: (() -> Unit)? = null,
+    onPlay: (StreamItem) -> Unit,
+) {
     val raw = remember(s.url) { s.name + "\n" + s.title }
     val plate = remember(s.url) { StreamBadges.plate(raw) }
     val m = remember(s.url) { StreamBadges.match(raw, if (plate != null) "resolution" else null) }
@@ -6198,7 +6282,7 @@ private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual
     // the card's own source is this one, so the plate below does light on focus (the source was never passed, so it
     // never did); a full-width row wears the ring instead of growing past the screen's edges
     FocusCard(
-        shape = RoundedCornerShape(14.dp), modifier = modifier.fillMaxWidth(), onClick = { onPlay(s) },
+        shape = RoundedCornerShape(14.dp), modifier = modifier.fillMaxWidth(), onClick = { onPlay(s) }, onLongClick = onHold,
         zoom = false, interactionSource = interaction, landing = false,
     ) {
         Row(
@@ -6250,6 +6334,7 @@ private fun StreamRow(s: StreamItem, addonName: String, pageTitle: String, usual
                     }
                 }
                 if (sub.isNotEmpty()) Text(sub, color = MutedC, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 5.dp))
+                if (speed != null) SpeedLine(speed, Modifier.padding(top = 6.dp))
             }
             // Stream details (Settings › Streams): size, bitrate, seeds as the right-hand column — and under them the word
             // that this row is faster than the connection this device has measured (StreamBadges.slow)

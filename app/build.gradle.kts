@@ -13,7 +13,9 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 103
-        versionName = "1.87.0"
+        // branch `speedtest` only: the founder's own test build of the stream speed test, never released — versionCode stays
+        // 1.87.0's so the release installs over it, and Updates.compareVersions ranks 1.87.0 above 1.87.0-speedtest.N
+        versionName = "1.87.0-speedtest.1"
         // arm only: every phone and TV box Nebula runs on is arm64 or armv7, and libtorrent's native
         // library is the only thing here with a processor. On anything else the engine reports itself
         // unavailable and P2P streams stay hidden (P2p.available).
@@ -123,6 +125,8 @@ dependencies {
     // device, so the real one goes on the test classpath ahead of it.
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    // and a real XmlPullParser for SpeedTest's DASH manifests (android.jar's is a stub off a device)
+    testImplementation("net.sf.kxml:kxml2:2.3.0")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }
