@@ -95,6 +95,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.BookmarkRemove
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Person
@@ -600,6 +601,8 @@ private val DarkColors get() = darkColorScheme(
 
 private sealed interface Screen {
     data object Home : Screen
+    /** The TV Guide (GuideScreen.kt): a TV tab, on the rail only while an add-on's catalog carries start times. */
+    data object Guide : Screen
     data object Search : Screen
     data object Library : Screen
     data object Addons : Screen
@@ -1148,7 +1151,10 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
             var addonsVersion by remember { mutableStateOf(0) }
             LaunchedEffect(Unit) {
                 Cloud.onApplied = { keys ->
-                    if ("addons" in keys) { manifestCache.clear(); homeState.invalidate(); searchState.discover.optionsLoaded = false; addonsVersion++ }
+                    if ("addons" in keys) {
+                        manifestCache.clear(); homeState.invalidate(); searchState.discover.optionsLoaded = false; addonsVersion++
+                        if (Account.isTv(ctx)) Guide.refresh(ctx, force = true)
+                    }
                     if ("progress" in keys) homeState.invalidateContinue()
                     if ("library" in keys) libraryVersion++
                 }
@@ -1160,6 +1166,11 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 Support.load(ctx)            // is there a link to show, and who is on the wall
                 Cloud.pullAll(ctx)
                 while (true) { delay(300_000); Cloud.pullAll(ctx) }
+            }
+            // the TV Guide's scan (Guide.kt): every minute it re-reads the clock, every five it asks the add-ons again
+            LaunchedEffect(Unit) {
+                if (!Account.isTv(ctx)) return@LaunchedEffect
+                while (true) { Guide.refresh(ctx); delay(60_000) }
             }
             val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
             DisposableEffect(lifecycleOwner) {
@@ -1330,7 +1341,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
             Box(Modifier.fillMaxSize()) {
                 val current = stack.last()
                 // the five screens the nav belongs to; everything else is full-bleed
-                val onNav = current == Screen.Home || current == Screen.Search ||
+                val onNav = current == Screen.Home || current == Screen.Search || current == Screen.Guide ||
                     current == Screen.Library || current == Screen.Settings || current == Screen.Profile
                 // a television gets the rail laid out BESIDE the content, a phone the pill over it
                 val isTv = remember(ctx) { Account.isTv(ctx) }
@@ -1387,7 +1398,8 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                         val code = ev.nativeKeyEvent.keyCode
                                         val down = code == android.view.KeyEvent.KEYCODE_CHANNEL_DOWN || code == android.view.KeyEvent.KEYCODE_PAGE_DOWN
                                         val up = code == android.view.KeyEvent.KEYCODE_CHANNEL_UP || code == android.view.KeyEvent.KEYCODE_PAGE_UP
-                                        if ((!down && !up) || s is Screen.Play) false
+                                        // the Guide pages its own lanes (GuideScreen)
+                                        if ((!down && !up) || s is Screen.Play || s is Screen.Guide) false
                                         else { if (ev.type == KeyEventType.KeyDown) pageStep(down); true }
                                     }
                                     .onFocusChanged { landing.hasFocus = it.hasFocus }
@@ -1417,6 +1429,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                     onDetails = { r -> openProgressDetails(r) },
                                     onCustomise = { push(Screen.SettingsHome) },
                                 )
+                                is Screen.Guide -> GuideScreen(onOpen = { a, item -> openMeta(a, item) })
                                 is Screen.Search -> SearchScreen(
                                     searchState,
                                     onOpen = { a, item -> openMeta(a, item) },
@@ -1427,7 +1440,10 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                     onBack = { pop() },
                                     onOpen = { push(Screen.Catalog(it)) },
                                     // an add-on off takes its titles out of Continue watching, and its catalogs out of Discover's pickers
-                                    onAddonsChanged = { manifestCache.clear(); homeState.invalidate(); homeState.invalidateContinue(); searchState.discover.optionsLoaded = false },
+                                    onAddonsChanged = {
+                                        manifestCache.clear(); homeState.invalidate(); homeState.invalidateContinue(); searchState.discover.optionsLoaded = false
+                                        if (Account.isTv(ctx)) Guide.refresh(ctx, force = true)
+                                    },
                                 )
                                 is Screen.Settings -> SettingsScreen(
                                     onAddons = { push(Screen.Addons) },
@@ -2922,15 +2938,25 @@ private fun SideRail(current: Screen, onTab: (Screen) -> Unit) {
     // remote left — from the bottom of Home that was Profile, and OK there swapped the page. The rail is one focus group
     // whose onEnter (stable in compose-ui 1.8; `enter` is the deprecated experimental form) hands focus to the current
     // tab; the tabs' own Up/Down inside the rail are untouched.
-    val tabs = remember { listOf(Screen.Home, Screen.Search, Screen.Library, Screen.Settings, Screen.Profile) }
-    val tabFocus = remember { List(tabs.size) { FocusRequester() } }
+    // the Guide sits after Home only while an add-on's catalog carries start times (Guide.kt) — it comes and goes live
+    val guide = Guide.available
+    val tabs = if (guide) listOf(Screen.Home, Screen.Guide, Screen.Search, Screen.Library, Screen.Settings, Screen.Profile)
+        else listOf(Screen.Home, Screen.Search, Screen.Library, Screen.Settings, Screen.Profile)
+    val tabFocus = remember { HashMap<Screen, FocusRequester>() }
+    fun req(s: Screen) = tabFocus.getOrPut(s) { FocusRequester() }
     val cur = tabs.indexOf(current)
+    // the Guide's Left at a lane's start comes here, onto the current tab
+    DisposableEffect(cur, guide) {
+        val enter: () -> Boolean = { cur >= 0 && runCatching { req(tabs[cur]).requestFocus() }.getOrDefault(false) }
+        RailFocus.enter = enter
+        onDispose { if (RailFocus.enter === enter) RailFocus.enter = null }
+    }
     Column(
         Modifier.fillMaxHeight().width(104.dp)
             // a screen's fallback landing leaves a viewer on the rail alone (TvFocus.kt)
             .onFocusChanged { RailFocus.has = it.hasFocus }
             .focusProperties {
-                onEnter = { if (cur >= 0) runCatching { tabFocus[cur].requestFocus() } }
+                onEnter = { if (cur >= 0) runCatching { req(tabs[cur]).requestFocus() } }
             }
             .focusGroup()
             .background(Color(0xF014141A))
@@ -2939,15 +2965,19 @@ private fun SideRail(current: Screen, onTab: (Screen) -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text("◆", color = Red, fontSize = 20.sp, modifier = Modifier.padding(bottom = 28.dp))
-        TabItem("Home", Icons.Filled.Home, current == Screen.Home, Modifier.focusRequester(tabFocus[0])) { onTab(Screen.Home) }
+        TabItem("Home", Icons.Filled.Home, current == Screen.Home, Modifier.focusRequester(req(Screen.Home))) { onTab(Screen.Home) }
         Spacer(Modifier.height(12.dp))
-        TabItem("Search", Icons.Filled.Search, current == Screen.Search, Modifier.focusRequester(tabFocus[1])) { onTab(Screen.Search) }
+        if (guide) {
+            TabItem("Guide", Icons.Filled.CalendarMonth, current == Screen.Guide, Modifier.focusRequester(req(Screen.Guide))) { onTab(Screen.Guide) }
+            Spacer(Modifier.height(12.dp))
+        }
+        TabItem("Search", Icons.Filled.Search, current == Screen.Search, Modifier.focusRequester(req(Screen.Search))) { onTab(Screen.Search) }
         Spacer(Modifier.height(12.dp))
-        TabItem("Library", Icons.Filled.Bookmark, current == Screen.Library, Modifier.focusRequester(tabFocus[2])) { onTab(Screen.Library) }
+        TabItem("Library", Icons.Filled.Bookmark, current == Screen.Library, Modifier.focusRequester(req(Screen.Library))) { onTab(Screen.Library) }
         Spacer(Modifier.height(12.dp))
-        TabItem("Settings", Icons.Filled.Settings, current == Screen.Settings, Modifier.focusRequester(tabFocus[3])) { onTab(Screen.Settings) }
+        TabItem("Settings", Icons.Filled.Settings, current == Screen.Settings, Modifier.focusRequester(req(Screen.Settings))) { onTab(Screen.Settings) }
         Spacer(Modifier.height(12.dp))
-        ProfileTab(current == Screen.Profile, Modifier.focusRequester(tabFocus[4])) { onTab(Screen.Profile) }
+        ProfileTab(current == Screen.Profile, Modifier.focusRequester(req(Screen.Profile))) { onTab(Screen.Profile) }
     }
 }
 

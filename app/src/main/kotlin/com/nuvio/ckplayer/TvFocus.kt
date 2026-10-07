@@ -111,6 +111,8 @@ internal object ReturnFocus {
 /** Does the TV's side rail hold focus? (AppRoot keeps it.) A screen's fallback landing never pulls focus off it. */
 internal object RailFocus {
     var has = false
+    /** Put the remote on the rail's current tab (the Guide's Left at a lane's start); false with no rail up. */
+    var enter: (() -> Boolean)? = null
 }
 
 /**
