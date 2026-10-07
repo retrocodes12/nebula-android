@@ -3694,7 +3694,7 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
         st.searching = true; st.searchedFor = null; st.unreachable = false
         st.sections = emptyList()
         // Every add-on at once, their catalogs a few at a time (they were asked one add-on after another). One section
-        // per add-on, in the add-ons' own order (oi), refreshed as each of its catalogs answers.
+        // per add-on, in the add-ons' own order (oi), refreshed as its catalogs answer (in their own order).
         val addons = activeAddons(ctx)
         val merged = HashMap<Int, Pair<CatalogRef, MutableList<MetaItem>>>()
         val seen = HashMap<Int, HashSet<String>>()
@@ -3712,16 +3712,26 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
                     if (cats == null) { failed++; return@launch }
                     if (cats.isEmpty()) return@launch
                     var ok = 0
-                    cats.map { sc ->
+                    // each catalog's answer waits in its own slot and joins the section in the catalogs' order — films
+                    // before series, as when they were asked one after another (taken as they arrived, the order changed
+                    // from one search to the next): a later catalog answering first waits for the ones before it
+                    val got = arrayOfNulls<List<MetaItem>>(cats.size)
+                    val over = BooleanArray(cats.size)
+                    var shown = 0                       // catalogs [0, shown) are in the section
+                    cats.mapIndexed { ci, sc ->
                         launch {
                             val items = runCatching { gate.withPermit { Stremio.loadCatalog(a.base, sc, null, q) } }
                                 .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
-                                .getOrNull() ?: return@launch
-                            ok++
+                                .getOrNull()
                             // back on the main thread (this effect's): the maps need no lock
+                            if (items != null) { ok++; got[ci] = items }
+                            over[ci] = true
+                            val from = shown
+                            while (shown < cats.size && over[shown]) shown++
+                            if (shown == from) return@launch
                             val have = seen.getOrPut(oi) { HashSet() }
                             val list = merged.getOrPut(oi) { cats.first() to mutableListOf() }.second
-                            for (m in items) if (have.add(m.type + ":" + m.id)) list.add(m)
+                            for (i in from until shown) got[i]?.let { found -> for (m in found) if (have.add(m.type + ":" + m.id)) list.add(m) }
                             if (list.isNotEmpty()) st.sections = merged.keys.sorted().mapNotNull { k ->
                                 val (c, l) = merged.getValue(k)
                                 if (l.isEmpty()) null else CatRow(addons[k], c, l.toList(), k)
