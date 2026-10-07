@@ -143,12 +143,16 @@ internal fun GuideScreen(onOpen: (Addon, MetaItem) -> Unit) {
     // how the next focus scrolls: a sideways move keeps ~1 h of context; Up/Down and landings scroll only when needed
     val soft = remember { BooleanArray(1) { true } }
 
-    fun reveal(b: GuideBlock, li: Int, gentle: Boolean) {
+    /** Scroll so [b] is in view. [fromX]/[fromY]: the scroll to start from (Back's kept one); [snap]: no glide. */
+    fun reveal(
+        b: GuideBlock, li: Int, gentle: Boolean,
+        fromX: Float = sx.targetValue, fromY: Float = sy.targetValue, snap: Boolean = false,
+    ) {
         if (viewW <= 0) return
         val bx = xOf(b.start)
         val bw = xOf(b.end) - bx
         val edge = with(density) { 40.dp.toPx() }
-        var tx = sx.targetValue
+        var tx = fromX.coerceIn(0f, maxSx())
         val visible = bx + bw > tx + edge && bx < tx + viewW - edge
         if (!gentle || !visible) {
             if (bx < tx + hourPx) tx = bx - hourPx
@@ -156,24 +160,30 @@ internal fun GuideScreen(onOpen: (Addon, MetaItem) -> Unit) {
         }
         tx = tx.coerceIn(0f, maxSx())
         val ly = li * laneHpx
-        var ty = sy.targetValue
+        var ty = fromY.coerceIn(0f, maxSy())
         if (ly < ty) ty = ly else if (ly + laneHpx > ty + viewH) ty = ly + laneHpx - viewH
         ty = ty.coerceIn(0f, maxSy())
         GuideKept.sx = tx; GuideKept.sy = ty
-        val ms = if (Prefs.reducedMotion) 0 else 160
+        val ms = if (Prefs.reducedMotion || snap) 0 else 160
         scope.launch { if (ms == 0) sx.snapTo(tx) else sx.animateTo(tx, tween(ms)) }
         scope.launch { if (ms == 0) sy.snapTo(ty) else sy.animateTo(ty, tween(ms)) }
     }
 
     // on open: the now line about an hour in from the label column; a block lit before the grid was measured (Back's
     // hand-back claims at once) is brought into view now
+    val measured = remember { BooleanArray(1) }
     LaunchedEffect(viewW > 0) {
-        if (viewW <= 0) return@LaunchedEffect
-        if (restore[1]) { restore[1] = false; sx.snapTo(GuideKept.sx.coerceIn(0f, maxSx())); sy.snapTo(GuideKept.sy.coerceIn(0f, maxSy())) }
-        val f = focusedId
-        val at = f?.let { pos[it] }
-        if (at != null) reveal(lanes[at.first].blocks[at.second], at.first, true)
-        else if (!back) sx.snapTo((xOf(now) - hourPx).coerceIn(0f, maxSx()).also { GuideKept.sx = it; GuideKept.sy = 0f })
+        if (viewW <= 0 || measured[0]) return@LaunchedEffect
+        measured[0] = true
+        val at = focusedId?.let { pos[it] }
+        if (at != null) {
+            val kept = restore[1]
+            restore[1] = false
+            reveal(lanes[at.first].blocks[at.second], at.first, true,
+                if (kept) GuideKept.sx else sx.targetValue, if (kept) GuideKept.sy else sy.targetValue, snap = true)
+        } else if (!back) {
+            sx.snapTo((xOf(now) - hourPx).coerceIn(0f, maxSx()).also { GuideKept.sx = it; GuideKept.sy = 0f })
+        }
     }
     // the landing: the first live block (top-most lane), else the earliest upcoming one — never over a block already
     // lit (Back's hand-back claims before the grid is measured, and the landing waits for the measure)
@@ -331,12 +341,9 @@ internal fun GuideScreen(onOpen: (Addon, MetaItem) -> Unit) {
                                         focusedId = b.id
                                         val gentle = soft[0]; soft[0] = true
                                         val at = pos[b.id]
-                                        if (restore[1] && viewW > 0) {
+                                        if (at != null && restore[1] && viewW > 0) {
                                             restore[1] = false
-                                            scope.launch {
-                                                sx.snapTo(GuideKept.sx.coerceIn(0f, maxSx())); sy.snapTo(GuideKept.sy.coerceIn(0f, maxSy()))
-                                                if (at != null) reveal(b, at.first, true)
-                                            }
+                                            reveal(b, at.first, true, GuideKept.sx, GuideKept.sy, snap = true)
                                         } else if (at != null) reveal(b, at.first, gentle)
                                     },
                                     onOpen = { onOpen(b.item.src.addon, b.item.entry.meta) },
