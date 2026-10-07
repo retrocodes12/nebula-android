@@ -76,7 +76,13 @@ private val RULER_H = 30.dp
 private val BLOCK_GAP = 4.dp
 
 /** The grid's scroll, kept for Back from a title page (the screen leaves composition while the title page is up). */
-private object GuideKept { var sx = 0f; var sy = 0f }
+private object GuideKept {
+    var sx = 0f
+    var sy = 0f
+    /** the block lit last, and when the screen was left (uptime) */
+    var id: String? = null
+    var leftAt = 0L
+}
 
 private val MOVE_KEYS = setOf(
     AKey.KEYCODE_DPAD_LEFT, AKey.KEYCODE_DPAD_RIGHT, AKey.KEYCODE_DPAD_UP, AKey.KEYCODE_DPAD_DOWN,
@@ -119,9 +125,11 @@ internal fun GuideScreen(onOpen: (Addon, MetaItem) -> Unit) {
     // Back from a title page comes back to the same scroll (and the same block: its returnTo claims focus)
     val entry = LocalScreenEntry.current
     val back = remember { ReturnFocus.backTo(entry) }
-    val sx = remember { Animatable(if (back) GuideKept.sx else 0f) }
-    val sy = remember { Animatable(if (back) GuideKept.sy else 0f) }
-    DisposableEffect(Unit) { onDispose { GuideKept.sx = sx.targetValue; GuideKept.sy = sy.targetValue } }
+    // the first block lit on this visit is the one left a moment ago (Back's hand-back): put its scroll back first
+    val restore = remember { BooleanArray(2) }          // [the first focus was seen, a restore is owed]
+    DisposableEffect(Unit) { onDispose { GuideKept.leftAt = android.os.SystemClock.uptimeMillis() } }
+    val sx = remember { Animatable(0f) }
+    val sy = remember { Animatable(0f) }
     fun maxSx() = maxOf(0f, totalWpx - viewW)
     fun maxSy() = maxOf(0f, totalHpx + with(density) { 16.dp.toPx() } - viewH)
 
@@ -151,6 +159,7 @@ internal fun GuideScreen(onOpen: (Addon, MetaItem) -> Unit) {
         var ty = sy.targetValue
         if (ly < ty) ty = ly else if (ly + laneHpx > ty + viewH) ty = ly + laneHpx - viewH
         ty = ty.coerceIn(0f, maxSy())
+        GuideKept.sx = tx; GuideKept.sy = ty
         val ms = if (Prefs.reducedMotion) 0 else 160
         scope.launch { if (ms == 0) sx.snapTo(tx) else sx.animateTo(tx, tween(ms)) }
         scope.launch { if (ms == 0) sy.snapTo(ty) else sy.animateTo(ty, tween(ms)) }
@@ -160,10 +169,11 @@ internal fun GuideScreen(onOpen: (Addon, MetaItem) -> Unit) {
     // hand-back claims at once) is brought into view now
     LaunchedEffect(viewW > 0) {
         if (viewW <= 0) return@LaunchedEffect
+        if (restore[1]) { restore[1] = false; sx.snapTo(GuideKept.sx.coerceIn(0f, maxSx())); sy.snapTo(GuideKept.sy.coerceIn(0f, maxSy())) }
         val f = focusedId
         val at = f?.let { pos[it] }
         if (at != null) reveal(lanes[at.first].blocks[at.second], at.first, true)
-        else if (!back) sx.snapTo((xOf(now) - hourPx).coerceIn(0f, maxSx()))
+        else if (!back) sx.snapTo((xOf(now) - hourPx).coerceIn(0f, maxSx()).also { GuideKept.sx = it; GuideKept.sy = 0f })
     }
     // the landing: the first live block (top-most lane), else the earliest upcoming one — never over a block already
     // lit (Back's hand-back claims before the grid is measured, and the landing waits for the measure)
@@ -312,9 +322,22 @@ internal fun GuideScreen(onOpen: (Addon, MetaItem) -> Unit) {
                                     textShift = { (sx.value - x).coerceIn(0f, maxOf(0f, w - with(density) { 90.dp.toPx() })) },
                                     lit = focusedId == b.id,
                                     onFocus = {
+                                        if (!restore[0]) {
+                                            restore[0] = true
+                                            restore[1] = b.id == GuideKept.id &&
+                                                (back || android.os.SystemClock.uptimeMillis() - GuideKept.leftAt < 10 * 60_000L)
+                                        }
+                                        GuideKept.id = b.id
                                         focusedId = b.id
                                         val gentle = soft[0]; soft[0] = true
-                                        pos[b.id]?.let { (bli, _) -> reveal(b, bli, gentle) }
+                                        val at = pos[b.id]
+                                        if (restore[1] && viewW > 0) {
+                                            restore[1] = false
+                                            scope.launch {
+                                                sx.snapTo(GuideKept.sx.coerceIn(0f, maxSx())); sy.snapTo(GuideKept.sy.coerceIn(0f, maxSy()))
+                                                if (at != null) reveal(b, at.first, true)
+                                            }
+                                        } else if (at != null) reveal(b, at.first, gentle)
                                     },
                                     onOpen = { onOpen(b.item.src.addon, b.item.entry.meta) },
                                 )
