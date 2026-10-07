@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.roundToLong
 
 /**
- * Speed tests (branch `speedtest`, built for the founder's own testing): the connection itself (Settings › Playback ›
+ * Speed tests (since 1.88.0): the connection itself (Settings › Playback ›
  * Connection speed, against Cloudflare's speed endpoint) and the host of one stream row (the Streams page's Test speeds,
  * and a row's hold sheet).
  *

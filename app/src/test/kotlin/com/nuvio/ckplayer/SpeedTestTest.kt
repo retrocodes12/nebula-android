@@ -8,7 +8,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.kxml2.io.KXmlParser
 
-/** The speed test's pure parts (branch speedtest): the verdicts, the window maths, HLS and DASH plans. */
+/** The speed test's pure parts (1.88.0): the verdicts, the window maths, HLS and DASH plans. */
 class SpeedTestTest {
 
     // ---- verdicts and words ----

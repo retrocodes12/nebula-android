@@ -690,7 +690,7 @@ private suspend fun licenceUrlFor(mpd: String): String? {
 /** A streams page's answers, kept for Back (StreamsScreen). */
 private class StreamsMemo(val at: Long, val sections: List<Pair<Addon, List<StreamItem>>>, val status: String, val usual: String?)
 private val streamsMemo = HashMap<String, StreamsMemo>()
-/** A streams page's speed-test answers per row address (branch speedtest), kept for Back like [streamsMemo]. */
+/** A streams page's speed-test answers per row address (1.88.0), kept for Back like [streamsMemo]. */
 private class SpeedMemo(val at: Long, val rows: Map<String, RowSpeed>)
 private val speedMemo = HashMap<String, SpeedMemo>()
 
@@ -4669,7 +4669,7 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
                 "Buffer ahead", "How much video is loaded ahead of you · Longer rides out a shaky connection but takes more memory · From the next video on",
                 listOf("0" to "Auto", "60" to "1 min", "120" to "2 min", "240" to "4 min"), Prefs.buffer.toString(),
             ) { Prefs.setBuffer(ctx, it.toInt()) }
-            // the connection test (branch speedtest, SpeedTestUi.kt): its answer is the connection "may stall here" goes by
+            // the connection test (1.88.0, SpeedTestUi.kt): its answer is the connection "may stall here" goes by
             ConnectionSpeedRow(divider = Account.isTv(ctx))
             // Play through your PC (Relay.kt): the TV only — a computer on the network holds the video for it
             if (Account.isTv(ctx)) {
@@ -5778,7 +5778,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
     // Back returned here (from the player, most often) — read at the first composition, before anything claims focus
     val streamsEntry = LocalScreenEntry.current
     val backHere = remember { ReturnFocus.backTo(streamsEntry) }
-    // Speed tests (branch speedtest, SpeedTest.kt): Test speeds measures the rows in their order on screen, ONE AT A TIME
+    // Speed tests (1.88.0, SpeedTest.kt): Test speeds measures the rows in their order on screen, ONE AT A TIME
     // (two at once would split the line between them), up to ten, P2P rows skipped; a row's hold sheet tests that one.
     // The answers stay for the page's life and come back with it on Back (ten minutes, like the rows themselves);
     // leaving the page stops a test under way (its scope goes with the page).
@@ -6075,7 +6075,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                         StreamFilterChip("↻", false, Modifier.semantics { contentDescription = "Reload streams" }
                             .then(if (!noStreamer) Modifier.focusRequester(chipLand) else Modifier)) { filter = null; reload++ }
                     }
-                    // speed tests (branch speedtest): the rows on screen, in their order, one at a time; Stop while it runs
+                    // speed tests (1.88.0): the rows on screen, in their order, one at a time; Stop while it runs
                     if (sections.isNotEmpty()) item(key = "speed") {
                         val running = speedJob != null
                         StreamFilterChip(if (running) "Stop" else "Test speeds", running) {
@@ -6259,7 +6259,7 @@ private fun StreamFilterChip(label: String, on: Boolean, modifier: Modifier = Mo
 private fun StreamRow(
     s: StreamItem, addonName: String, pageTitle: String, usual: Boolean = false, slow: Boolean = false, stutter: Boolean = false,
     modifier: Modifier = Modifier,
-    // its speed test's answer (branch speedtest), and its hold sheet (a long press, a held OK, the remote's Menu)
+    // its speed test's answer (1.88.0), and its hold sheet (a long press, a held OK, the remote's Menu)
     speed: RowSpeed? = null, onHold: (() -> Unit)? = null,
     onPlay: (StreamItem) -> Unit,
 ) {

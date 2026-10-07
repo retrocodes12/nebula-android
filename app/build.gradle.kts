@@ -12,11 +12,8 @@ android {
         applicationId = "com.nuvio.ckplayer"
         minSdk = 26
         targetSdk = 34
-        versionCode = 103
-        // branch `speedtest` only: the founder's own test build of the stream speed test, never released. Named after the
-        // NEXT release, so the released 1.87.0 is not offered over it; versionCode stays 1.87.0's (103), so he can go back to
-        // 1.87.0 without uninstalling, and Updates.compareVersions offers 1.88.0 over 1.88.0-speedtest.N when it ships
-        versionName = "1.88.0-speedtest.1"
+        versionCode = 104
+        versionName = "1.88.0"
         // arm only: every phone and TV box Nebula runs on is arm64 or armv7, and libtorrent's native
         // library is the only thing here with a processor. On anything else the engine reports itself
         // unavailable and P2P streams stay hidden (P2p.available).
