@@ -95,6 +95,19 @@ class SpeedTestTest {
         assertFalse(SpeedTest.testable(StreamItem("n", "t", "rtsp://x.example/live")))
     }
 
+    // ---- what an address is, when its Content-Type does not say ----
+
+    @Test fun sniffKind_playlistsAndManifestsByTheirFirstBytes() {
+        assertEquals("hls", SpeedPlans.sniffKind("#EXTM3U\n#EXT-X-VERSION:3\n"))
+        assertEquals("hls", SpeedPlans.sniffKind("\uFEFF#EXTM3U\n"))                 // a byte-order mark
+        assertEquals("hls", SpeedPlans.sniffKind("\r\n  #EXTM3U\n"))                 // white space first
+        assertEquals("dash", SpeedPlans.sniffKind("<?xml version=\"1.0\"?>\n<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\">"))
+        assertNull(SpeedPlans.sniffKind("\u0000\u0000\u0000\u0018ftypmp42"))           // an MP4's own start: a file
+        assertNull(SpeedPlans.sniffKind("<html><body>Not found</body></html>"))
+        assertNull(SpeedPlans.sniffKind("x#EXTM3U"))
+        assertNull(SpeedPlans.sniffKind(""))
+    }
+
     // ---- HLS ----
 
     @Test fun hlsVariants_readBandwidth_notAverage_andResolveAddresses() {

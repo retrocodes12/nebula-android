@@ -63,11 +63,12 @@ class UpdatesTest {
     // ---- the speed test's own build (branch speedtest): X.Y.Z-speedtest.N, below its release like an early build ----
 
     @Test fun compare_speedtestBuildIsBelowItsRelease_aboveTheOneBefore() {
-        assertTrue(Updates.isNewer("1.87.0", "1.87.0-speedtest.1"))           // the release is offered over the test build
-        assertFalse(Updates.isNewer("1.87.0-speedtest.1", "1.87.0"))
-        assertTrue(Updates.isNewer("1.87.0-speedtest.1", "1.86.0"))
-        assertTrue(Updates.isNewer("1.87.0-speedtest.2", "1.87.0-speedtest.1"))
-        assertEquals("1.87.0-speedtest.1", Updates.cleanVersion("v1.87.0-speedtest.1"))
+        assertTrue(Updates.isNewer("1.88.0", "1.88.0-speedtest.1"))           // 1.88.0 is offered over the test build
+        assertFalse(Updates.isNewer("1.88.0-speedtest.1", "1.88.0"))
+        assertFalse(Updates.isNewer("1.87.0", "1.88.0-speedtest.1"))          // the released 1.87.0 is not offered over it
+        assertTrue(Updates.isNewer("1.88.0-speedtest.1", "1.87.0"))
+        assertTrue(Updates.isNewer("1.88.0-speedtest.2", "1.88.0-speedtest.1"))
+        assertEquals("1.88.0-speedtest.1", Updates.cleanVersion("v1.88.0-speedtest.1"))
     }
 
     @Test fun isNewer_garbageIsNeverNewer() {

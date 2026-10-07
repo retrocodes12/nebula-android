@@ -12,6 +12,18 @@ import kotlin.math.roundToLong
  */
 internal object SpeedPlans {
 
+    /** What an address's first bytes say it is when its Content-Type does not (octet-stream, text/plain — some add-ons
+        proxy their playlists under no extension at all): "hls" for "#EXTM3U" after an optional byte-order mark or white
+        space, "dash" for a manifest ("<MPD" in its head), null for anything else — a file to read. */
+    fun sniffKind(head: String): String? {
+        val t = head.trimStart('﻿', ' ', '\t', '\r', '\n')
+        return when {
+            t.startsWith("#EXTM3U") -> "hls"
+            head.contains("<MPD") -> "dash"
+            else -> null
+        }
+    }
+
     // ---------- HLS ----------
 
     data class Variant(val bandwidth: Long, val url: String)

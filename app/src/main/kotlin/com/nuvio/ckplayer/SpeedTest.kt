@@ -225,6 +225,12 @@ internal object SpeedTest {
                 val type = res.header("Content-Type").orEmpty().lowercase(Locale.US)
                 if (sniff && "mpegurl" in type) return@use Probe(readText(res), "hls", res.request.url.toString(), null)
                 if (sniff && "dash+xml" in type) return@use Probe(readText(res), "dash", res.request.url.toString(), null)
+                // …or a generic type over a playlist or a manifest: its first bytes say so (draining one as a "file" read
+                // a few kilobytes and gave a rate that meant nothing)
+                if (sniff) {
+                    val kind = SpeedPlans.sniffKind(runCatching { res.peekBody(1024).string() }.getOrDefault(""))
+                    if (kind != null) return@use Probe(readText(res), kind, res.request.url.toString(), null)
+                }
                 drain(res, meter, System.nanoTime() + WINDOW_NS, FILE_CAP, live)
                 if (meter.total() == 0L) throw IOException("empty")
                 Probe(null, "file", url, Result(meter.bps(meter.firstMs), need, ttfb))
