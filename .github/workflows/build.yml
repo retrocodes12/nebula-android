@@ -160,12 +160,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.88.0.apk
+          cp "$APK" Nebula-1.89.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.88.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.88.0 Nebula-1.88.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.88.0" \
-            --notes "Speed tests. Settings › Playback › Connection speed measures your connection in about 8 seconds (speed and delay), and streams faster than it are marked \"may stall here\". On a Streams page, Test speeds checks up to ten streams one at a time and marks each one plays smoothly, should play or may stall; hold a stream (or press Menu on a TV) to test just that one. The connection test downloads from Cloudflare's speed test only when you start it. (1.87.0: smoother on TVs and phones, more remote buttons, a third smaller download.)"
+          gh release delete v1.89.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.89.0 Nebula-1.89.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.89.0" \
+            --notes "A TV guide on Android TV: Guide in the side rail shows the live and upcoming events from your add-ons on a timeline, by sport, with a line at the current time. Left and right walk a row, up and down move between rows by time, CH+/CH- page, and OK opens an event like its card. It appears only when an installed add-on lists events with start times. (1.88.0: speed tests for your connection and for each stream.)"
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
