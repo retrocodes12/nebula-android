@@ -160,12 +160,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.89.0.apk
+          cp "$APK" Nebula-1.90.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.89.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.89.0 Nebula-1.89.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.89.0" \
-            --notes "A TV guide on Android TV: Guide in the side rail shows the live and upcoming events from your add-ons on a timeline, by sport, with a line at the current time. Left and right walk a row, up and down move between rows by time, CH+/CH- page, and OK opens an event like its card. It appears only when an installed add-on lists events with start times. (1.88.0: speed tests for your connection and for each stream.)"
+          gh release delete v1.90.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.90.0 Nebula-1.90.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.90.0" \
+            --notes "More sports streams play: some sources answer only a player that asks for them the way their own site does, and Nebula now does that for every stream that says how. The sports add-on uses it to offer extra channels, marked India only where they play only from India. (1.89.0: a TV guide on Android TV.)"
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
