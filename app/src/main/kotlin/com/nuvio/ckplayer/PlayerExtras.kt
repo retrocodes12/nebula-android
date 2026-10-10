@@ -316,5 +316,20 @@ internal fun ioWorthRetry(e: androidx.media3.common.PlaybackException): Boolean 
     return true
 }
 
+/**
+ * The host refused an address it had been serving (401/403/404/410 on a re-connection mid-play): the link ran out or its
+ * session was replaced — asking the add-on again for the same row is the cure, not asking the same address again.
+ */
+internal fun linkRefused(e: androidx.media3.common.PlaybackException): Boolean {
+    var c: Throwable? = e.cause
+    while (c != null) {
+        if (c is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException) return linkRefusedCode(c.responseCode)
+        c = c.cause
+    }
+    return false
+}
+
+internal fun linkRefusedCode(code: Int): Boolean = code == 401 || code == 403 || code == 404 || code == 410
+
 /** An HTTP status that may answer differently if asked again. */
 internal fun httpWorthRetry(code: Int): Boolean = code >= 500 || code == 408 || code == 429

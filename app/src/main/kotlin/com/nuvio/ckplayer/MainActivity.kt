@@ -6953,7 +6953,13 @@ private fun PlayerScreen(
     }
 
     // Offer the next episode in the last 25s; the countdown itself starts on ENDED.
-    // Its stream is chosen from 90s out, so Play now has nothing left to fetch.
+    // Its stream is chosen from 90s out, so Play now has nothing left to fetch — but only once THIS file has been read to
+    // its end (bufferedPosition at the length): asking the add-on for the next episode while this one still reads gave a
+    // host that keeps one session per viewer the chance to cut this one off in its last minutes (2026-10-11).
+    fun fullyRead(): Boolean {
+        val d = exo.duration
+        return exo.playbackState == Player.STATE_ENDED || (d != C.TIME_UNSET && d > 0 && exo.bufferedPosition >= d - 2_000)
+    }
     if (nextEpisode != null) LaunchedEffect(nextEpisode.id) {
         while (true) {
             delay(500)
@@ -6965,7 +6971,7 @@ private fun PlayerScreen(
             val remain = dur - exo.currentPosition
             // the closing credits count as the end when the database knows where they start
             val credits = SkipSegments.inOutro(skipSegs, exo.currentPosition)
-            if (remain <= 90_000 || credits) onPrefetchNext()
+            if ((remain <= 90_000 || credits) && fullyRead()) onPrefetchNext()
             // Offer the next episode (Settings › Playback): N s before the end, or only once the credits
             // roll — 25 s before the end when the database has no credits mark for this episode
             val at = Prefs.upnextAt
@@ -6975,7 +6981,11 @@ private fun PlayerScreen(
         }
     }
     // the card opening (near the end, on ENDED, or after a seek) is the other cue
-    LaunchedEffect(upnextOpen) { if (upnextOpen) onPrefetchNext() }
+    LaunchedEffect(upnextOpen) {
+        if (!upnextOpen) return@LaunchedEffect
+        while (!fullyRead() && exo.currentMediaItem != null) delay(500)
+        onPrefetchNext()
+    }
     LaunchedEffect(upnextCounting) {
         if (!upnextCounting) return@LaunchedEffect
         upnextLeft = Prefs.countdown                       // Autoplay countdown (Settings › Playback)
@@ -6986,6 +6996,29 @@ private fun PlayerScreen(
     val behindLiveAt = remember { LongArray(1) }
     val drmAsked = remember { HashSet<String>() }           // addresses whose licence was read after a key request failed
     val ioRetry = remember { LongArray(3) }                 // reading failures picked up again: [count, last at, for which address hash]
+    val freshAt = remember { LongArray(1) }                 // when a fresh link was last asked for (once per two minutes)
+
+    /**
+     * Ask the add-ons again for the row playing from [cur] (StallWatch.fresh: the same address, or a freshly signed twin
+     * from its add-on); [then] gets the address to play — null when none was found. False when not asked at all: no
+     * title to ask about, live, P2P, through the PC, a party viewer, or asked within the last two minutes.
+     */
+    fun askFresh(cur: String, then: (String?) -> Unit): Boolean {
+        val type = contentType ?: return false
+        val id = contentId ?: return false
+        if (exo.isCurrentMediaItemLive || P2p.isLocal(cur) || Relay.via != null) return false
+        if (partyUi.active() && !partyUi.isHost) return false
+        val now = System.currentTimeMillis()
+        if (now - freshAt[0] < 120_000) return false
+        freshAt[0] = now
+        scope.launch {
+            val got = runCatching {
+                StallWatch.fresh(StallWatch.siblings(context, type, id, addonUrl, null), cur, NextEp.picked(context))
+            }.getOrNull()
+            then(got?.first?.url)
+        }
+        return true
+    }
     // The app leaving the screen pauses the film: Home on a TV without picture-in-picture, the box going to standby,
     // a phone's power button. Nothing did — the audio played on under the launcher, and a box left running autoplayed
     // episode after episode all night, ticking each one watched. Picture-in-picture pauses the Activity without
@@ -7017,6 +7050,39 @@ private fun PlayerScreen(
     DisposableEffect(Unit) {
         val l = object : Player.Listener {
             override fun onPlayerError(e: PlaybackException) {
+                if (tryFreshLink(e)) return
+                afterFreshLink(e)
+            }
+
+            /**
+             * The link stopped being honoured mid-play — 2026-10-11, the Founder: "the stream … suddenly stop[s] working at
+             * the end … like last 2mins". With Buffer ahead the reader fills minutes ahead and then idles; its next
+             * connection is where a host that signs its addresses (or replaced the session — the next episode's streams
+             * are asked for near the end) answers 401/403/404/410, and the buffer runs dry a minute or two later, inside
+             * the credits' minutes. Nothing recovered that: the quick retries skip a refusal by design. Now the add-ons are
+             * asked again for the SAME row (StallWatch.fresh: the same address, or a freshly signed twin from its add-on)
+             * and it goes on from the same second. Also tried once the quick retries are spent. Once per two minutes.
+             */
+            fun tryFreshLink(e: PlaybackException): Boolean {
+                val item = exo.currentMediaItem ?: return false
+                val cur = item.localConfiguration?.uri?.toString() ?: return false
+                if (e.errorCode !in 2000..2999) return false
+                val spent = ioRetry[0] >= 3 && ioRetry[2] == cur.hashCode().toLong()
+                if (!linkRefused(e) && !spent) return false
+                val pos = exo.currentPosition
+                val wanted = exo.playWhenReady
+                return askFresh(cur) { fresh ->
+                    if (exo.currentMediaItem?.localConfiguration?.uri?.toString() != cur) return@askFresh   // moved on meanwhile
+                    if (fresh == null) { afterFreshLink(e); return@askFresh }
+                    ioRetry[0] = 0
+                    Toasts.show("The link stopped working — picked up again on a fresh one")
+                    val next = item.buildUpon().setUri(fresh).build()
+                    if (pos > 0) exo.setMediaItem(next, pos) else exo.setMediaItem(next)
+                    exo.prepare(); exo.playWhenReady = wanted
+                }
+            }
+
+            fun afterFreshLink(e: PlaybackException) {
                 // Any failure in the LAST MINUTE of a film or episode (a host that drops the credits' last bytes, a file
                 // cut a few seconds short — the Founder, 2026-10-03: "if happens like in the last 1min of the stream"):
                 // it was watched. The ending it would have had — ticked off, Up next — not a red line or a retry.
@@ -7214,6 +7280,27 @@ private fun PlayerScreen(
                 eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
                 decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long,
             ) { videoDecoderName = decoderName }
+
+            // A load of the picture's own address refused (401/403/404/410) while minutes are still buffered: Media3 asks
+            // again every few seconds by itself, so a fresh address found now (MediaHttp.remap) is simply what its next
+            // try opens — the film never stops. Only the item's own address: a subtitle file or a licence is not the link.
+            override fun onLoadError(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                loadEventInfo: androidx.media3.exoplayer.source.LoadEventInfo,
+                mediaLoadData: androidx.media3.exoplayer.source.MediaLoadData,
+                error: java.io.IOException, wasCanceled: Boolean,
+            ) {
+                val bad = generateSequence(error as Throwable?) { it.cause }
+                    .filterIsInstance<androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException>().firstOrNull() ?: return
+                if (!linkRefusedCode(bad.responseCode)) return
+                val cur = exo.currentMediaItem?.localConfiguration?.uri?.toString() ?: return
+                if (loadEventInfo.dataSpec.uri.toString() != cur) return
+                askFresh(cur) { fresh ->
+                    if (fresh != null && fresh != cur && exo.currentMediaItem?.localConfiguration?.uri?.toString() == cur) {
+                        MediaHttp.remap = cur to fresh
+                    }
+                }
+            }
         }
         exo.addAnalyticsListener(decoderSeen)
         activePipPlayer.value = exo
@@ -7226,6 +7313,7 @@ private fun PlayerScreen(
             runCatching { Social.publishSoon(context) }   // friends see the freshly watched title
             exo.removeListener(l); exo.removeAnalyticsListener(decoderSeen); runCatching { session?.release() }; runCatching { decoders.detach() }; exo.release()
             Relay.via = null            // the next play asks again
+            MediaHttp.remap = null      // a fresh address belongs to its own play
             StreamHeaders.end(headersClaim[0])
             P2p.leave(context)          // engine off, download cleared — on its own thread, stopping it blocks
             if (activePipPlayer.value === exo) activePipPlayer.value = null

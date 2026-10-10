@@ -49,6 +49,13 @@ internal object MediaHttp {
 
     @Volatile private var ua: String? = null
 
+    /**
+     * The playing item's address → a fresh one the add-on gave for the same row, after the host refused the old one mid-play
+     * (PlayerScreen's onLoadError). Media3 re-opens the item's own address on every retry; this sends that open to the new
+     * one, so the buffer in hand plays on while the next piece comes from the fresh link. One play at a time.
+     */
+    @Volatile var remap: Pair<String, String>? = null
+
     /** "NebulaPlayer/1.55.0 (Linux;Android 14) AndroidXMedia3/1.11.0" — the shape hosts expect from a player. */
     fun userAgent(ctx: Context): String =
         ua ?: Util.getUserAgent(ctx.applicationContext, "NebulaPlayer").also { ua = it }
@@ -73,7 +80,7 @@ internal object MediaHttp {
         val patient = DefaultDataSource.Factory(ctx, httpFactory(ctx).setReadTimeoutMs(P2P_READ_MS))
         return DefaultMediaSourceFactory(ctx)
             // Play through your PC (Relay.kt) sits outside: while a TV play uses a relay every address is rewritten to it first
-            .setDataSourceFactory { ResolvingDataSource(Patient(quick.createDataSource(), patient.createDataSource()), withStreamHeaders(Relay.resolver())) }
+            .setDataSourceFactory { ResolvingDataSource(Patient(quick.createDataSource(), patient.createDataSource()), withFreshLink(withStreamHeaders(Relay.resolver()))) }
             .setDrmSessionManagerProvider(drm)
     }
 
@@ -89,6 +96,17 @@ internal object MediaHttp {
             val u = spec.uri.toString()
             if ((!u.startsWith("http://") && !u.startsWith("https://")) || P2p.isLocal(u)) return spec
             return spec.withAdditionalHeaders(headers)
+        }
+
+        override fun resolveReportedUri(uri: Uri): Uri = inner.resolveReportedUri(uri)
+    }
+
+    /** [remap] first, so the relay and the stream's headers see the address actually opened. */
+    private fun withFreshLink(inner: ResolvingDataSource.Resolver) = object : ResolvingDataSource.Resolver {
+        override fun resolveDataSpec(dataSpec: DataSpec): DataSpec {
+            val r = remap
+            val spec = if (r != null && dataSpec.uri.toString() == r.first) dataSpec.withUri(Uri.parse(r.second)) else dataSpec
+            return inner.resolveDataSpec(spec)
         }
 
         override fun resolveReportedUri(uri: Uri): Uri = inner.resolveReportedUri(uri)

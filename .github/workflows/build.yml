@@ -160,12 +160,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.90.0.apk
+          cp "$APK" Nebula-1.91.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.90.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.90.0 Nebula-1.90.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.90.0" \
-            --notes "More sports streams play: some sources answer only a player that asks for them the way their own site does, and Nebula now does that for every stream that says how. The sports add-on uses it to offer extra channels, marked India only where they play only from India. (1.89.0: a TV guide on Android TV.)"
+          gh release delete v1.91.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.91.0 Nebula-1.91.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.91.0" \
+            --notes "Films and episodes no longer stop in their last minutes: when a source stops honouring its link part-way through (a signed address that ran out, a session the host replaced), Nebula asks the add-on for the same stream again and carries on from the same second — usually before the picture even pauses. The next episode is looked up only once this one has finished loading. (1.90.0: more sports streams play.)"
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)

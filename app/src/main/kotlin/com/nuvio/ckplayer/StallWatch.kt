@@ -74,6 +74,19 @@ internal class StallWatch {
             return null
         }
 
+        /**
+         * The SAME row again, from a fresh answer of the add-ons — for a link that stopped being honoured mid-play (a
+         * signed address that ran out, a host session that was replaced): the very address when it is still listed,
+         * else the closest twin of the row that was picked ([sig], NextEp's last pick) from that row's own add-on. Never
+         * a different release: that is the swap pill's business, and the viewer's to accept.
+         */
+        fun fresh(cands: List<Pair<StreamItem, Addon>>, curUrl: String, sig: StreamSig?): Pair<StreamItem, Addon>? {
+            cands.firstOrNull { it.first.url == curUrl }?.let { return it }
+            if (sig == null) return null
+            val own = cands.filter { it.second.manifestUrl == sig.addonUrl && StreamTwin.isTwin(it.first, sig, it.second) }
+            return own.maxByOrNull { StreamTwin.score(it.first, sig, it.second) }
+        }
+
         /** "Keeps stalling · Try Nebula HD": the row's own name, short enough for a pill. */
         fun name(s: StreamItem, from: Addon): String {
             val n = StreamBadges.cleanName(s.name, from.name).ifEmpty { from.name }
