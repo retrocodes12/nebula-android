@@ -56,8 +56,10 @@ internal object MediaHttp {
     fun httpFactory(ctx: Context): DefaultHttpDataSource.Factory {
         cookies      // installed as the process default before the first request goes out
         return DefaultHttpDataSource.Factory()
-            .setUserAgent(userAgent(ctx))
-            .setDefaultRequestProperties(HEADERS)
+            // the User-Agent rides with the default headers, not setUserAgent (which Media3 applies after everything
+            // else), so a stream's own User-Agent (StreamHeaders) replaces it for that play
+            .setUserAgent(null)
+            .setDefaultRequestProperties(HEADERS + ("User-Agent" to userAgent(ctx)))
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(CONNECT_MS)
             .setReadTimeoutMs(READ_MS)
@@ -71,8 +73,25 @@ internal object MediaHttp {
         val patient = DefaultDataSource.Factory(ctx, httpFactory(ctx).setReadTimeoutMs(P2P_READ_MS))
         return DefaultMediaSourceFactory(ctx)
             // Play through your PC (Relay.kt) sits outside: while a TV play uses a relay every address is rewritten to it first
-            .setDataSourceFactory { ResolvingDataSource(Patient(quick.createDataSource(), patient.createDataSource()), Relay.resolver()) }
+            .setDataSourceFactory { ResolvingDataSource(Patient(quick.createDataSource(), patient.createDataSource()), withStreamHeaders(Relay.resolver())) }
             .setDrmSessionManagerProvider(drm)
+    }
+
+    /**
+     * The open play's own headers ([StreamHeaders.active]) on every request that still goes to the stream's side:
+     * not to the P2P engine's loopback, and not to the sharing computer once the relay has rewritten the address.
+     */
+    private fun withStreamHeaders(inner: ResolvingDataSource.Resolver) = object : ResolvingDataSource.Resolver {
+        override fun resolveDataSpec(dataSpec: DataSpec): DataSpec {
+            val spec = inner.resolveDataSpec(dataSpec)
+            val headers = StreamHeaders.active?.headers
+            if (headers.isNullOrEmpty() || spec.uri != dataSpec.uri) return spec
+            val u = spec.uri.toString()
+            if ((!u.startsWith("http://") && !u.startsWith("https://")) || P2p.isLocal(u)) return spec
+            return spec.withAdditionalHeaders(headers)
+        }
+
+        override fun resolveReportedUri(uri: Uri): Uri = inner.resolveReportedUri(uri)
     }
 
     /** The reader's client: follows redirects across hosts and protocols, shares the cookie store above. */

@@ -160,6 +160,8 @@ object Stremio {
         // Identify the Nebula app so the addon serves direct ClearKey DASH cards
         // (and skips the "Open in Nebula Player" launcher meant for other clients).
         conn.setRequestProperty("X-Nebula-Client", "android")
+        // and that it sends a stream's own request headers (StreamHeaders): the add-on offers rows that need them
+        conn.setRequestProperty("X-Nebula-Caps", "headers")
         try {
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
@@ -427,6 +429,7 @@ object Stremio {
             val text = s.optString("title").ifEmpty { s.optString("description") }
             val bh = s.optJSONObject("behaviorHints")
             val vsize = bh?.optLong("videoSize") ?: 0L
+            if (url.startsWith("http://") || url.startsWith("https://")) StreamHeaders.note(url, StreamHeaders.parse(bh))
             out.add(StreamItem(
                 s.optString("name"), text, url, subs, vsize, bh?.optString("bingeGroup").orEmpty(),
                 infoHash = if (torrent) hash else "", fileIdx = fileIdx, sources = sources,

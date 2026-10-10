@@ -6530,6 +6530,7 @@ private fun PlayerScreen(
     // so the rows changing every tick redraw the panel, not this screen
     val infoRows = remember { mutableStateOf<List<InfoRow>>(emptyList()) }
     var viaRelay by remember { mutableStateOf<Relay.Live?>(null) }             // Play through your PC: the sharing computer this play goes through
+    val headersClaim = remember { arrayOf<StreamHeaders.Active?>(null) }       // this play's own request headers (StreamHeaders)
     var subOffsetMs by remember { mutableStateOf(0L) }
     // "Pick the line you just heard" (PickLine.kt): the line list while it is up in the Subtitles panel
     var pickLine by remember { mutableStateOf<PickLineState?>(null) }
@@ -6849,6 +6850,7 @@ private fun PlayerScreen(
         val laurl = if (isMpd) licenceCache[url]?.takeIf { System.currentTimeMillis() - it.second < 1_800_000 }?.first else null
         // Play through your PC (Relay.kt, the TV only): the sharing computer, when one answers — settled before the item is set
         Relay.via = null; viaRelay = null
+        headersClaim[0] = StreamHeaders.begin(url)     // a host that answers only with its Referer gets it on every request
         if (url.startsWith("http://") || url.startsWith("https://")) {
             val l = Relay.resolve(context)
             if (l != null) { Relay.via = l; viaRelay = l }
@@ -7224,6 +7226,7 @@ private fun PlayerScreen(
             runCatching { Social.publishSoon(context) }   // friends see the freshly watched title
             exo.removeListener(l); exo.removeAnalyticsListener(decoderSeen); runCatching { session?.release() }; runCatching { decoders.detach() }; exo.release()
             Relay.via = null            // the next play asks again
+            StreamHeaders.end(headersClaim[0])
             P2p.leave(context)          // engine off, download cleared — on its own thread, stopping it blocks
             if (activePipPlayer.value === exo) activePipPlayer.value = null
             // Clears (API 31+) auto-enter so backing out of the player can't PiP the browse UI.
