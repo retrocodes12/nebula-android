@@ -251,6 +251,7 @@ import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.DecoderMode
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import androidx.media3.session.MediaSession
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.SubtitleView
 import androidx.media3.ui.TrackSelectionDialogBuilder
@@ -6512,6 +6513,7 @@ private fun PlayerScreen(
     // Speed when a video starts (Settings › Playback): a fixed rate, or the one chosen last time
     val startSpeed = remember { if (Prefs.speedDefault == "last") Prefs.lastSpeed else (Prefs.speedDefault.toFloatOrNull() ?: 1f) }
     var speedLabel by remember { mutableStateOf(speedText(startSpeed)) }
+    var fitMode by remember { mutableStateOf(Prefs.fit) }          // picture size, kept per device (Prefs.fit)
     var isFullscreen by remember { mutableStateOf(false) }
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
     var skipFlash by remember { mutableStateOf<Triple<Int, Int, Long>?>(null) } // zone (-1/+1), total secs, stamp
@@ -7847,6 +7849,25 @@ private fun PlayerScreen(
                         android.view.ViewGroup.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT),
                     )
                     overlaySubView = over
+                    // Fill makes the picture's frame larger than the screen (it is centred, its edges cut off): both subtitle
+                    // views live in that frame, so they are pulled back inside the screen by the overhang, or a 4:3 film's
+                    // lines would sit below the bottom edge
+                    val pv = this
+                    frame.addOnLayoutChangeListener { _, l, t, r, b, _, _, _, _ ->
+                        if (frame === pv) return@addOnLayoutChangeListener
+                        val ox = maxOf(0, ((r - l) - pv.width) / 2)
+                        val oy = maxOf(0, ((b - t) - pv.height) / 2)
+                        listOfNotNull(own, over).forEach { v ->
+                            if (v.paddingLeft != ox || v.paddingTop != oy) v.post { v.setPadding(ox, oy, ox, oy) }
+                        }
+                    }
+                }
+            },
+            update = { pv ->
+                pv.resizeMode = when (fitMode) {
+                    "fill" -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    "stretch" -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                    else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
                 }
             },
             modifier = Modifier.fillMaxSize()
@@ -7944,6 +7965,14 @@ private fun PlayerScreen(
             onSleep = { sleepMenuOpen = !sleepMenuOpen; subPanelOpen = false; chromeTouchedAt = System.currentTimeMillis() },
             qualityLabel = qualityLabel?.takeIf { videoQualityCount >= 1 },
             speedLabel = speedLabel,
+            fitLabel = fitName(fitMode),
+            onFitCycle = {
+                val next = when (fitMode) { "fit" -> "fill"; "fill" -> "stretch"; else -> "fit" }
+                fitMode = next
+                Prefs.setFit(context, next)
+                Toasts.show("Picture: " + fitName(next))
+                chromeTouchedAt = System.currentTimeMillis()
+            },
             partyActive = partyUi.active(),
             partyBadge = partyUi.code?.let { c -> c + " · " + partyUi.count },
             hasNext = nextEpisode != null,
@@ -8273,6 +8302,7 @@ private fun PlayerScreen(
 
 /** "1.0×" / "1.25×" — the speed as the toolbar shows it. */
 private fun speedText(v: Float): String = (if (v == 1f) "1.0" else v.toString().trimEnd('0').trimEnd('.')) + "×"
+private fun fitName(v: String): String = when (v) { "fill" -> "Fill"; "stretch" -> "Stretch"; else -> "Fit" }
 
 /**
  * What the platform's media session drives — headsets, a TV launcher's Play, the lock screen, a watch: the player,

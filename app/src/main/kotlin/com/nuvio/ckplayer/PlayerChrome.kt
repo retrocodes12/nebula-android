@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Replay30
 import androidx.compose.material.icons.filled.Replay5
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.outlined.AspectRatio
 import androidx.compose.material.icons.outlined.Audiotrack
 import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material.icons.outlined.Groups
@@ -238,6 +239,8 @@ private fun PlayerToolbar(
     onSpeedCycle: () -> Unit, onSleep: () -> Unit, onParty: () -> Unit, onInvite: () -> Unit, onReact: (String) -> Unit,
     canInvite: Boolean = true,
     iconsOnly: Boolean = false,
+    fitLabel: String? = null,
+    onFitCycle: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -258,6 +261,7 @@ private fun PlayerToolbar(
             if (showAudio) ToolItem(Icons.Outlined.Audiotrack, "Audio", iconsOnly = iconsOnly, onClick = onAudio)
             if (qualityLabel != null) ToolItem(Icons.Outlined.HighQuality, "Quality", qualityLabel, iconsOnly = iconsOnly, onClick = onQuality)
             ToolItem(Icons.Outlined.Speed, "Speed", speedLabel, iconsOnly = iconsOnly, onClick = onSpeedCycle)
+            if (fitLabel != null) ToolItem(Icons.Outlined.AspectRatio, "Picture", fitLabel, iconsOnly = iconsOnly, onClick = onFitCycle)
             ToolItem(
                 Icons.Outlined.Bedtime, "Sleep", sleepLabel, on = sleepLabel != null,
                 modifier = if (sleepFocus != null) Modifier.focusRequester(sleepFocus) else Modifier,
@@ -395,6 +399,8 @@ internal fun TitleCardChrome(
     onAudio: () -> Unit,
     onQuality: () -> Unit,
     onSpeedCycle: () -> Unit,
+    fitLabel: String? = null,           // picture size (Fit / Fill / Stretch); a press steps to the next
+    onFitCycle: () -> Unit = {},
     onPip: () -> Unit,
     onFullscreen: () -> Unit,
     dimTitle: Boolean = false,          // the pause board is saying it already
@@ -509,6 +515,7 @@ internal fun TitleCardChrome(
                     onSpeedCycle = onSpeedCycle, onSleep = onSleep, onParty = onParty, onInvite = onInvite, onReact = onReact,
                     canInvite = canInvite,
                     iconsOnly = iconsOnly,
+                    fitLabel = fitLabel, onFitCycle = onFitCycle,
                     modifier = Modifier.padding(top = 10.dp),
                 )
             }

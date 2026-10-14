@@ -121,6 +121,7 @@ object Prefs {
     var seekStep by mutableStateOf(10); private set               // seconds: tap zones, D-pad, the transport
     var speedDefault by mutableStateOf("1"); private set          // 1 / 1.25 / 1.5 / last
     var lastSpeed by mutableStateOf(1.0f); private set
+    var fit by mutableStateOf("fit"); private set                 // picture size: fit / fill (crop) / stretch — this device only
     var quality by mutableStateOf("auto"); private set            // auto / high (start high) / saver (≤720p)
     var maxRes by mutableStateOf(0); private set                  // 0 = no cap, else 720 / 1080 / 1440
     var buffer by mutableStateOf(0); private set                  // seconds loaded ahead: 0 = the engine's own 50 s, else 60 / 120 / 240
@@ -200,6 +201,7 @@ object Prefs {
         seekStep = p.getInt("pref_seekstep", 10)
         speedDefault = p.getString("pref_speeddefault", "1") ?: "1"
         lastSpeed = p.getFloat("pref_lastspeed", 1.0f)
+        fit = (p.getString("pref_fit", "fit") ?: "fit").takeIf { it == "fill" || it == "stretch" } ?: "fit"
         quality = p.getString("pref_quality", "auto") ?: "auto"
         maxRes = p.getInt("pref_maxres", 0)
         buffer = p.getInt("pref_buffer", 0)
@@ -276,6 +278,7 @@ object Prefs {
     fun setSeekStep(ctx: Context, v: Int) { seekStep = v; edit(ctx).putInt("pref_seekstep", v).apply() }
     fun setSpeedDefault(ctx: Context, v: String) { speedDefault = v; edit(ctx).putString("pref_speeddefault", v).apply() }
     fun setLastSpeed(ctx: Context, v: Float) { lastSpeed = v; edit(ctx).putFloat("pref_lastspeed", v).apply() }
+    fun setFit(ctx: Context, v: String) { fit = v; edit(ctx).putString("pref_fit", v).apply() }
     fun setQuality(ctx: Context, v: String) { quality = v; edit(ctx).putString("pref_quality", v).apply() }
     fun setMaxRes(ctx: Context, v: Int) { maxRes = v; edit(ctx).putInt("pref_maxres", v).apply() }
     fun setBuffer(ctx: Context, v: Int) { buffer = v; edit(ctx).putInt("pref_buffer", v).apply() }
