@@ -6,6 +6,13 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Download + install app updates from within the app -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Convert sound for your TV (SoundShare.kt): a foreground service keeps the converter alive with the screen off,
+         awake while it converts, on Wi-Fi at full speed; its notification turns it off -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
     <!-- Run on both phones and Android TV -->
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
@@ -117,5 +124,9 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+        <service
+            android:name=".SoundShareService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

@@ -417,6 +417,7 @@ class MainActivity : ComponentActivity() {
         Prefs.load(this)
         Cloud.load(this)
         Support.restore(this)
+        SoundShare.restore(this)             // Convert sound for your TV, back on when it was left on (a phone)
         // a Plus-level app icon whose perk lapsed goes back to Classic (AppIcons.kt; nothing is written otherwise)
         AppIcons.enforce(this)
         Social.load(this)
@@ -4701,7 +4702,9 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
                 listOf("0" to "Auto", "60" to "1 min", "120" to "2 min", "240" to "4 min"), Prefs.buffer.toString(),
             ) { Prefs.setBuffer(ctx, it.toInt()) }
             // the connection test (1.88.0, SpeedTestUi.kt): its answer is the connection "may stall here" goes by
-            ConnectionSpeedRow(divider = Account.isTv(ctx))
+            ConnectionSpeedRow(divider = Account.isTv(ctx) || SoundShare.available(ctx))
+            // Convert sound for your TV (SoundShare.kt): a phone converts DTS for an LG on the same network
+            if (!Account.isTv(ctx)) SoundShareRow()
             // Play through your PC (Relay.kt): the TV only — a computer on the network holds the video for it
             if (Account.isTv(ctx)) {
                 LaunchedEffect(Prefs.relay) { Relay.refresh(ctx) }

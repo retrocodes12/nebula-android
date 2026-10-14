@@ -29,6 +29,19 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
+      # Convert sound for your TV (SoundShare.kt): the small FFmpeg it runs (DTS in, Dolby Digital Plus out), built from
+      # source by scripts/build-ffmpeg.sh once per change of that script and kept in the cache
+      - name: Cache the sound converter
+        id: ffcache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: app/src/main/jniLibs/*/libnebulaff.so
+          key: nebulaff-${{ hashFiles('scripts/build-ffmpeg.sh') }}
+
+      - name: Build the sound converter
+        if: steps.ffcache.outputs.cache-hit != 'true'
+        run: scripts/build-ffmpeg.sh
+
       - name: Assemble debug
         run: gradle assembleDebug --no-daemon --stacktrace
 
@@ -43,6 +56,15 @@ jobs:
           N=$(cat "$DIR"/*.xml 2>/dev/null | grep -o '<testsuite [^>]*' | sed -n 's/.* tests="\([0-9]*\)".*/\1/p' | awk '{s+=$1} END {print s+0}')
           echo "JVM unit tests in the reports: $N"
           [ "$N" -gt 0 ] || { echo "::error::no unit tests ran"; exit 1; }
+
+      # a release without the converter would offer a switch that does nothing
+      - name: Sound converter is packaged
+        run: |
+          APK=$(find app/build/outputs/apk -name '*.apk' | head -1)
+          for abi in arm64-v8a armeabi-v7a; do
+            unzip -l "$APK" | grep -q "lib/$abi/libnebulaff.so" \
+              || { echo "::error::libnebulaff.so missing for $abi"; exit 1; }
+          done
 
       # P2P streams are dead on arrival if libtorrent's native library misses the APK — it comes
       # from a plain jar's lib/<abi>/ rather than an AAR, which is easy to lose in a dependency
