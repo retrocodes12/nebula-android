@@ -182,12 +182,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.92.0.apk
+          cp "$APK" Nebula-1.93.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.92.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.92.0 Nebula-1.92.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.92.0" \
-            --notes "Picture size: a Picture button in the player steps through Fit (the whole picture), Fill (covers the screen and trims the edges) and Stretch (fills the screen and changes its shape), and remembers your choice on this device. (1.91.0: films no longer stop in their last minutes.)"
+          gh release delete v1.93.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.93.0 Nebula-1.93.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.93.0" \
+            --notes "Convert sound for your TV: an LG TV plays DTS films without sound. Turn this on (Settings, Playback) and your TV sends this phone the film's sound and plays the sound it sends back. The picture never passes through the phone. Both signed in to the same profile, on the same Wi-Fi. (1.92.0: picture size in the player.)"
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
