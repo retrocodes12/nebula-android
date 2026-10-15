@@ -32,11 +32,14 @@ object Library {
 
     /** The raw document, tombstones included — what sync pushes and merges. */
     internal fun all(ctx: Context): JSONObject =
-        runCatching { JSONObject(prefs(ctx).getString(KEY, "{}") ?: "{}") }.getOrDefault(JSONObject())
+        runCatching { JSONObject(prefs(ctx).getString(Viewers.local(KEY), "{}") ?: "{}") }.getOrDefault(JSONObject())   // this profile's list
 
     internal fun replaceAll(ctx: Context, o: JSONObject) {
-        prefs(ctx).edit().putString(KEY, o.toString()).apply()
+        prefs(ctx).edit().putString(Viewers.local(KEY), o.toString()).apply()
     }
+
+    /** Nothing is held in memory: the next read is the other profile's list (Viewers.switchTo). */
+    fun reset() {}
 
     private fun persist(ctx: Context, o: JSONObject) {
         // tombstones purge only under space pressure, and old ones first — a

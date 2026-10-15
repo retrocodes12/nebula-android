@@ -416,6 +416,7 @@ class MainActivity : ComponentActivity() {
         Account.isTv(this)                  // read once for the process (Account.tvKnown, the TV text sizes)
         Prefs.load(this)
         Cloud.load(this)
+        Viewers.load(this)                   // who's watching: this device's profile, and whether to ask at launch
         Support.restore(this)
         SoundShare.restore(this)             // Convert sound for your TV, back on when it was left on (a phone)
         // a Plus-level app icon whose perk lapsed goes back to Classic (AppIcons.kt; nothing is written otherwise)
@@ -1159,6 +1160,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                     }
                     if ("progress" in keys) homeState.invalidateContinue()
                     if ("library" in keys) libraryVersion++
+                    if ("viewers" in keys) { homeState.invalidateContinue(); libraryVersion++ }   // the second profile removed elsewhere
                 }
                 Cloud.onSignedOut = {
                     Toasts.show("This device was signed out of your profile. Nothing on it was deleted.")
@@ -1646,6 +1648,8 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                     }
                 }
                 // outside the screen Box so it covers the nav bar too
+                // two profiles: who's watching? (over everything, once the app is up)
+                if (Viewers.asking && !booting) WhoPicker()
                 AnimatedVisibility(visible = booting, enter = fadeIn(tween(0)), exit = fadeOut(tween(320))) {
                     BootScreen()
                 }
@@ -4287,6 +4291,7 @@ private fun SettingsScreen(
             )
         }
         ProfileCard(onProfile)
+        WhoSettings()                        // two profiles on the account (Viewers.kt)
         SettingsHeader("GENERAL", "How Nebula looks, plays and connects")
         SettingsGroup {
             SettingsRow(Icons.Filled.Palette, "Appearance", "Accent, surface, text, font and cards", true, onLayout)

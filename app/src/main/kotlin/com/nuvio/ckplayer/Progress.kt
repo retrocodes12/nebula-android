@@ -51,13 +51,16 @@ object Progress {
 
     fun key(type: String, id: String) = "$type:$id"
 
+    /** The other profile's history from now on (Viewers.switchTo): read again on the next ask, and every screen redraws. */
+    fun reset() { cache = null; syncVersion++ }
+
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("ckplayer", Context.MODE_PRIVATE)
 
     private fun load(ctx: Context): MutableMap<String, ProgressRec> {
         cache?.let { return it }
         val m = LinkedHashMap<String, ProgressRec>()
         runCatching {
-            val o = JSONObject(prefs(ctx).getString(KEY, "{}") ?: "{}")
+            val o = JSONObject(prefs(ctx).getString(Viewers.local(KEY), "{}") ?: "{}")   // this profile's history (Viewers.kt)
             for (k in o.keys()) {
                 val r = o.optJSONObject(k) ?: continue
                 m[k] = ProgressRec(
@@ -107,6 +110,7 @@ object Progress {
         // hundred records on the main thread at every autosave of a playing film showed up as dropped frames. The
         // records are immutable, so a copy of the map is all that crosses over.
         val snap = LinkedHashMap(m)
+        val key = Viewers.local(KEY)                         // the profile these records belong to, fixed now
         val my = writeGen.incrementAndGet()
         val p = prefs(ctx)
         writer.execute {
@@ -122,7 +126,7 @@ object Progress {
                         .put("done", r.done).put("dismissed", r.dismissed).put("hand", r.hand).put("at", r.at)
                 )
             }
-            p.edit().putString(KEY, o.toString()).apply()
+            p.edit().putString(key, o.toString()).apply()
         }
     }
 

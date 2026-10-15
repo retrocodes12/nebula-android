@@ -42,7 +42,7 @@ import java.util.concurrent.TimeUnit
 object Cloud {
     private const val BASE = "https://play.rifflehq.in/cloud"
     private const val PREFS = "ckplayer"
-    private val SYNC_KEYS = listOf("addons", "progress", "library", "sub_style", "ratings", "seekr")
+    private val SYNC_KEYS = listOf("addons", "progress", "library", "sub_style", "ratings", "seekr", "viewers")
     private val JSON_MT = "application/json".toMediaType()
 
     private val http = OkHttpClient.Builder()
@@ -279,8 +279,10 @@ object Cloud {
     fun noteChanged(ctx: Context, key: String) {
         if (!linked(ctx) || applying) return
         // already marked: no rewrite (every write rewrites the whole settings file, and playback's autosave lands here)
+        // a profile's history is marked under its own name (Viewers.kt): progress_b is not progress
         val d = jsonPref(ctx, "cloud_dirty")
-        if (!d.has(key)) putJsonPref(ctx, "cloud_dirty", d.put(key, 1))
+        val wk = Viewers.local(key)
+        if (!d.has(wk)) putJsonPref(ctx, "cloud_dirty", d.put(wk, 1))
         val app = ctx.applicationContext
         pushJobs[key]?.cancel()
         pushJobs[key] = scope.launch {
@@ -294,7 +296,9 @@ object Cloud {
         if (!linked(ctx)) return
         val app = ctx.applicationContext
         val d = jsonPref(ctx, "cloud_dirty")
-        for (k in d.keys()) {
+        for (wk in d.keys()) {
+            val k = wk.removeSuffix("_b")
+            if (Viewers.local(k) != wk) continue          // the other profile's: it goes up when that profile is on
             pushJobs[k]?.cancel()
             scope.launch { pushKey(app, k) }
         }
@@ -305,7 +309,20 @@ object Cloud {
         if (!linked(ctx)) return
         val app = ctx.applicationContext
         val d = jsonPref(ctx, "cloud_dirty")
-        for (k in d.keys()) { pushJobs[k]?.cancel(); pushKey(app, k) }
+        for (wk in d.keys().asSequence().toList()) {
+            val k = wk.removeSuffix("_b")
+            if (Viewers.local(k) == wk) { pushJobs[k]?.cancel(); pushKey(app, k) }
+        }
+    }
+
+    /** Before a switch of profile: this profile's history goes up under its own names now. */
+    suspend fun flushProfile(ctx: Context) {
+        if (!linked(ctx)) return
+        val app = ctx.applicationContext
+        for (k in listOf("progress", "library")) {
+            pushJobs[k]?.cancel()
+            if (jsonPref(ctx, "cloud_dirty").has(Viewers.local(k))) pushKey(app, k)
+        }
     }
 
     private suspend fun pushKey(ctx: Context, key: String) {
@@ -313,13 +330,16 @@ object Cloud {
         // The stores behind the docs (Progress above all) are plain maps the main thread writes, and this runs on IO
         // from noteChanged/flushNow: copying one mid-write threw ConcurrentModificationException and took the app
         // down. The doc is read on Main; the upload stays on IO.
-        val v = runCatching { withContext(Dispatchers.Main) { docFor(ctx, key) } }
+        // the doc and the name it goes under are read together: a profile switched in between must not put one
+        // profile's history under the other's name
+        val (wk, v) = runCatching { withContext(Dispatchers.Main) { Viewers.local(key) to docFor(ctx, key) } }
             .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
             .getOrNull() ?: return
+        if (v == null) return
         runCatching {
-            val r = api(ctx, "PUT", "/v1/kv/$key", JSONObject().put("v", v))
-            putJsonPref(ctx, "cloud_revs", jsonPref(ctx, "cloud_revs").put(key, r.getInt("rev")))
-            val d = jsonPref(ctx, "cloud_dirty"); d.remove(key)
+            val r = api(ctx, "PUT", "/v1/kv/$wk", JSONObject().put("v", v))
+            putJsonPref(ctx, "cloud_revs", jsonPref(ctx, "cloud_revs").put(wk, r.getInt("rev")))
+            val d = jsonPref(ctx, "cloud_dirty"); d.remove(wk)
             putJsonPref(ctx, "cloud_dirty", d)
         }
     }
@@ -331,6 +351,7 @@ object Cloud {
         "ratings" -> Ratings.all(ctx).length() > 0
         "sub_style" -> SubStyle.at(ctx) > 0
         "seekr" -> Seekr.at(ctx) > 0          // a disconnect ("" key) is content too: it must reach the others
+        "viewers" -> Viewers.doc(ctx).optLong("at") > 0
         else -> false
     }
 
@@ -347,25 +368,27 @@ object Cloud {
             val keys = api(ctx, "GET", "/v1/kv", null).optJSONObject("keys") ?: JSONObject()
             val revs = jsonPref(ctx, "cloud_revs")
             for (key in SYNC_KEYS) {
-                val meta = keys.optJSONObject(key)
+                val wk = Viewers.local(key)                 // this profile's copy of a per-profile key
+                val meta = keys.optJSONObject(wk)
                 if (meta == null) {
                     if (hasContent(ctx, key)) pushKey(ctx, key)
                     continue
                 }
-                if (revs.optInt(key, -1) == meta.optInt("rev")) {
-                    if (jsonPref(ctx, "cloud_dirty").has(key)) pushKey(ctx, key)
+                if (revs.optInt(wk, -1) == meta.optInt("rev")) {
+                    if (jsonPref(ctx, "cloud_dirty").has(wk)) pushKey(ctx, key)
                     continue
                 }
-                val rec = runCatching { api(ctx, "GET", "/v1/kv/$key", null) }.getOrNull() ?: continue
+                val rec = runCatching { api(ctx, "GET", "/v1/kv/$wk", null) }.getOrNull() ?: continue
                 // the doc is read, and the progress records built, off the main thread; only the merge into the
                 // stores (which the main thread owns) runs here
                 val remote = withContext(Dispatchers.Default) { runCatching { JSONObject(rec.getString("v")) }.getOrNull() } ?: continue
                 val wire = if (key == "progress") withContext(Dispatchers.Default) { progressWire(remote) } else null
+                if (Viewers.local(key) != wk) continue       // (the profile changed while this was asked)
                 applying = true
                 val (changed, localNewer) = try {
                     if (wire != null) applyProgress(ctx, wire) else merge(ctx, key, remote)
                 } finally { applying = false }
-                putJsonPref(ctx, "cloud_revs", jsonPref(ctx, "cloud_revs").put(key, rec.optInt("rev")))
+                putJsonPref(ctx, "cloud_revs", jsonPref(ctx, "cloud_revs").put(wk, rec.optInt("rev")))
                 if (changed) applied.add(key)
                 if (localNewer) pushKey(ctx, key)
             }
@@ -382,6 +405,7 @@ object Cloud {
         "ratings" -> mergeRatings(ctx, remote)
         "sub_style" -> mergeSubStyle(ctx, remote)
         "seekr" -> Seekr.merge(ctx, remote)
+        "viewers" -> Viewers.merge(ctx, remote)
         else -> false to false
     }
 
@@ -433,6 +457,7 @@ object Cloud {
             JSONObject().put("style", style).put("at", SubStyle.at(ctx)).toString()
         }
         "seekr" -> Seekr.doc(ctx)
+        "viewers" -> Viewers.doc(ctx).toString()
         else -> null
     }
 
