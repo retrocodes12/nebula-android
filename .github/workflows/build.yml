@@ -182,12 +182,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.94.0.apk
+          cp "$APK" Nebula-1.94.1.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.94.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.94.0 Nebula-1.94.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.94.0" \
-            --notes "Who's watching: an account can hold two profiles, each with its own Continue Watching, resume points and My List; add-ons and settings stay shared. Add one in Settings; with two, Nebula asks who's watching when it opens. (1.93.0: convert sound for your TV.)"
+          gh release delete v1.94.1 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.94.1 Nebula-1.94.1.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.94.1" \
+            --notes "Home says when its rows are still loading or could not be reached, even with Continue watching on screen (Retry), and a card whose picture does not arrive shows its initials instead of black. (1.94.0: who's watching, two profiles per account.)"
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
