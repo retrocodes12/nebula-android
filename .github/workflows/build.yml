@@ -182,12 +182,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.95.0.apk
+          cp "$APK" Nebula-1.96.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.95.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.95.0 Nebula-1.95.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.95.0" \
-            --notes "Who's watching has a new look: big round profiles with their names, and Manage Profiles to edit a profile's name and colour, add a second profile or remove it. Settings opens the same picker. (1.94.1: Home says when its rows are loading or could not be reached.)"
+          gh release delete v1.96.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.96.0 Nebula-1.96.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.96.0" \
+            --notes "Each who's-watching profile now keeps its own add-ons. The second starts from a copy of the first's, or from the list it already has on your account. (1.95.0: the new who's-watching picker.)"
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
