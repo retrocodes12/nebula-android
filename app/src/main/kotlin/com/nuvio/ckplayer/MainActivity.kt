@@ -1173,6 +1173,9 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 Account.boot(ctx)            // pre-profile installs trade the master secret for a device token
                 AppIcons.enforce(ctx)        // …and the profile just re-read may have lost the Plus level
                 Support.load(ctx)            // is there a link to show, and who is on the wall
+                // launched on the second profile with no add-ons of its own here yet (an update from shared add-ons):
+                // decided before the first pull, as a switch does (Viewers.prepareAddons)
+                if (Viewers.prepareAddons(ctx, Viewers.current)) Cloud.onApplied?.invoke(setOf("addons"))
                 Cloud.pullAll(ctx)
                 while (true) { delay(300_000); Cloud.pullAll(ctx) }
             }

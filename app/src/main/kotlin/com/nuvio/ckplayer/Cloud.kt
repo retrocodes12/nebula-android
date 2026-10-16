@@ -356,6 +356,20 @@ object Cloud {
         else -> false
     }
 
+    /** The doc names the cloud holds for this account (GET /v1/kv), or null: signed out, or no answer. */
+    internal suspend fun remoteKeys(ctx: Context): Set<String>? {
+        if (!linked(ctx)) return null
+        return runCatching { api(ctx, "GET", "/v1/kv", null, timeoutMs = 8_000).optJSONObject("keys")?.keys()?.asSequence()?.toSet() ?: emptySet() }
+            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+            .getOrNull()
+    }
+
+    /** Forget the rev this device last saw of a doc, so the next pull reads it again. */
+    internal fun forgetRev(ctx: Context, wk: String) {
+        val r = jsonPref(ctx, "cloud_revs")
+        if (r.has(wk)) { r.remove(wk); putJsonPref(ctx, "cloud_revs", r) }
+    }
+
     // ---------- pull + merge ----------
     @Volatile private var applying = false
 

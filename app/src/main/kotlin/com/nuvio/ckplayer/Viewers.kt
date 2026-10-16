@@ -85,28 +85,37 @@ object Viewers {
     fun load(ctx: Context) {
         current = if (prefs(ctx).getString("viewer", "a") == "b") "b" else "a"
         if (current == "b" && list(ctx).size < 2) setCurrent(ctx, "a")
-        seedAddons(ctx)
         asking = list(ctx).size == 2
     }
 
-    /** The second profile's first use of add-ons on this device (a switch, or a launch on it after an update from when
-        add-ons were shared): it starts as a copy of the first's list AND of its stamps, the first's own times — so a
-        removal another device made in "addons_b" since is newer and still wins the merge. An empty first list is not
-        copied: the second stays empty. */
-    private fun seedAddons(ctx: Context) {
-        if (current != "b") return
+    /** The second profile's first use of add-ons on this device (a switch to it, or a launch on it after an update from
+        when add-ons were shared), decided BEFORE its pull. The cloud is asked first: if the account already holds
+        "addons_b" (made on another device), the second starts empty here and the pull adopts that list as it is — a
+        copy of the first's would leak the first's add-ons into it. Otherwise (no "addons_b", signed out, or no answer)
+        it starts as a copy of the first's list AND its stamps, the first's own times, so a removal synced later still
+        wins the merge; an empty first list is not copied. True when the second's store was written. */
+    suspend fun prepareAddons(ctx: Context, viewer: String): Boolean {
+        if (viewer != "b") return false
         val p = prefs(ctx)
-        val (list, sync) = addonSeed(p.contains(local("addons", "b")), p.getString("addons", null), p.getString("addons_sync", null)) ?: return
-        val e = p.edit().putString(local("addons", "b"), list)
+        val wk = local("addons", "b")
+        if (p.contains(wk)) return false
+        val inCloud = Cloud.remoteKeys(ctx)?.contains(wk) == true
+        if (p.contains(wk)) return false                      // (a pull wrote it while the cloud was asked)
+        val (list, sync) = addonStart(false, inCloud, p.getString("addons", null), p.getString("addons_sync", null)) ?: return false
+        val e = p.edit().putString(wk, list)
         if (sync != null) e.putString(local("addons_sync", "b"), sync)
         e.apply()
+        if (inCloud) Cloud.forgetRev(ctx, wk)                 // the pull must fetch it, whatever this device last saw
+        return true
     }
 
-    /** What to seed the second profile's add-ons with (list, stamps), or null: it has a store already, or the first's
-        list is empty or unreadable. Pure, for the tests. */
-    internal fun addonSeed(bHas: Boolean, aList: String?, aSync: String?): Pair<String, String?>? {
-        if (bHas || aList == null) return null
-        if (runCatching { JSONArray(aList).length() }.getOrDefault(0) == 0) return null
+    /** How the second profile's add-ons start on this device (list, stamps), or null to leave them as they are: it has
+        a store already; the cloud has its own list → empty, for the pull to fill; else a copy of the first's (null when
+        that is empty or unreadable). Pure, for the tests. */
+    internal fun addonStart(bHas: Boolean, cloudHasB: Boolean, aList: String?, aSync: String?): Pair<String, String?>? {
+        if (bHas) return null
+        if (cloudHasB) return "[]" to "{}"
+        if (aList == null || runCatching { JSONArray(aList).length() }.getOrDefault(0) == 0) return null
         return aList to aSync?.takeIf { runCatching { JSONObject(it) }.isSuccess }
     }
 
@@ -163,8 +172,8 @@ object Viewers {
         asking = false
         if (to == current) return
         Cloud.flushProfile(ctx)
+        prepareAddons(ctx, to)                                 // before the pull below, and before the list is read
         setCurrent(ctx, to)
-        seedAddons(ctx)
         Progress.reset()
         Library.reset()
         // this device's copy at once (Home, Search, the Guide, the add-ons screen re-read the list); the pull's own
