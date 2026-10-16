@@ -2186,15 +2186,16 @@ internal fun MetaCard(
                 contentAlignment = Alignment.Center,
             ) {
                 val art = if (wide) (m.background ?: m.poster) else m.poster
+                // the initials sit UNDER the picture: one that is slow or never arrives (offline, a dead host) left
+                // a black card with nothing on it
+                Text(
+                    m.name.filter { it.isLetterOrDigit() }.take(2).uppercase().ifEmpty { "••" },
+                    color = Color(0xFF3A3A45), fontSize = 22.sp, fontWeight = FontWeight.Black,
+                )
                 if (art != null) {
                     AsyncImage(
                         model = art, contentDescription = m.name,
                         contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
-                    )
-                } else {
-                    Text(
-                        m.name.filter { it.isLetterOrDigit() }.take(2).uppercase().ifEmpty { "••" },
-                        color = Color(0xFF3A3A45), fontSize = 22.sp, fontWeight = FontWeight.Black,
                     )
                 }
                 if (Prefs.ratings) m.imdbRating?.let {
@@ -2262,18 +2263,18 @@ internal fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick
                 .background(SurfaceC)
                 .border(if (ring) 2.dp else 1.dp, if (ring) Color.White else Color(0x14FFFFFF), shape),
         ) {
+            // initials under the picture, so a picture that never arrives leaves a named card, not a black one
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    r.name.filter { it.isLetterOrDigit() }.take(2).uppercase().ifEmpty { "••" },
+                    color = Color(0xFF3A3A45), fontSize = 22.sp, fontWeight = FontWeight.Black,
+                )
+            }
             if (r.poster != null) {
                 AsyncImage(
                     model = r.poster, contentDescription = r.name,
                     contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
                 )
-            } else {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        r.name.filter { it.isLetterOrDigit() }.take(2).uppercase().ifEmpty { "••" },
-                        color = Color(0xFF3A3A45), fontSize = 22.sp, fontWeight = FontWeight.Black,
-                    )
-                }
             }
             Box(Modifier.matchParentSize().background(Brush.verticalGradient(
                 0f to Color(0x00000000), 0.4f to Color(0x33000000), 1f to Color(0xE6000000))))
@@ -2329,12 +2330,13 @@ private fun ContinuePosterCard(
         Column(Modifier.padding(2.dp)) {
             Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).outerRing(ring, shape, width = 2.dp, gap = 0.dp)
                 .clip(shape).background(SurfaceC).border(1.dp, Color(0x0FFFFFFF), shape)) {
-                if (r.poster != null) AsyncImage(
-                    model = r.poster, contentDescription = r.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
-                ) else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(r.name.filter { it.isLetterOrDigit() }.take(2).uppercase().ifEmpty { "••" },
                         color = Color(0xFF3A3A45), fontSize = 22.sp, fontWeight = FontWeight.Black)
                 }
+                if (r.poster != null) AsyncImage(
+                    model = r.poster, contentDescription = r.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
+                )
                 if (left > 0) Text(
                     fmtLeft(left), color = Ink, fontSize = tinySp(10f), fontWeight = FontWeight.SemiBold, fontFamily = Sans, maxLines = 1,
                     modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
@@ -3645,6 +3647,23 @@ private fun HomeScreen(
                             }
                         }
                     }
+                }
+                // Continue watching paints from local storage at once; the add-ons' rows may still be on their way, or
+                // none may have answered. Both said nothing here: Home was a lone Continue watching row over black (the
+                // shapes and the Retry showed only when there was nothing to continue). A Home with every row switched
+                // off on purpose stays quiet.
+                if (st.rows.isEmpty() && !(st.hidden > 0 && st.wanted == 0)) item(key = "rows-state", contentType = "rows-state") {
+                    if (st.loading) Column(Modifier.padding(horizontal = 16.dp)) {
+                        repeat(2) {
+                            Box(Modifier.padding(top = 22.dp, bottom = 10.dp).width(160.dp).height(18.dp)
+                                .skeleton(RoundedCornerShape(9.dp)))
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                repeat(5) {
+                                    Box(Modifier.width(124.dp).aspectRatio(2f / 3f).skeleton(RoundedCornerShape(12.dp)))
+                                }
+                            }
+                        }
+                    } else if (st.builtAt > 0) Box(Modifier.padding(top = 30.dp)) { HomeNoRows(st, onCustomise) }
                 }
                 itemsIndexed(st.rows, key = { _, row -> row.addon.manifestUrl + "/" + row.catalog.type + "/" + row.catalog.id }, contentType = { _, _ -> "row" }) { ri, r ->
                     val rowKey = r.addon.manifestUrl + "/" + r.catalog.type + "/" + r.catalog.id
