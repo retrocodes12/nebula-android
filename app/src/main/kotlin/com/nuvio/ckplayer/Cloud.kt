@@ -32,7 +32,8 @@ import java.util.concurrent.TimeUnit
  * handled here and only here:
  *   - positions/durations travel in SECONDS (web-style); Android stores ms.
  *   - the add-on list carries no timestamps locally, so this layer keeps its
- *     own added/removed stamps (prefs "addons_sync"), exactly like the web's.
+ *     own added/removed stamps (prefs "addons_sync"), exactly like the web's —
+ *     per profile, like the list itself ("addons_sync_b" beside "addons_b").
  *
  * Installs from before profiles hold a group master secret from a link code;
  * [Account.boot] trades it for a device token and the device shows as "legacy"
@@ -315,11 +316,11 @@ object Cloud {
         }
     }
 
-    /** Before a switch of profile: this profile's history goes up under its own names now. */
+    /** Before a switch of profile: this profile's history and add-ons go up under their own names now. */
     suspend fun flushProfile(ctx: Context) {
         if (!linked(ctx)) return
         val app = ctx.applicationContext
-        for (k in listOf("progress", "library")) {
+        for (k in listOf("progress", "library", "addons")) {
             pushJobs[k]?.cancel()
             if (jsonPref(ctx, "cloud_dirty").has(Viewers.local(k))) pushKey(app, k)
         }
@@ -424,7 +425,7 @@ object Cloud {
                     .put("name", a.name).put("base", a.base)
                     .put("logo", a.logo ?: "").put("at", at.optLong(a.manifestUrl)))
             }
-            if (stamped) { s.put("at", at); putJsonPref(ctx, "addons_sync", s) }
+            if (stamped) { s.put("at", at); putJsonPref(ctx, syncPref(), s) }
             // The list is keyed by URL and so carries no order of its own — rank
             // travels separately, with its own stamp.
             val order = JSONArray()
@@ -461,8 +462,11 @@ object Cloud {
         else -> null
     }
 
+    /** The add-on stamps of the profile this device is on (Viewers.kt). */
+    private fun syncPref() = Viewers.local("addons_sync")
+
     internal fun addonsSync(ctx: Context): JSONObject {
-        val s = jsonPref(ctx, "addons_sync")
+        val s = jsonPref(ctx, syncPref())
         if (!s.has("at")) s.put("at", JSONObject())
         if (!s.has("removed")) s.put("removed", JSONObject())
         return s
@@ -472,14 +476,14 @@ object Cloud {
     fun stampSeed(ctx: Context, url: String) {
         val s = addonsSync(ctx)
         s.getJSONObject("at").put(url, 1L)
-        prefs(ctx).edit().putString("addons_sync", s.toString()).apply()
+        prefs(ctx).edit().putString(syncPref(), s.toString()).apply()
     }
 
     /** Stamp a deliberate reorder so the newest ranking wins across devices. */
     fun noteAddonOrder(ctx: Context) {
         val s = addonsSync(ctx)
         s.put("orderAt", System.currentTimeMillis())
-        putJsonPref(ctx, "addons_sync", s)
+        putJsonPref(ctx, syncPref(), s)
     }
 
     /** Diff hook run by saveAddons: stamp additions, tombstone removals. */
@@ -492,7 +496,7 @@ object Cloud {
         val nx = next.map { it.manifestUrl }.toSet()
         next.forEach { if (it.manifestUrl !in pv) { at.put(it.manifestUrl, now); removed.remove(it.manifestUrl) } }
         prev.forEach { if (it.manifestUrl !in nx) { removed.put(it.manifestUrl, now); at.remove(it.manifestUrl) } }
-        putJsonPref(ctx, "addons_sync", s)
+        putJsonPref(ctx, syncPref(), s)
     }
 
     private fun mergeAddons(ctx: Context, remote: JSONObject): Pair<Boolean, Boolean> {
@@ -546,7 +550,7 @@ object Cloud {
             s.put("orderAt", roAt)
             if (next != arr.toList()) { arr.clear(); arr.addAll(next); changed = true }
         } else if (s.optLong("orderAt") > roAt) localNewer = true
-        putJsonPref(ctx, "addons_sync", s)
+        putJsonPref(ctx, syncPref(), s)
         if (changed) saveAddonsRaw(ctx, arr)
         return changed to localNewer
     }

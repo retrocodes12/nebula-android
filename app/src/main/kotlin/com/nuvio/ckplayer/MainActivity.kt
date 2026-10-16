@@ -911,7 +911,8 @@ private val partyUi = PartyUi()
 // ---------- add-on persistence ----------
 private const val PREFS = "ckplayer"
 internal fun loadAddons(ctx: Context): List<Addon> {
-    val raw = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("addons", "[]") ?: "[]"
+    // the profile this device is on (Viewers.kt): each keeps its own list
+    val raw = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(Viewers.local("addons"), "[]") ?: "[]"
     return runCatching {
         val arr = JSONArray(raw)
         (0 until arr.length()).map {
@@ -981,7 +982,7 @@ internal fun saveAddonsRaw(ctx: Context, list: List<Addon>) {
                 .put("base", it.base).put("logo", it.logo ?: "").put("off", !it.enabled)
         )
     }
-    ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("addons", arr.toString()).apply()
+    ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(Viewers.local("addons"), arr.toString()).apply()
 }
 
 private fun saveAddons(ctx: Context, list: List<Addon>) {
@@ -1153,8 +1154,12 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
             var libraryVersion by remember { mutableStateOf(0) }
             var addonsVersion by remember { mutableStateOf(0) }
             LaunchedEffect(Unit) {
+                // each profile keeps its own add-ons: a switch (here or a removal synced from elsewhere) is a new list
+                var seenViewer = Viewers.current
                 Cloud.onApplied = { keys ->
-                    if ("addons" in keys) {
+                    val moved = Viewers.current != seenViewer
+                    seenViewer = Viewers.current
+                    if ("addons" in keys || moved) {
                         manifestCache.clear(); homeState.invalidate(); searchState.discover.optionsLoaded = false; addonsVersion++
                         if (Account.isTv(ctx)) Guide.refresh(ctx, force = true)
                     }

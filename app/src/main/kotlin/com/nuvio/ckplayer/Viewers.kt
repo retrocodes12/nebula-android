@@ -61,14 +61,15 @@ import org.json.JSONObject
 
 /**
  * Who's watching (1.94.0; the shared player's `viewers`, the same wire). An account holds up to two profiles. Each
- * keeps its own watch history — Continue Watching, resume points, ticks, My List; add-ons and settings stay the
- * account's. The first profile's history IS the account's history as it always was ("progress", "library"), so nothing
- * moves for anyone; the second's sits beside it ("progress_b", "library_b") on this device and in the cloud. The list is
- * synced (`viewers`: {at, list:[{id:"a"|"b", name, av}]}, newest wins); which profile this device is on is not.
+ * keeps its own watch history — Continue Watching, resume points, ticks, My List — and its own add-ons; settings stay
+ * the account's. The first profile's IS the account's as it always was ("progress", "library", "addons"), so nothing
+ * moves for anyone; the second's sits beside it ("progress_b", "library_b", "addons_b" + its stamps "addons_sync_b") on
+ * this device and in the cloud. The list is synced (`viewers`: {at, list:[{id:"a"|"b", name, av}]}, newest wins); which
+ * profile this device is on is not.
  */
 object Viewers {
     private const val PREFS = "ckplayer"
-    private val PER_PROFILE = setOf("progress", "library")
+    private val PER_PROFILE = setOf("progress", "library", "addons", "addons_sync")
 
     data class Viewer(val id: String, val name: String, val av: String)
 
@@ -84,7 +85,29 @@ object Viewers {
     fun load(ctx: Context) {
         current = if (prefs(ctx).getString("viewer", "a") == "b") "b" else "a"
         if (current == "b" && list(ctx).size < 2) setCurrent(ctx, "a")
+        seedAddons(ctx)
         asking = list(ctx).size == 2
+    }
+
+    /** The second profile's first use of add-ons on this device (a switch, or a launch on it after an update from when
+        add-ons were shared): it starts as a copy of the first's list AND of its stamps, the first's own times — so a
+        removal another device made in "addons_b" since is newer and still wins the merge. An empty first list is not
+        copied: the second stays empty. */
+    private fun seedAddons(ctx: Context) {
+        if (current != "b") return
+        val p = prefs(ctx)
+        val (list, sync) = addonSeed(p.contains(local("addons", "b")), p.getString("addons", null), p.getString("addons_sync", null)) ?: return
+        val e = p.edit().putString(local("addons", "b"), list)
+        if (sync != null) e.putString(local("addons_sync", "b"), sync)
+        e.apply()
+    }
+
+    /** What to seed the second profile's add-ons with (list, stamps), or null: it has a store already, or the first's
+        list is empty or unreadable. Pure, for the tests. */
+    internal fun addonSeed(bHas: Boolean, aList: String?, aSync: String?): Pair<String, String?>? {
+        if (bHas || aList == null) return null
+        if (runCatching { JSONArray(aList).length() }.getOrDefault(0) == 0) return null
+        return aList to aSync?.takeIf { runCatching { JSONObject(it) }.isSuccess }
     }
 
     /** The name a per-profile store goes under for the profile this device is on. */
@@ -133,18 +156,21 @@ object Viewers {
 
     private fun setCurrent(ctx: Context, id: String) { current = id; prefs(ctx).edit().putString("viewer", id).apply() }
 
-    /** On to the other profile: what this one changed goes up under its own names first, then the other's history is
-        read (this device's copy at once, the cloud's after a pull) and every screen that shows a history redraws. */
+    /** On to the other profile: what this one changed goes up under its own names first, then the other's history and
+        add-ons are read (this device's copy at once, the cloud's after a pull) and every screen that shows them redraws. */
     suspend fun switchTo(ctx: Context, id: String) {
         val to = if (id == "b") "b" else "a"
         asking = false
         if (to == current) return
         Cloud.flushProfile(ctx)
         setCurrent(ctx, to)
+        seedAddons(ctx)
         Progress.reset()
         Library.reset()
+        // this device's copy at once (Home, Search, the Guide, the add-ons screen re-read the list); the pull's own
+        // changes redraw again when they land
+        Cloud.onApplied?.invoke(setOf("progress", "library", "addons"))
         Cloud.pullAll(ctx, force = true)
-        Cloud.onApplied?.invoke(setOf("progress", "library"))
     }
 
     fun answered() { asking = false }
@@ -360,11 +386,11 @@ private fun WhoEditor(id: String, onDone: () -> Unit) {
         if (id == "b") Text(
             "Remove profile", color = Color(0xFFFF453A), fontSize = 16.sp, fontFamily = Sans, fontWeight = FontWeight.Medium,
             modifier = Modifier.padding(top = 18.dp).clip(pill).focusRing(pill, landing = false)
-                .clickable { scope.launch { Viewers.removeSecond(ctx); Toasts.show("Removed the second profile. Its history is kept if you add it again."); onDone() } }
+                .clickable { scope.launch { Viewers.removeSecond(ctx); Toasts.show("Removed the second profile. Its history and add-ons are kept if you add it again."); onDone() } }
                 .padding(horizontal = 20.dp, vertical = 10.dp),
         )
         Text(
-            "Each profile keeps its own Continue Watching, resume points and My List. Add-ons and settings are shared.",
+            "Each profile keeps its own Continue Watching, resume points, My List and add-ons. Settings are shared.",
             color = MutedC, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 360.dp).padding(top = 24.dp),
         )
     }
@@ -375,7 +401,7 @@ private fun WhoEditor(id: String, onDone: () -> Unit) {
 internal fun WhoSettings() {
     val ctx = LocalContext.current
     val l = remember(Viewers.version, Viewers.current) { Viewers.list(ctx) }
-    SettingsHeader("WHO'S WATCHING", "Each profile keeps its own Continue Watching, resume points and My List · Add-ons and settings are shared")
+    SettingsHeader("WHO'S WATCHING", "Each profile keeps its own Continue Watching, resume points, My List and add-ons · Settings are shared")
     SettingsGroup {
         SettingsRow(
             Icons.Filled.People, "Who's watching",

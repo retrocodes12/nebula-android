@@ -3,6 +3,7 @@ package com.nuvio.ckplayer
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /** Who's watching: the list as the other apps write it, and where each profile's history lives. */
@@ -17,14 +18,39 @@ class ViewersTest {
         assertEquals("Kids", Viewers.parse(doc("b" to "Kids", "b" to "Dup")).first { it.id == "b" }.name)
     }
 
-    @Test fun local_onlyHistoryMovesForTheSecondProfile() {
+    @Test fun local_historyMovesForTheSecondProfile_settingsStay() {
         assertEquals("progress", Viewers.local("progress", "a"))
         assertEquals("progress_b", Viewers.local("progress", "b"))
         assertEquals("library_b", Viewers.local("library", "b"))
-        // add-ons, settings and ratings stay the account's
-        assertEquals("addons", Viewers.local("addons", "b"))
+        // settings and ratings stay the account's
         assertEquals("sub_style", Viewers.local("sub_style", "b"))
         assertEquals("ratings", Viewers.local("ratings", "b"))
         assertEquals("viewers", Viewers.local("viewers", "b"))
+    }
+
+    @Test fun local_addonsAndTheirStampsArePerProfile() {
+        assertEquals("addons", Viewers.local("addons", "a"))
+        assertEquals("addons_sync", Viewers.local("addons_sync", "a"))
+        assertEquals("addons_b", Viewers.local("addons", "b"))
+        assertEquals("addons_sync_b", Viewers.local("addons_sync", "b"))
+    }
+
+    @Test fun addonSeed_copiesTheFirstListAndItsOwnStamps_once() {
+        val list = JSONArray().put(JSONObject().put("url", "https://a.example/manifest.json")).toString()
+        val sync = JSONObject().put("at", JSONObject().put("https://a.example/manifest.json", 1234L))
+            .put("removed", JSONObject().put("https://gone.example/manifest.json", 99L)).put("orderAt", 77L).toString()
+        val seed = Viewers.addonSeed(bHas = false, aList = list, aSync = sync)!!
+        assertEquals(list, seed.first)
+        // the first profile's own times, not "now": a newer removal synced into addons_b still wins
+        assertEquals(1234L, JSONObject(seed.second!!).getJSONObject("at").getLong("https://a.example/manifest.json"))
+        assertEquals(77L, JSONObject(seed.second!!).getLong("orderAt"))
+        // a store of its own already: never seeded over
+        assertNull(Viewers.addonSeed(bHas = true, aList = list, aSync = sync))
+        // an empty or missing first list leaves the second empty
+        assertNull(Viewers.addonSeed(bHas = false, aList = "[]", aSync = sync))
+        assertNull(Viewers.addonSeed(bHas = false, aList = null, aSync = null))
+        assertNull(Viewers.addonSeed(bHas = false, aList = "not json", aSync = null))
+        // no stamps yet: the list alone
+        assertNull(Viewers.addonSeed(bHas = false, aList = list, aSync = null)!!.second)
     }
 }
