@@ -1287,8 +1287,9 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                     if (stack.lastOrNull() !== from) return@launch
                     val pick = res?.pick
                     if (res != null && pick != null) {
-                        // an untouched series adopts the first auto-pick as its taste; a hand-pick is never overwritten
-                        NextEp.notePick(ctx, pick, res.addon, byHand = false)
+                        // an untouched series adopts the first auto-pick as its taste; a hand-pick is never overwritten —
+                        // except when the same release was found at another add-on: the taste follows it there
+                        NextEp.notePick(ctx, pick, res.addon, byHand = res.moved)
                         withP2p(pick) { address ->
                             if (!landed()) return@withP2p
                             stack = stack.dropLast(1) + Screen.Play(
