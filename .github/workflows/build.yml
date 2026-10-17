@@ -182,12 +182,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.96.0.apk
+          cp "$APK" Nebula-1.97.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.96.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.96.0 Nebula-1.96.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.96.0" \
-            --notes "Each who's-watching profile now keeps its own add-ons. The second starts from a copy of the first's, or from the list it already has on your account. (1.95.0: the new who's-watching picker.)"
+          gh release delete v1.97.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.97.0 Nebula-1.97.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.97.0" \
+            --notes "The next episode keeps the same release by its file name: a look-alike from another group is no longer taken for it, and when the add-on you picked from no longer has it, your other add-ons are asked for the same release. (1.96.0: each profile keeps its own add-ons.)"
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
