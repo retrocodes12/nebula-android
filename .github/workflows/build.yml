@@ -182,12 +182,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.97.0.apk
+          cp "$APK" Nebula-1.98.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.97.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.97.0 Nebula-1.97.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.97.0" \
-            --notes "The next episode keeps the same release by its file name: a look-alike from another group is no longer taken for it, and when the add-on you picked from no longer has it, your other add-ons are asked for the same release. (1.96.0: each profile keeps its own add-ons.)"
+          gh release delete v1.98.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.98.0 Nebula-1.98.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.98.0" \
+            --notes "The app moves with you now: a screen you open slides in from the side and Back slides it away, tabs fade through, the nav slides out of the way on a title page, cards and tabs give under your finger, pictures fade in, rows ease into place as add-ons answer, and a title page's picture settles as it lands. A TV and Motion: Reduced keep their cuts. (1.97.0: the next episode keeps the same release by its file name.)"
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
