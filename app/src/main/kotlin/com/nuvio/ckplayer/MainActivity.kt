@@ -1647,7 +1647,8 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                         var navTab by remember { mutableStateOf(current) }
                         if (onNav) navTab = current
                         val pillMoves = !isTv && !Prefs.reducedMotion
-                        AnimatedVisibility(
+                        // the plain one, by name: inside the Row the RowScope overload is the one found, and refused
+                        androidx.compose.animation.AnimatedVisibility(
                             visible = onNav && !rail,
                             modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
                             enter = if (pillMoves) slideInVertically(tween(380, easing = Motion.Decelerate)) { it / 2 } +
