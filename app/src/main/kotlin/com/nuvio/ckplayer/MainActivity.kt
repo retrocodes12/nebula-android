@@ -23,6 +23,9 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -415,6 +418,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Account.isTv(this)                  // read once for the process (Account.tvKnown, the TV text sizes)
         Prefs.load(this)
+        Motion.installImages(this)           // pictures fade in on a phone (Motion.kt)
         Cloud.load(this)
         Viewers.load(this)                   // who's watching: this device's profile, and whether to ask at launch
         Support.restore(this)
@@ -1359,20 +1363,24 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 // a television gets the rail laid out BESIDE the content, a phone the pill over it
                 val isTv = remember(ctx) { Account.isTv(ctx) }
                 val rail = onNav && isTv
+                // which way the stack just moved, for the screen change below (Motion.kt)
+                val navDir = remember { Motion.Direction() }
+                navDir.note(stack)
                 Row(Modifier.fillMaxSize()) {
                     if (rail) SideRail(current, onTab = { setTab(it) })
                     Box(Modifier.weight(1f).fillMaxHeight()) {
                         AnimatedContent(
                             targetState = current,
                             modifier = Modifier.fillMaxSize(),
-                            // one 180 ms cross-fade per screen change; the in-place episode hop (Play → Play)
-                            // keeps the same player composition, so it is not a change here
+                            // the in-place episode hop (Play → Play) keeps the same player composition, so it is not a
+                            // change here
                             contentKey = { s -> if (s is Screen.Play) "play" else s },
-                            // Motion: Reduced cuts between screens instead of fading — and so does a TV: a cross-fade
-                            // draws BOTH full screens every frame for its length, which a TV box cannot afford
+                            // a phone: a screen opened slides in from the side, Back slides it away, a tab fades through
+                            // (Motion.kt). Motion: Reduced cuts between screens — and so does a TV: a transition draws
+                            // BOTH full screens every frame for its length, which a TV box cannot afford
                             transitionSpec = {
-                                val ms = if (Prefs.reducedMotion || isTv) 0 else 180
-                                fadeIn(tween(ms)) togetherWith fadeOut(tween(ms))
+                                Motion.screens(navDir.dir, moving = !(Prefs.reducedMotion || isTv),
+                                    player = targetState is Screen.Play || initialState is Screen.Play)
                             },
                             label = "screen",
                         ) { s ->
@@ -1634,7 +1642,20 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                             }
                             }
                         }
-                        if (onNav && !rail) {
+                        // the pill slides down out of the way as a full-bleed screen opens and back up on the way
+                        // home, keeping the tab it was on while it goes (it was cut in and out with the screen)
+                        var navTab by remember { mutableStateOf(current) }
+                        if (onNav) navTab = current
+                        val pillMoves = !isTv && !Prefs.reducedMotion
+                        AnimatedVisibility(
+                            visible = onNav && !rail,
+                            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+                            enter = if (pillMoves) slideInVertically(tween(380, easing = Motion.Decelerate)) { it / 2 } +
+                                fadeIn(tween(220, delayMillis = 80)) else fadeIn(tween(0)),
+                            exit = if (pillMoves) slideOutVertically(tween(220)) { it / 2 } + fadeOut(tween(140))
+                                else fadeOut(tween(0)),
+                            label = "nav",
+                        ) { Box(Modifier.fillMaxWidth()) {
                             // the rows dissolve into the page before they reach the floating nav: without it a card's
                             // title ran straight under the pill's labels (Founder's Library screenshot, 09-23). Draws
                             // only — no pointer input, so a touch in the fade still reaches the row under it.
@@ -1651,9 +1672,9 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                         1f to Bg,
                                     ))
                             )
-                            BottomBar(current, onTab = { setTab(it) },
+                            BottomBar(navTab, onTab = { setTab(it) },
                                 modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged { navH = it.height })
-                        }
+                        } }
                     }
                 }
                 // outside the screen Box so it covers the nav bar too
@@ -1752,6 +1773,8 @@ internal fun FocusCard(
     // 22 dp shadow nobody could see, black on black, redrawn each frame too — gone).
     val reduced = Prefs.reducedMotion || !zoom
     val grow = animateFloatAsState(if (focused && !reduced) Prefs.focusScale else 1f, tween(if (reduced) 0 else 180), label = "zoom")
+    // under a finger the card gives a little while pressed (Motion.kt); 1 on a TV
+    val press = pressScale(interaction)
     // one long-press lambda for the card's life (the caller's latest is read when it fires)
     val longNow by rememberUpdatedState(onLongClick)
     val hasLong = onLongClick != null
@@ -1769,7 +1792,7 @@ internal fun FocusCard(
     Box(
         modifier
             .then(if (landing) Modifier.landingSlot() else Modifier)
-            .graphicsLayer { val g = grow.value; scaleX = g; scaleY = g }
+            .graphicsLayer { val g = grow.value * press.value; scaleX = g; scaleY = g }
             .then(if (reduced) Modifier.border(2.dp, if (focused) Color.White else Color.Transparent, shape) else Modifier)
             .clip(shape)
             .combinedClickable(
@@ -3045,10 +3068,18 @@ private fun TabItem(label: String, icon: androidx.compose.ui.graphics.vector.Ima
             .padding(horizontal = 12.dp, vertical = 5.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(
-            Modifier.size(32.dp).background(if (on) Surface2 else Color.Transparent, CircleShape),
-            contentAlignment = Alignment.Center,
-        ) { Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp)) }
+        // the lit tab's disc grows into place and the last one's shrinks away (a cut on a TV / Motion: Reduced)
+        val ctx = LocalContext.current
+        val moves = remember(ctx) { Motion.on(ctx) }
+        val lit by animateFloatAsState(if (on) 1f else 0f,
+            if (moves) spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessMediumLow) else tween(0), label = "tab")
+        val press = pressScale(interaction)
+        Box(Modifier.size(32.dp).graphicsLayer { scaleX = press.value; scaleY = press.value }, contentAlignment = Alignment.Center) {
+            if (lit > 0.01f) Box(Modifier.matchParentSize().graphicsLayer {
+                val k = 0.55f + 0.45f * lit; scaleX = k; scaleY = k; alpha = lit.coerceIn(0f, 1f)
+            }.background(Surface2, CircleShape))
+            Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp))
+        }
         // one line whatever the font scale (the pill and the TV rail both use this): squeezed, it wrapped a letter at a time
         Text(label, color = tint, fontSize = tinySp(10.5f), fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false, modifier = Modifier.padding(top = 2.dp))
     }
@@ -3622,6 +3653,7 @@ private fun HomeScreen(
                     }
                 }
             }
+            val homeMoves = remember(ctx) { Motion.on(ctx) } && !Prefs.reducedMotion
             LazyColumn(
                 state = st.listState,
                 contentPadding = PaddingValues(bottom = navPad),
@@ -3662,7 +3694,7 @@ private fun HomeScreen(
                 // shapes and the Retry showed only when there was nothing to continue). A Home with every row switched
                 // off on purpose stays quiet.
                 if (st.rows.isEmpty() && !(st.hidden > 0 && st.wanted == 0)) item(key = "rows-state", contentType = "rows-state") {
-                    if (st.loading) Column(Modifier.padding(horizontal = 16.dp)) {
+                    if (st.loading) Column((if (homeMoves) Modifier.animateItem() else Modifier).padding(horizontal = 16.dp)) {
                         repeat(2) {
                             Box(Modifier.padding(top = 22.dp, bottom = 10.dp).width(160.dp).height(18.dp)
                                 .skeleton(RoundedCornerShape(9.dp)))
@@ -3678,7 +3710,8 @@ private fun HomeScreen(
                     val rowKey = r.addon.manifestUrl + "/" + r.catalog.type + "/" + r.catalog.id
                     val mine = st.rows.filter { it.addon.manifestUrl == r.addon.manifestUrl }
                     val multi = mine.size > 1
-                    Column {
+                    // a row that arrives fades in and the ones below glide down to make room (a phone; Motion.kt)
+                    Column(if (homeMoves) Modifier.animateItem() else Modifier) {
                         // one catalog: the add-on's name is the row. Several: the
                         // catalog leads and the add-on becomes the eyebrow, with the
                         // type appended only when the same name serves two types
@@ -4959,7 +4992,14 @@ private fun DetailScreen(
         }) {
             val art = full?.background ?: item.background ?: item.poster
             if (art != null) {
-                AsyncImage(model = art, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxWidth().height(428.dp))
+                // a phone: the picture settles from a little close as it lands, then holds still (Motion.kt)
+                val settles = remember(ctx) { Motion.on(ctx) }
+                val settle = remember { Animatable(if (settles) 1.06f else 1f) }
+                var landed by remember { mutableStateOf(false) }
+                LaunchedEffect(landed) { if (landed) settle.animateTo(1f, tween(1100, easing = Motion.Decelerate)) }
+                AsyncImage(model = art, contentDescription = null, contentScale = ContentScale.Crop,
+                    onSuccess = { landed = true },
+                    modifier = Modifier.fillMaxWidth().height(428.dp).graphicsLayer { scaleX = settle.value; scaleY = settle.value })
             }
             Box(
                 Modifier.matchParentSize().background(
@@ -6069,6 +6109,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
     Column(Modifier.fillMaxSize()) {
         // kept across the player, so the row played is still composed to take focus again — put back once the rows
         // exist (a list clamps a start index past its skeletons)
+        val streamMoves = remember(ctx) { Motion.on(ctx) } && !Prefs.reducedMotion
         LazyColumn(
             Modifier.fillMaxWidth(), state = rememberKeptList("streams", ready = sections.isNotEmpty()),
             verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 20.dp),
@@ -6179,7 +6220,8 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                 }
             items(streams.size, key = { "row/${from.manifestUrl}/$it" }) { i ->
                 val s = streams[i]
-                Box(Modifier.padding(horizontal = 16.dp)) {
+                // rows from a slower add-on slide the others aside instead of jumping them (a phone; Motion.kt)
+                Box((if (streamMoves) Modifier.animateItem() else Modifier).padding(horizontal = 16.dp)) {
                     StreamRow(
                         s, from.name, item.name, usual = s.url == usualUrl, slow = StreamBadges.slow(s, item.runtime), stutter = StreamBadges.stutter(s),
                         modifier = Modifier.returnTo("stream/" + from.manifestUrl + "/" + s.url)
