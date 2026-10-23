@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Icon
@@ -64,14 +65,15 @@ import org.json.JSONObject
  * keeps its own watch history — Continue Watching, resume points, ticks, My List — and its own add-ons; settings stay
  * the account's. The first profile's IS the account's as it always was ("progress", "library", "addons"), so nothing
  * moves for anyone; the second's sits beside it ("progress_b", "library_b", "addons_b" + its stamps "addons_sync_b") on
- * this device and in the cloud. The list is synced (`viewers`: {at, list:[{id:"a"|"b", name, av}]}, newest wins); which
- * profile this device is on is not.
+ * this device and in the cloud. The list is synced (`viewers`: {at, list:[{id:"a"|"b", name, av, lock?}]}, newest wins);
+ * which profile this device is on is not. A profile may carry a 4-digit PIN (`lock`, ProfilePin.kt, 10-23): which
+ * profiles were let in on this run is memory only, so every launch asks again.
  */
 object Viewers {
     private const val PREFS = "ckplayer"
     private val PER_PROFILE = setOf("progress", "library", "addons", "addons_sync")
 
-    data class Viewer(val id: String, val name: String, val av: String)
+    data class Viewer(val id: String, val name: String, val av: String, val lock: ProfilePin.Lock? = null)
 
     /** "a" or "b": the profile this device is on. */
     var current by mutableStateOf("a"); private set
@@ -79,13 +81,19 @@ object Viewers {
     var version by mutableIntStateOf(0); private set
     /** At launch with two profiles: the picker is up until one is chosen. */
     var asking by mutableStateOf(false); private set
+    /** The picker is the way in (at launch, or the profile this device was on just went): Back cannot leave it while
+        that profile is locked and not let in. False when it was opened from Settings. */
+    var launchGate by mutableStateOf(false); private set
+    /** Profiles let in on this run: their PIN typed, or locked or unlocked here. Never stored. */
+    private val unlocked = HashSet<String>()
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     fun load(ctx: Context) {
         current = if (prefs(ctx).getString("viewer", "a") == "b") "b" else "a"
         if (current == "b" && list(ctx).size < 2) setCurrent(ctx, "a")
-        asking = list(ctx).size == 2
+        asking = list(ctx).size == 2 || cur(ctx).lock != null
+        launchGate = asking
     }
 
     /** The second profile's first use of add-ons on this device (a switch to it, or a launch on it after an update from
@@ -137,7 +145,8 @@ object Viewers {
         for (i in 0 until a.length()) {
             val o = a.optJSONObject(i) ?: continue
             val id = o.optString("id")
-            if ((id == "a" || id == "b") && id !in out) out[id] = Viewer(id, o.optString("name").take(24), o.optString("av"))
+            if ((id == "a" || id == "b") && id !in out)
+                out[id] = Viewer(id, o.optString("name").take(24), o.optString("av"), ProfilePin.lockOf(o.optJSONObject("lock")))
         }
         if ("a" !in out) out["a"] = Viewer("a", "", "")
         return out.values.sortedBy { it.id }
@@ -148,28 +157,55 @@ object Viewers {
     fun avatar(v: Viewer): String = v.av.ifEmpty { if (v.id == "b") "#0A84FF" else Cloud.profile?.avatar ?: "#636366" }
     fun cur(ctx: Context): Viewer = list(ctx).firstOrNull { it.id == current } ?: list(ctx).first()
 
-    private fun setList(ctx: Context, l: List<Viewer>) {
+    /** The list as the wire carries it; a lock goes with its profile through every rename, add and removal. */
+    internal fun listJson(l: List<Viewer>): JSONArray {
         val a = JSONArray()
-        l.forEach { a.put(JSONObject().put("id", it.id).put("name", it.name.take(24)).put("av", it.av)) }
-        saveDoc(ctx, JSONObject().put("at", System.currentTimeMillis()).put("list", a))
+        l.forEach { v ->
+            val o = JSONObject().put("id", v.id).put("name", v.name.take(24)).put("av", v.av)
+            v.lock?.let { o.put("lock", ProfilePin.lockJson(it)) }
+            a.put(o)
+        }
+        return a
+    }
+
+    private fun setList(ctx: Context, l: List<Viewer>) {
+        saveDoc(ctx, JSONObject().put("at", System.currentTimeMillis()).put("list", listJson(l)))
         Cloud.noteChanged(ctx, "viewers")
     }
+
+    /** The PIN screen comes first: [id] is locked and was not let in on this run. */
+    fun needsPin(ctx: Context, id: String): Boolean = id !in unlocked && list(ctx).firstOrNull { it.id == id }?.lock != null
+    fun unlock(id: String) { unlocked += id; version++ }
+    fun setPin(ctx: Context, id: String, pin: String) {
+        if (!ProfilePin.pinOk(pin)) return
+        unlocked += id
+        setList(ctx, list(ctx).map { if (it.id == id) it.copy(lock = ProfilePin.make(pin)) else it })
+    }
+    fun removePin(ctx: Context, id: String) {
+        unlocked += id
+        setList(ctx, list(ctx).map { if (it.id == id) it.copy(lock = null) else it })
+    }
+    /** Back on the picker: not at launch while the profile this device is on is locked and not let in. */
+    fun canLeave(ctx: Context): Boolean = !(launchGate && needsPin(ctx, current))
 
     fun add(ctx: Context) { val l = list(ctx); if (l.size < 2) setList(ctx, l + Viewer("b", "", "#0A84FF")) }
     fun edit(ctx: Context, id: String, name: String, av: String) =
         setList(ctx, list(ctx).map { if (it.id == id) it.copy(name = name.trim().take(24), av = av) else it })
     suspend fun removeSecond(ctx: Context) {
-        if (current == "b") switchTo(ctx, "a")
+        // removed while on it: on to the first, whose PIN is asked first when it has one (the picker stays up)
+        val gate = current == "b" && needsPin(ctx, "a")
+        if (current == "b") switchTo(ctx, "a", keepAsking = gate)
         setList(ctx, list(ctx).filter { it.id != "b" })
+        if (gate) { asking = true; launchGate = true }
     }
 
     private fun setCurrent(ctx: Context, id: String) { current = id; prefs(ctx).edit().putString("viewer", id).apply() }
 
     /** On to the other profile: what this one changed goes up under its own names first, then the other's history and
         add-ons are read (this device's copy at once, the cloud's after a pull) and every screen that shows them redraws. */
-    suspend fun switchTo(ctx: Context, id: String) {
+    suspend fun switchTo(ctx: Context, id: String, keepAsking: Boolean = false) {
         val to = if (id == "b") "b" else "a"
-        asking = false
+        if (!keepAsking) { asking = false; launchGate = false }
         if (to == current) return
         Cloud.flushProfile(ctx)
         prepareAddons(ctx, to)                                 // before the pull below, and before the list is read
@@ -182,10 +218,10 @@ object Viewers {
         Cloud.pullAll(ctx, force = true)
     }
 
-    fun answered() { asking = false }
+    fun answered() { asking = false; launchGate = false }
 
-    /** Settings › Who's watching: the same picker, to switch, add or edit. */
-    fun open() { asking = true }
+    /** Settings › Who's watching: the same picker, to switch, add or edit (Back keeps the profile this device is on). */
+    fun open() { asking = true; launchGate = false }
 
     /** A synced list (Cloud.merge): newest wins; the second removed elsewhere sends this device back to the first. */
     internal fun merge(ctx: Context, remote: JSONObject): Pair<Boolean, Boolean> {
@@ -195,8 +231,12 @@ object Viewers {
         if (ra > la) {
             saveDoc(ctx, JSONObject().put("at", ra).put("list", remote.getJSONArray("list")))
             if (list(ctx).size < 2) {
-                asking = false
-                if (current == "b") { setCurrent(ctx, "a"); Progress.reset(); Library.reset() }
+                val moved = current == "b"
+                if (moved) { setCurrent(ctx, "a"); Progress.reset(); Library.reset() }
+                // a lock that came from elsewhere throws no one out; only a device sent to a locked first profile,
+                // or still at the launch picker for it, is asked its PIN
+                val hold = (moved || launchGate) && needsPin(ctx, "a")
+                asking = hold; launchGate = hold
             }
             return true to false
         }
@@ -208,7 +248,9 @@ object Viewers {
  * Who's watching? (10-16: the layout of the reference screenshots the Founder sent — the mark and the question at the
  * top, two big round monograms with their names under them, "Manage Profiles" below; managing puts a pencil on each,
  * adds an "Add Profile" circle while there is room for one, and the button reads Done.) At launch with two profiles,
- * and from Settings › Who's watching. Back leaves managing, then keeps the profile this device was on.
+ * and from Settings › Who's watching. Back leaves managing, then keeps the profile this device was on — except at
+ * launch while that profile is locked: then the picker stays. A locked profile asks its PIN before it is entered or
+ * edited (ProfilePin.kt).
  */
 @Composable
 internal fun WhoPicker() {
@@ -217,19 +259,38 @@ internal fun WhoPicker() {
     val l = remember(Viewers.version) { Viewers.list(ctx) }
     var managing by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<String?>(null) }
+    var pin by remember { mutableStateOf<PinAsk?>(null) }
+    val draft = remember(editing) { WhoDraft() }                 // the editor's unsaved name and colour, kept under a PIN step
     val first = remember { FocusRequester() }
     val tv = Account.isTv(ctx)
     androidx.activity.compose.BackHandler {
         when {
             editing != null -> editing = null
             managing -> managing = false
-            else -> Viewers.answered()
+            Viewers.canLeave(ctx) -> Viewers.answered()
+            else -> {}                                           // at launch, locked: the picker stays
         }
     }
     Box(Modifier.fillMaxSize().background(Bg).clickable(enabled = false) {}) {
+        val ask = pin
+        if (ask != null) {
+            PinScreen(
+                ask, onAsk = { pin = it },
+                onPassed = {
+                    pin = null
+                    when (ask.purpose) {
+                        PinFor.ENTER -> scope.launch { Viewers.switchTo(ctx, ask.id) }
+                        PinFor.EDIT -> editing = ask.id
+                        PinFor.SET -> {}                                  // back to the editor
+                    }
+                },
+                onCancel = { pin = null },
+            )
+            return@Box
+        }
         val ed = editing
         if (ed != null) {
-            WhoEditor(ed, onDone = { editing = null })
+            WhoEditor(ed, draft, onPin = { pin = PinAsk(ed, PinMode.CHOOSE, PinFor.SET) }, onDone = { editing = null })
             return@Box
         }
         Column(
@@ -257,6 +318,8 @@ internal fun WhoPicker() {
                             ) {
                                 when {
                                     v == null -> { Viewers.add(ctx); editing = "b" }
+                                    Viewers.needsPin(ctx, v.id) ->
+                                        pin = PinAsk(v.id, PinMode.CHECK, if (managing) PinFor.EDIT else PinFor.ENTER)
                                     managing -> editing = v.id
                                     else -> scope.launch { Viewers.switchTo(ctx, v.id) }
                                 }
@@ -282,7 +345,7 @@ internal fun WhoPicker() {
             }
         }
     }
-    LaunchedEffect(editing) { if (editing == null) runCatching { withFrameNanos {}; first.requestFocus() } }
+    LaunchedEffect(editing, pin) { if (editing == null && pin == null) runCatching { withFrameNanos {}; first.requestFocus() } }
 }
 
 /** One profile's circle and name (or, with v null, the Add Profile circle). */
@@ -323,12 +386,14 @@ private fun WhoTile(v: Viewers.Viewer?, managing: Boolean, current: Boolean, tv:
             color = if (v == null) MutedC else TextC, fontSize = 18.sp, fontFamily = Sans, fontWeight = FontWeight.SemiBold,
             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 14.dp),
         )
+        // a PIN on it: seen before pressing
+        if (v?.lock != null) Icon(Icons.Filled.Lock, contentDescription = "PIN", tint = MutedC, modifier = Modifier.padding(top = 6.dp).size(16.dp))
     }
 }
 
 /** The big monogram: the profile's colour as a deep tint, a ring of it, and the letter in it. */
 @Composable
-private fun WhoMonogram(hex: String, name: String, size: Dp) {
+internal fun WhoMonogram(hex: String, name: String, size: Dp) {
     val c = avatarColor(hex)
     Box(
         Modifier.size(size).background(c.copy(alpha = 0.2f).compositeOver(Bg), CircleShape).border(2.dp, c.copy(alpha = 0.6f), CircleShape),
@@ -340,15 +405,15 @@ private fun WhoMonogram(hex: String, name: String, size: Dp) {
     }
 }
 
-/** A pencil pressed: the profile's name and colour; the second can be removed (its history is kept). */
+/** A pencil pressed: the profile's name and colour and its PIN; the second can be removed (its history is kept). */
 @Composable
-private fun WhoEditor(id: String, onDone: () -> Unit) {
+private fun WhoEditor(id: String, held: WhoDraft, onPin: () -> Unit, onDone: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val v = remember(id, Viewers.version) { Viewers.list(ctx).firstOrNull { it.id == id } }
     if (v == null) { LaunchedEffect(Unit) { onDone() }; return }          // (removed on another device meanwhile)
-    var draft by remember(id) { mutableStateOf(v.name) }
-    var av by remember(id) { mutableStateOf(Viewers.avatar(v)) }
+    val draft = held.name ?: v.name
+    val av = held.av ?: Viewers.avatar(v)
     val typing = tvTyping()
     val save = { Viewers.edit(ctx, id, draft, av); typing.done(); onDone() }
     Column(
@@ -361,7 +426,7 @@ private fun WhoEditor(id: String, onDone: () -> Unit) {
         }
         OutlinedTextField(
             value = draft,
-            onValueChange = { draft = it.take(24) },
+            onValueChange = { held.name = it.take(24) },
             placeholder = { Text(Viewers.name(v.copy(name = "")), color = MutedC) },
             singleLine = true,
             readOnly = typing.readOnly,
@@ -382,13 +447,25 @@ private fun WhoEditor(id: String, onDone: () -> Unit) {
                         .border(2.dp, if (on) Color.White else Color.Transparent, CircleShape).padding(4.dp)
                         .background(avatarColor(hex), CircleShape)
                         .focusRing(CircleShape, landing = false)
-                        .clickable { av = hex },
+                        .clickable { held.av = hex },
                 )
             }
         }
         val pill = RoundedCornerShape(50)
+        // the PIN: add one, or change / remove it (this profile was let in to get here)
+        Row(Modifier.padding(top = 28.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(
+                Modifier.clip(pill).border(1.dp, Line2, pill).focusRing(pill, landing = false).clickable { onPin() }
+                    .padding(horizontal = 22.dp, vertical = 11.dp),
+            ) { Text(if (v.lock == null) "Add a PIN" else "Change PIN", color = TextC, fontSize = 16.sp, fontFamily = Sans, fontWeight = FontWeight.Medium) }
+            if (v.lock != null) Box(
+                Modifier.clip(pill).border(1.dp, Line2, pill).focusRing(pill, landing = false)
+                    .clickable { Viewers.removePin(ctx, id); Toasts.show("PIN removed.") }
+                    .padding(horizontal = 22.dp, vertical = 11.dp),
+            ) { Text("Remove PIN", color = TextC, fontSize = 16.sp, fontFamily = Sans, fontWeight = FontWeight.Medium) }
+        }
         Box(
-            Modifier.padding(top = 36.dp).clip(pill).background(Color(0xFFF2F2F7), pill)
+            Modifier.padding(top = 28.dp).clip(pill).background(Color(0xFFF2F2F7), pill)
                 .focusRing(pill, landing = false).clickable { save() }
                 .padding(horizontal = 40.dp, vertical = 14.dp),
         ) { Text("Save", color = Color.Black, fontSize = 18.sp, fontFamily = Sans, fontWeight = FontWeight.SemiBold) }

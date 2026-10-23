@@ -362,6 +362,7 @@ class MainActivity : ComponentActivity() {
 
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         KeyWatch.note(event)
+        if (PinKeys.handler?.invoke(event) == true) return true      // a profile's PIN screen (ProfilePin.kt)
         if (PlayerKeys.handler?.invoke(event) == true) return true
         if (PlayerKeys.handler == null && browseKey(event)) return true
         return super.dispatchKeyEvent(event)

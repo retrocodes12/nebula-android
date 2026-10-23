@@ -206,6 +206,13 @@ object Account {
         }.getOrElse { errorText(it) }
     }
 
+    /** "Forgot PIN?" on a who's-watching profile (ProfilePin.kt): is this the account's password? Nothing changes on
+        the server. Null when it is, else the PIN screen's own wording. */
+    suspend fun checkPassword(ctx: Context, password: String): String? = runCatching {
+        Cloud.api(ctx, "POST", "/v1/profile/check", JSONObject().put("password", password))
+        null
+    }.getOrElse { ProfilePin.forgotError((it as? Cloud.HttpFail)?.code) }
+
     suspend fun removeDevice(ctx: Context, id: String): String? = runCatching {
         Cloud.api(ctx, "DELETE", "/v1/profile/device/$id", null)
         refreshProfile(ctx)
