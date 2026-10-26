@@ -43,7 +43,9 @@ import java.util.concurrent.TimeUnit
 object Cloud {
     private const val BASE = "https://play.rifflehq.in/cloud"
     private const val PREFS = "ckplayer"
-    private val SYNC_KEYS = listOf("addons", "progress", "library", "sub_style", "ratings", "seekr", "viewers")
+    // the list of profiles first: a second profile removed elsewhere moves this device to the first before the per-profile
+    // names of the pull are worked out (else the first's docs waited for the next pull)
+    private val SYNC_KEYS = listOf("viewers", "addons", "progress", "library", "sub_style", "ratings", "seekr")
     private val JSON_MT = "application/json".toMediaType()
 
     private val http = OkHttpClient.Builder()
@@ -233,6 +235,10 @@ object Cloud {
 
     /** Take a credential set {gid, token, profile} as this device's identity. */
     internal fun adopt(ctx: Context, r: JSONObject, fresh: Boolean) {
+        // which account this device's synced data belongs to (`sync_gid`): another one's second profile stays behind
+        val was = prefs(ctx).getString("sync_gid", null)
+        if (was != null && was != r.getString("gid")) Viewers.resetForAccount(ctx)
+        prefs(ctx).edit().putString("sync_gid", r.getString("gid")).apply()
         cred(ctx).edit()
             .putString("cloud_gid", r.getString("gid"))
             .putString("cloud_token", r.getString("token"))
@@ -253,8 +259,15 @@ object Cloud {
         } else {
             // merge; newer local records push back on their own
             // on Main like AppRoot's pulls: the merge writes the same stores the main thread does (api() is on IO)
-            scope.launch { withContext(Dispatchers.Main) { pullAll(app, force = true) }; Social.refresh(app) }
+            // then who's watching, as at a launch: the account may hold two profiles, or a PIN on this one
+            scope.launch { withContext(Dispatchers.Main) { pullAll(app, force = true); Viewers.askAfterSignIn(app) }; Social.refresh(app) }
         }
+    }
+
+    /** Installs from before 10-26 never wrote which account their data belongs to: the one they are signed into. */
+    fun noteSyncGid(ctx: Context) {
+        val g = gid(ctx)
+        if (linked(ctx) && g != null && !prefs(ctx).contains("sync_gid")) prefs(ctx).edit().putString("sync_gid", g).apply()
     }
 
     /** Forget the credential on this device only; nothing local is deleted. */
@@ -386,6 +399,8 @@ object Cloud {
                 val wk = Viewers.local(key)                 // this profile's copy of a per-profile key
                 val meta = keys.optJSONObject(wk)
                 if (meta == null) {
+                    // the account holds no list for the second profile: the stand-in copy becomes it
+                    if (key == "addons" && Viewers.seedHeld(ctx)) Viewers.seedDrop(ctx)
                     if (hasContent(ctx, key)) pushKey(ctx, key)
                     continue
                 }
@@ -514,11 +529,14 @@ object Cloud {
     }
 
     private fun mergeAddons(ctx: Context, remote: JSONObject): Pair<Boolean, Boolean> {
+        // the second profile's stand-in copy of the first's list meets the account's own: that one is taken as it is
+        val seed = Viewers.seedHeld(ctx)
+        if (seed) { putJsonPref(ctx, syncPref(), JSONObject()); Viewers.seedDrop(ctx) }
         val s = addonsSync(ctx)
         val at = s.getJSONObject("at")
         val removed = s.getJSONObject("removed")
-        val arr = loadAddons(ctx).toMutableList()
-        var changed = false
+        val arr = if (seed) mutableListOf() else loadAddons(ctx).toMutableList()
+        var changed = seed
         var localNewer = false
         val rl = remote.optJSONObject("list") ?: JSONObject()
         val rr = remote.optJSONObject("removed") ?: JSONObject()

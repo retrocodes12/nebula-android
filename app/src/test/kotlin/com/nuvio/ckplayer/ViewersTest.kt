@@ -35,6 +35,15 @@ class ViewersTest {
         assertEquals("addons_sync_b", Viewers.local("addons_sync", "b"))
     }
 
+    @Test fun standIn_onlyWhenTheAccountWasNotAsked_orDidNotAnswer() {
+        // signed out / no answer: the copy stands in until a pull finds the account's own list
+        assertEquals(true, Viewers.standIn(null, false))
+        // the account answered with no second list: the copy IS the second profile's list
+        assertEquals(false, Viewers.standIn(setOf("addons", "progress"), false))
+        // it holds one: the second starts empty, nothing to stand in for
+        assertEquals(false, Viewers.standIn(setOf("addons_b"), true))
+    }
+
     @Test fun addonStart_copiesTheFirstListAndItsOwnStamps_onlyWhenTheCloudHasNoSecondList() {
         val list = JSONArray().put(JSONObject().put("url", "https://a.example/manifest.json")).toString()
         val sync = JSONObject().put("at", JSONObject().put("https://a.example/manifest.json", 1234L))

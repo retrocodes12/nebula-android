@@ -107,11 +107,15 @@ object Viewers {
         val p = prefs(ctx)
         val wk = local("addons", "b")
         if (p.contains(wk)) return false
-        val inCloud = Cloud.remoteKeys(ctx)?.contains(wk) == true
+        val keys = Cloud.remoteKeys(ctx)
+        val inCloud = keys?.contains(wk) == true
         if (p.contains(wk)) return false                      // (a pull wrote it while the cloud was asked)
         val (list, sync) = addonStart(false, inCloud, p.getString("addons", null), p.getString("addons_sync", null)) ?: return false
         val e = p.edit().putString(wk, list)
         if (sync != null) e.putString(local("addons_sync", "b"), sync)
+        // a copy made without the account's answer (signed out, no answer) only stands in: the account's own list,
+        // when a pull finds one, replaces it whole — merged, the first's add-ons went up into the second's (10-26)
+        if (standIn(keys, inCloud)) e.putBoolean(SEED, true) else e.remove(SEED)
         e.apply()
         if (inCloud) Cloud.forgetRev(ctx, wk)                 // the pull must fetch it, whatever this device last saw
         return true
@@ -125,6 +129,34 @@ object Viewers {
         if (cloudHasB) return "[]" to "{}"
         if (aList == null || runCatching { JSONArray(aList).length() }.getOrDefault(0) == 0) return null
         return aList to aSync?.takeIf { runCatching { JSONObject(it) }.isSuccess }
+    }
+
+    /** The second profile's copy of the first's add-ons is a stand-in when the account was not asked or did not answer
+        (the key list is null) and none was found there. Pure, for the tests. */
+    internal fun standIn(keys: Set<String>?, cloudHasB: Boolean): Boolean = keys == null && !cloudHasB
+    private const val SEED = "addons_b_seed"
+    /** The profile this device is on holds a stand-in copy (only ever the second). */
+    fun seedHeld(ctx: Context): Boolean = current == "b" && prefs(ctx).getBoolean(SEED, false)
+    fun seedDrop(ctx: Context) { if (prefs(ctx).contains(SEED)) prefs(ctx).edit().remove(SEED).apply() }
+
+    /** This device's data now belongs to another account (signed into a different one): the second profile — its name,
+        PIN, history and add-ons — was the old account's and must not go up into the new one. Back on the first; the list
+        empty until the new account's arrives. The first profile's own data merges as it always has. */
+    fun resetForAccount(ctx: Context) {
+        if (current == "b") { setCurrent(ctx, "a"); Progress.reset(); Library.reset() }
+        val e = prefs(ctx).edit()
+        listOf("progress_b", "library_b", "addons_b", "addons_sync_b", SEED, "viewers_v1").forEach { e.remove(it) }
+        e.apply()
+        unlocked.clear()
+        asking = false; launchGate = false
+        version++
+    }
+
+    /** After a sign-in, once its pull has landed: who's watching, as at a launch, when the account holds two profiles or
+        a PIN on the one this device is on. */
+    fun askAfterSignIn(ctx: Context) {
+        if (asking) return
+        if (list(ctx).size == 2 || needsPin(ctx, current)) { asking = true; launchGate = true }
     }
 
     /** The name a per-profile store goes under for the profile this device is on. */

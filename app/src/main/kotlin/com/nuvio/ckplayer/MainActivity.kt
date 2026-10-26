@@ -993,6 +993,7 @@ internal fun saveAddonsRaw(ctx: Context, list: List<Addon>) {
 private fun saveAddons(ctx: Context, list: List<Addon>) {
     val prev = loadAddons(ctx)
     saveAddonsRaw(ctx, list)
+    if (Viewers.current == "b") Viewers.seedDrop(ctx)   // a change by hand: the list is this profile's own now, not a stand-in
     Cloud.noteAddonsDiff(ctx, prev, list)
     Cloud.noteChanged(ctx, "addons")
 }
@@ -1175,6 +1176,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 Cloud.onSignedOut = {
                     Toasts.show("This device was signed out of your profile. Nothing on it was deleted.")
                 }
+                Cloud.noteSyncGid(ctx)       // which account this device's data belongs to (Cloud.adopt)
                 Account.boot(ctx)            // pre-profile installs trade the master secret for a device token
                 AppIcons.enforce(ctx)        // …and the profile just re-read may have lost the Plus level
                 Support.load(ctx)            // is there a link to show, and who is on the wall
