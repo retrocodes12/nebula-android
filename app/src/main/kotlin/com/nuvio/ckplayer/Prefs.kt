@@ -161,6 +161,14 @@ object Prefs {
     var autoPick by mutableStateOf("off"); private set            // off / last (same as last time) / first
     val autoStream: Boolean get() = autoPick != "off"             // the old switch, kept for callers
     var pickWait by mutableStateOf(6); private set                // seconds auto-pick waits for slow add-ons
+    // Autoplay (Android TV only, Autoplay.kt): Play on a film or an episode starts its best stream — no list
+    var autoplay by mutableStateOf(false); private set
+    var apMax by mutableStateOf(2160); private set                 // aim for 2160 / 1080 / 720
+    var apInstant by mutableStateOf(true); private set             // debrid rows ready at once before higher quality
+    var apWait by mutableStateOf("balanced"); private set          // quick / balanced / all
+    var apRetry by mutableStateOf(5); private set                  // a start that fails: try the next 0 / 3 / 5
+    var apStart by mutableStateOf(45); private set                 // seconds a start has to show a picture: 20 / 45 / 90
+    var apBack by mutableStateOf("title"); private set             // Back from its player: title page / streams list
 
     // ---- advanced ----
     var welcome by mutableStateOf(true); private set              // the toast at start
@@ -235,6 +243,13 @@ object Prefs {
         p2pKeep = p.getBoolean("pref_p2pkeep", false)
         autoPick = p.getString("pref_autopick", null) ?: (if (p.getBoolean("pref_autostream", false)) "last" else "off")
         pickWait = p.getInt("pref_pickwait", 6)
+        autoplay = p.getBoolean("pref_autoplay", false)
+        apMax = p.getInt("pref_apmax", 2160).takeIf { it == 2160 || it == 1080 || it == 720 } ?: 2160
+        apInstant = p.getBoolean("pref_apinstant", true)
+        apWait = p.getString("pref_apwait", "balanced")?.takeIf { it == "quick" || it == "all" } ?: "balanced"
+        apRetry = p.getInt("pref_apretry", 5).takeIf { it == 0 || it == 3 } ?: 5
+        apStart = p.getInt("pref_apstart", 45).takeIf { it == 20 || it == 90 } ?: 45
+        apBack = if (p.getString("pref_apback", "title") == "list") "list" else "title"
         welcome = p.getBoolean("pref_welcome", true)
         earlyBuilds = p.getBoolean("pref_earlybuilds", false)
         discType = p.getString("pref_disctype", "") ?: ""
@@ -340,6 +355,13 @@ object Prefs {
     }
     fun setAutoStream(ctx: Context, v: Boolean) = setAutoPick(ctx, if (v) "last" else "off")
     fun setPickWait(ctx: Context, v: Int) { pickWait = v; edit(ctx).putInt("pref_pickwait", v).apply() }
+    fun setAutoplay(ctx: Context, v: Boolean) { autoplay = v; edit(ctx).putBoolean("pref_autoplay", v).apply() }
+    fun setApMax(ctx: Context, v: Int) { apMax = v; edit(ctx).putInt("pref_apmax", v).apply() }
+    fun setApInstant(ctx: Context, v: Boolean) { apInstant = v; edit(ctx).putBoolean("pref_apinstant", v).apply() }
+    fun setApWait(ctx: Context, v: String) { apWait = v; edit(ctx).putString("pref_apwait", v).apply() }
+    fun setApRetry(ctx: Context, v: Int) { apRetry = v; edit(ctx).putInt("pref_apretry", v).apply() }
+    fun setApStart(ctx: Context, v: Int) { apStart = v; edit(ctx).putInt("pref_apstart", v).apply() }
+    fun setApBack(ctx: Context, v: String) { apBack = v; edit(ctx).putString("pref_apback", v).apply() }
     fun setWelcome(ctx: Context, v: Boolean) { welcome = v; edit(ctx).putBoolean("pref_welcome", v).apply() }
     fun setEarlyBuilds(ctx: Context, v: Boolean) { earlyBuilds = v; edit(ctx).putBoolean("pref_earlybuilds", v).apply() }
 

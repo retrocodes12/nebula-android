@@ -291,12 +291,19 @@ internal object KeyWatch {
     /** When a finger last went down, on the same clock — the web's lastPointerAt: a hand on the list is choosing too. */
     var lastTouchAt = 0L
         private set
+    /** When ANY key last went down (its first press; not the volume), on the same clock — the autoplay card's "the viewer
+        is here" (Autoplay.kt), which a media or a colour key counts for too. */
+    var anyDownAt = 0L
+        private set
 
     fun noteTouch(event: android.view.MotionEvent) {
         if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) lastTouchAt = event.eventTime
     }
 
     fun note(event: android.view.KeyEvent) {
+        if (event.action == android.view.KeyEvent.ACTION_DOWN && event.repeatCount == 0 &&
+            event.keyCode != android.view.KeyEvent.KEYCODE_VOLUME_UP && event.keyCode != android.view.KeyEvent.KEYCODE_VOLUME_DOWN &&
+            event.keyCode != android.view.KeyEvent.KEYCODE_VOLUME_MUTE) anyDownAt = event.eventTime
         if (event.action == android.view.KeyEvent.ACTION_DOWN && (event.keyCode == android.view.KeyEvent.KEYCODE_TAB ||
                 event.keyCode == android.view.KeyEvent.KEYCODE_ENTER || event.keyCode == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER ||
                 event.keyCode in android.view.KeyEvent.KEYCODE_DPAD_UP..android.view.KeyEvent.KEYCODE_DPAD_CENTER)) lastDownAt = event.eventTime
@@ -363,6 +370,7 @@ class MainActivity : ComponentActivity() {
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         KeyWatch.note(event)
         if (PinKeys.handler?.invoke(event) == true) return true      // a profile's PIN screen (ProfilePin.kt)
+        if (AutoplayRun.swallow(event)) return true                  // the autoplay card choosing: a key only hides it
         if (PlayerKeys.handler?.invoke(event) == true) return true
         if (PlayerKeys.handler == null && browseKey(event)) return true
         return super.dispatchKeyEvent(event)
@@ -646,6 +654,7 @@ private sealed interface Screen {
         val startOver: Boolean = false,     // skip the resume point this once
         val sourceLine: String? = null,     // "1080p · Torrentio": the chrome's source line, from the picked stream
         val startAtMs: Long = -1L,          // a source swap mid-play: the exact second to start from, under the resume floor or not
+        val auto: Boolean = false,          // started by Autoplay (a TV, Autoplay.kt): a failed start tries the next best row
     ) : Screen
 }
 
@@ -1025,13 +1034,18 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 cancelHop()
                 if (stack.size > 1) {
                     leavingPlayer()
+                    // Back from a player Autoplay started skips the list it never showed (Settings › Streams › Back from
+                    // the player · Title page) — unless the list is all there is beneath it
+                    val top = stack.last()
+                    val n = if (top is Screen.Play && top.auto && Prefs.apBack == "title" && stack.size > 2 &&
+                        stack[stack.size - 2] is Screen.Streams) 2 else 1
                     // the screen beneath gets the remote back where it left it (TvFocus.kt)
-                    ReturnFocus.aim(stack[stack.size - 2])
+                    ReturnFocus.aim(stack[stack.size - 1 - n])
                     // a viewer backing out of playback leaves the party (the host keeps it alive)
-                    if (stack.last() is Screen.Play && partyUi.active() && !partyUi.isHost) {
+                    if (top is Screen.Play && partyUi.active() && !partyUi.isHost) {
                         partyUi.reset(); partyUi.status = "Left the party"
                     }
-                    stack = stack.dropLast(1)
+                    stack = stack.dropLast(n)
                 }
             }
             fun setTab(s: Screen) { cancelHop(); leavingPlayer(); ReturnFocus.clear(); stack = listOf(s) }
@@ -1260,6 +1274,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
             fun swapSource(st: StreamItem, from: Addon, atMs: Long) {
                 val cur = stack.lastOrNull() as? Screen.Play ?: return
                 NextEp.notePick(ctx, st, from, byHand = true)
+                if (cur.auto) AutoplayRun.playing = st.url
                 withP2p(st) { address ->
                     stack = stack.dropLast(1) + cur.copy(
                         url = address, title = st.name, subs = st.subtitles, addonUrl = from.manifestUrl,
@@ -1268,6 +1283,22 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                     )
                     Toasts.show("Switched to " + StallWatch.name(st, from))
                 }
+            }
+
+            /** An autoplay start that did not start (an error before its first picture, no picture in time, a debrid
+                "not ready" clip — [why] error / slow / brief): the next best row plays in its place, the card says so.
+                False = none left (or not an autoplay play): the player's own handling goes on. */
+            fun autoNext(why: String): Boolean {
+                val cur = stack.lastOrNull() as? Screen.Play ?: return false
+                if (!cur.auto) return false
+                val (st, from) = AutoplayRun.next(cur.url, Autoplay.cfg()) ?: run { AutoplayRun.card = null; return false }
+                NextEp.notePick(ctx, st, from, byHand = false)
+                AutoplayRun.startCard(st, from, why)
+                stack = stack.dropLast(1) + cur.copy(
+                    url = st.url, title = st.name, subs = st.subtitles, addonUrl = from.manifestUrl, startAtMs = -1L,
+                    sourceLine = StreamTwin.label(StreamTwin.sig(st, from)).ifEmpty { null },
+                )
+                return true
             }
 
             /** Play a specific episode of the current chain from the stream chosen
@@ -1613,6 +1644,8 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                                     description = s.item.description,
                                                     startOver = fresh,
                                                     sourceLine = StreamTwin.label(StreamTwin.sig(st, from)).ifEmpty { null },
+                                                    // the row Autoplay chose (not one picked by hand)
+                                                    auto = !byHand && AutoplayRun.playing == st.url,
                                                 )
                                             )
                                         }
@@ -1631,6 +1664,8 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                                     onPlayNext = { ep -> playEpisode(ep) },
                                     onCancelNext = { cancelHop() },
                                     onSwapSource = { st, from, at -> swapSource(st, from, at) },
+                                    auto = s.auto,
+                                    onAutoNext = { why -> autoNext(why) },
                                     onPrefetchNext = { prefetchNext() },
                                     onProgressSaved = { homeState.invalidateContinue() },
                                     onPartyStart = { partyStart(it) },
@@ -1684,6 +1719,8 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 // outside the screen Box so it covers the nav bar too
                 // two profiles: who's watching? (over everything, once the app is up)
                 if (Viewers.asking && !booting) WhoPicker()
+                // Autoplay's launch card (AutoplayUi.kt): over the streams page, then the player, until the first picture
+                AutoplayCardHost()
                 AnimatedVisibility(visible = booting, enter = fadeIn(tween(0)), exit = fadeOut(tween(320))) {
                     BootScreen()
                 }
@@ -5889,6 +5926,11 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
     // Back returned here (from the player, most often) — read at the first composition, before anything claims focus
     val streamsEntry = LocalScreenEntry.current
     val backHere = remember { ReturnFocus.backTo(streamsEntry) }
+    // Autoplay (a TV, Autoplay.kt): Play on a film or an episode — never Back to this list — starts its best stream by
+    // itself; a card covers the list while the add-ons answer, and the list stays underneath it for the viewer
+    val apOn = remember { Prefs.autoplay && Account.isTv(ctx) && (item.type == "movie" || item.type == "series") && !backHere }
+    // left with nothing started (Back, a tab, a row picked by hand): the run's requests stop with the page, as they always did
+    DisposableEffect(Unit) { onDispose { if (AutoplayRun.playing == null) AutoplayRun.endFor(item.type, item.id) } }
     // Speed tests (1.88.0, SpeedTest.kt): Test speeds measures the rows in their order on screen, ONE AT A TIME
     // (two at once would split the line between them), up to ten, P2P rows skipped; a row's hold sheet tests that one.
     // The answers stay for the page's life and come back with it on Back (ten minutes, like the rows themselves);
@@ -5974,6 +6016,14 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
         emptyWhy = null
         if (sections.isEmpty()) status = "Loading streams…"
         val pf = NextEp.picked(ctx)
+        val ap = apOn && reload == 0
+        val cfg = Autoplay.cfg()
+        // Autoplay asks the add-ons in its run's own scope: the ones still answering after the pick keep feeding the queue a
+        // failed start draws from. Any other visit ends a run left over (a ↻ here must not be written over by its answers).
+        val home: kotlinx.coroutines.CoroutineScope = if (ap) AutoplayRun.begin(item) else { AutoplayRun.end(); this }
+        val apChips = LinkedHashMap<String, Int?>()           // the card's add-ons: rows each gave (null = still asking)
+        val apLeft = order.map { it.name }.toMutableList()     // not answered yet, manifests included
+        var allIn = false
         // Play the best stream by itself (Settings › Streams): decide once — when every add-on has
         // answered, or when the wait for slow ones runs out, whichever comes first. Never on the way BACK to this page
         // (from the player, above all): re-firing there would trap the viewer in playback forever, and a row chosen by
@@ -5981,7 +6031,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
         // per-title latch kept auto-pick off for that title for the rest of the session.
         var picked = false
         fun decide() {
-            if (picked || Prefs.autoPick == "off" || backHere) return
+            if (picked || ap || Prefs.autoPick == "off" || backHere) return   // Autoplay outranks it
             // a viewer already walking the list — remote or finger — is choosing by hand (web: autoPickNow's lastKeyAt
             // and lastPointerAt); the list now arrives well inside the wait, so this matters more than it did
             if (KeyWatch.lastDownAt > openedAt || KeyWatch.lastTouchAt > openedAt) return
@@ -6009,13 +6059,38 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             loading = false; answered = true; noStreamer = false
             return@LaunchedEffect
         }
-        val timer = if (Prefs.autoPick != "off" && !backHere) launch { delay(Prefs.pickWait * 1000L); decide() } else null
+        val timer = if (Prefs.autoPick != "off" && !backHere && !ap) launch { delay(Prefs.pickWait * 1000L); decide() } else null
         val slowTimer = launch { delay(12_000); waitSlow = true }
+        // Autoplay's pick: the card's words as the add-ons answer, then the best row once "Wait for add-ons" says so. A key
+        // or a touch here sends the card away and the list is the viewer's; nothing playable leaves the list as it is.
+        fun apViewerHere() = !AutoplayRun.asking || KeyWatch.anyDownAt > openedAt || KeyWatch.lastTouchAt > openedAt
+        if (ap) launch {
+            while (true) {
+                delay(250)
+                if (apViewerHere()) break
+                AutoplayRun.askCard(sections.sumOf { it.second.size }, apChips.map { (n, c) -> ApChip(n, c) })
+                val elapsed = android.os.SystemClock.uptimeMillis() - openedAt
+                when (Autoplay.verdict(cfg, elapsed, AutoplayRun.ranked(cfg).firstOrNull()?.first, apLeft, allIn)) {
+                    Autoplay.Verdict.WAIT -> continue
+                    Autoplay.Verdict.NONE -> break
+                    Autoplay.Verdict.PICK -> delay(300)       // a row arriving with it still counts
+                    Autoplay.Verdict.SETTLE -> delay(700)
+                }
+                if (apViewerHere()) break
+                val (s, from) = AutoplayRun.ranked(cfg).firstOrNull() ?: break
+                AutoplayRun.playing = s.url
+                // "When you come back · Ask": the sheet asks first, so the card makes way for it
+                if (chosen) AutoplayRun.startCard(s, from, null) else { AutoplayRun.asking = false; AutoplayRun.card = null }
+                play(s, from, false)
+                return@launch
+            }
+            AutoplayRun.asking = false; AutoplayRun.card = null
+        }
         // Every add-on at once (web parity). They were asked one after another, so the page waited for the SUM of
         // every add-on's answer time and one slow add-on held up all the ones after it — the "very slow" on issue #1.
         // Each answer is still handled here on the main thread, so the counters and slots need no locking.
         order.mapIndexed { i, a ->
-            launch {
+            home.launch {
                 val origin = a.manifestUrl == addon.manifestUrl
                 // The origin is always asked, and its request waits for NOTHING: the page's own add-on is the one the
                 // viewer most expects rows from, and a manifest round trip in front of it was pure latency. Its manifest
@@ -6036,9 +6111,11 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                     // named while it answers — the origin too, unless its cached manifest says it plays nothing
                     val asking = if (!origin || known == null || known.canStream(item.type, item.id)) a.name else null
                     if (asking != null) waiting = waiting + asking
+                    if (ap && asking != null) apChips[asking] = null
                     val raw = try { Stremio.loadStreams(a.base, item.type, item.id) }
                         finally { if (asking != null) waiting = waiting.toMutableList().also { it.remove(asking) } }
                     val streams = arrangeStreams(raw, item.runtime)
+                    if (ap && asking != null) apChips[asking] = streams.size
                     if (raw.isNotEmpty() && streams.isEmpty()) floored = true
                     if (streams.isNotEmpty()) {
                         // the row that matches what was picked last time heads its
@@ -6051,6 +6128,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                         slots[i] = list
                         val now = order.indices.mapNotNull { k -> slots[k]?.let { order[k] to it } }
                         sections = now
+                        if (ap) AutoplayRun.offer(now)
                         val n = now.sumOf { it.second.size }
                         status = "$n stream${if (n > 1) "s" else ""}" + (if (now.size > 1) " from ${now.size} add-ons" else "")
                     }
@@ -6058,6 +6136,9 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                     throw e
                 } catch (e: Exception) {
                     failures++
+                    if (ap && apChips.containsKey(a.name) && apChips[a.name] == null) apChips[a.name] = 0
+                } finally {
+                    apLeft.remove(a.name)
                 }
                 // counted after its rows are on screen, whichever way its request went
                 if (origin) {
@@ -6068,6 +6149,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
         }.forEach { it.join() }
         timer?.cancel()
         slowTimer.cancel()
+        allIn = true
         decide()
         if (sections.isEmpty()) {
             val why = streamsEmptyStatus(order.isEmpty(), streamers, unread, failures, order.size, floored)
@@ -6558,6 +6640,8 @@ private fun PlayerScreen(
     onPlayNext: (Episode) -> Unit = {},
     onCancelNext: () -> Unit = {},       // the Up next card was dismissed: a hop already asked for is called off
     onSwapSource: (StreamItem, Addon, Long) -> Unit = { _, _, _ -> },
+    auto: Boolean = false,                // Autoplay chose this row (a TV, Autoplay.kt)
+    onAutoNext: (String) -> Boolean = { false },   // a failed start (error / slow / brief): the next best row, or false
     onPrefetchNext: () -> Unit = {},
     onProgressSaved: () -> Unit = {},
     onPartyStart: (PartyStreamDesc) -> Unit = {},
@@ -6601,6 +6685,16 @@ private fun PlayerScreen(
     var skipFlash by remember { mutableStateOf<Triple<Int, Int, Long>?>(null) } // zone (-1/+1), total secs, stamp
     var heldSpeed by remember { mutableStateOf<Float?>(null) }                  // speed to restore after hold-to-speed
     var dragSeek by remember { mutableStateOf<Pair<Long, Long>?>(null) }        // target ms, delta ms
+    // Autoplay (Autoplay.kt): read fresh by the player's listener, which outlives a swap; the address that showed its
+    // first picture (a start that never does is a failed start), the address a debrid clip was caught on, the Streams list
+    val autoNow by rememberUpdatedState(auto)
+    val autoNext by rememberUpdatedState(onAutoNext)
+    val urlNow by rememberUpdatedState(url)
+    val titleNow by rememberUpdatedState(title)
+    val framedFor = remember { arrayOfNulls<String>(1) }
+    val briefFor = remember { arrayOfNulls<String>(1) }
+    var streamsOpen by remember { mutableStateOf(false) }
+    var streamsRows by remember { mutableStateOf<List<Pair<StreamItem, Addon>>?>(null) }
     // the stall watchdog (StallWatch.kt): its memory, the sibling on offer and when the offer went up
     val stallWatch = remember { StallWatch() }
     var swapOffer by remember { mutableStateOf<Pair<StreamItem, Addon>?>(null) }
@@ -6843,11 +6937,17 @@ private fun PlayerScreen(
         Toasts.show(when (mode) { "" -> "Sleep timer off"; "ep" -> "Stopping when this episode ends"; else -> "Pausing in ${sleepText(minutes * 60_000L)}" })
     }
 
+    /** A debrid row that sent a few seconds instead of the film: no tick, no resume point, no Up next. */
+    fun clipNow(): Boolean {
+        val d = exo.duration
+        return d != C.TIME_UNSET && Autoplay.briefClip(titleNow, urlNow, contentType, d)
+    }
     /** Write the current position into the store. Live streams have nothing to resume. */
     fun snapshotProgress(done: Boolean = false) {
         val id = contentId ?: return
         val type = contentType ?: return
         if (exo.isCurrentMediaItemLive) return
+        if (clipNow()) return                  // a debrid "not ready" clip is not the film
         val dur = exo.duration
         if (dur == C.TIME_UNSET || dur <= 0) return
         Progress.note(
@@ -6902,6 +7002,13 @@ private fun PlayerScreen(
             if (!exo.isPlaying || n < 60) continue
             if (d * 5 >= n) offerSwap("Decoding too slowly")
         }
+    }
+
+    // Autoplay: no picture within "Give a start" (Settings › Streams) — the next best row, else the card steps aside
+    LaunchedEffect(url, auto) {
+        if (!auto) return@LaunchedEffect
+        delay(Prefs.apStart * 1000L)
+        if (framedFor[0] != url && !autoNext("slow")) AutoplayRun.started(url)
     }
 
     LaunchedEffect(url) {
@@ -7134,8 +7241,25 @@ private fun PlayerScreen(
     DisposableEffect(Unit) {
         val l = object : Player.Listener {
             override fun onPlayerError(e: PlaybackException) {
+                // Autoplay: a start that failed before its first picture gives way to the next best row (Autoplay.kt);
+                // once a picture has shown, or none is left, the usual handling below
+                if (autoNow && framedFor[0] != urlNow && autoNext("error")) return
                 if (tryFreshLink(e)) return
                 afterFreshLink(e)
+            }
+
+            override fun onRenderedFirstFrame() {
+                framedFor[0] = urlNow
+                AutoplayRun.started(urlNow)
+            }
+
+            /** A debrid row whose length says it is the service's few-second "not ready" clip, caught once per address. */
+            fun briefCheck() {
+                val u = urlNow
+                if (briefFor[0] == u || !clipNow()) return
+                briefFor[0] = u
+                if (autoNow && autoNext("brief")) return
+                error = "This source sent a short message instead of the film — its service could not hand the file over. Try another stream."
             }
 
             /**
@@ -7338,12 +7462,14 @@ private fun PlayerScreen(
                 scrubPreview?.busy(state == Player.STATE_BUFFERING)   // the frame sweep stands aside while the film buffers
                 // the stall watchdog: a buffering state after playback began counts; three in ninety seconds offer a sibling
                 if (state == Player.STATE_READY && stallWatch.playedAt == 0L) stallWatch.playedAt = System.currentTimeMillis()
+                if (state == Player.STATE_READY) briefCheck()
                 if (state == Player.STATE_BUFFERING && exo.playWhenReady && stallWatch.note()) offerSwap()
                 if (state != Player.STATE_ENDED) return
                 reachedEnd()
             }
             /** The film or episode is over: what a real end does — ticked off, then the sleep timer or Up next. */
             fun reachedEnd() {
+                if (clipNow()) return                  // a debrid clip ended, not the film: no tick, no Up next
                 snapshotProgress(done = true)          // ticks it off the episode list
                 if (sleepMode == "ep") {
                     // the night ends here: no up-next, the board says why
@@ -7392,6 +7518,7 @@ private fun PlayerScreen(
         onDispose {
             // last word on the resume point before the player goes away
             runCatching { snapshotProgress() }
+            if (autoNow) AutoplayRun.endFor(contentType, contentId)   // its card and the requests still answering go with it
             runCatching { WatchLog.flush(context) }
             runCatching { Prefs.saveBandwidth(context) }     // the connection this play measured, written once
             runCatching { Social.publishSoon(context) }   // friends see the freshly watched title
@@ -8047,6 +8174,18 @@ private fun PlayerScreen(
             onSleep = { sleepMenuOpen = !sleepMenuOpen; subPanelOpen = false; chromeTouchedAt = System.currentTimeMillis() },
             qualityLabel = qualityLabel?.takeIf { videoQualityCount >= 1 },
             speedLabel = speedLabel,
+            // Autoplay: every row of this title, best first — a pick swaps at the same second (the stall swap's path)
+            onStreams = if (auto && !P2p.isLocal(url)) ({
+                streamsOpen = true; trackListOpen = true
+                streamsRows = AutoplayRun.rows.takeIf { it.isNotEmpty() }
+                if (streamsRows == null) {
+                    val type = contentType; val id = contentId
+                    if (type != null && id != null) scope.launch {
+                        streamsRows = runCatching { StallWatch.siblings(context, type, id, addonUrl, null) }
+                            .getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it; emptyList() }
+                    } else streamsRows = emptyList()
+                }
+            }) else null,
             fitLabel = fitName(fitMode),
             onFitCycle = {
                 val next = when (fitMode) { "fit" -> "fill"; "fill" -> "stretch"; else -> "fit" }
@@ -8240,6 +8379,10 @@ private fun PlayerScreen(
             ) { skipNow(); chromeTouchedAt = System.currentTimeMillis() }
             LaunchedEffect(kind, chromeVisible) { if (!chromeVisible) runCatching { skipFocus.requestFocus() } }
         }
+        if (streamsOpen) AutoplayStreamsSheet(url, streamsRows, onPick = { (st, from) ->
+            runCatching { snapshotProgress() }
+            onSwapSource(st, from, if (exo.isCurrentMediaItemLive) -1L else exo.currentPosition.coerceAtLeast(0L))
+        }, onDismiss = { streamsOpen = false; trackListOpen = false; chromeTouchedAt = System.currentTimeMillis() })
         // A source that keeps stalling (StallWatch.kt): the row after it, on a pill one step above the skip's; one press
         // switches with the second kept. With the chrome hidden it takes focus, so OK on a remote is the switch.
         swapOffer?.let { (st, from) ->

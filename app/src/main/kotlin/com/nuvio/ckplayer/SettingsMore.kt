@@ -225,6 +225,33 @@ internal fun SettingsStreamsScreen(onBack: () -> Unit) {
                 listOf("3" to "3 s", "6" to "6 s", "10" to "10 s"), Prefs.pickWait.toString(), divider = false,
             ) { Prefs.setPickWait(ctx, it.toInt()) }
         }
+        // a TV only (Autoplay.kt): Play starts the best stream, the list stays underneath; outranks the pick above
+        if (remember(ctx) { Account.isTv(ctx) }) {
+            SettingsHeader("AUTOPLAY", "Play starts the film, not the list")
+            SettingsGroup {
+                SettingsToggle("Autoplay", "Play on a film or episode starts its best stream — no list", Prefs.autoplay,
+                    divider = Prefs.autoplay) { Prefs.setAutoplay(ctx, it) }
+                if (Prefs.autoplay) {
+                    SettingsChips("Aim for", "The best quality worth starting · higher ones come after it",
+                        listOf("2160" to "4K", "1080" to "1080p", "720" to "720p"), Prefs.apMax.toString(),
+                    ) { Prefs.setApMax(ctx, it.toInt()) }
+                    SettingsToggle("Instant debrid first", "TorBox and other debrid rows that are ready play before higher quality",
+                        Prefs.apInstant) { Prefs.setApInstant(ctx, it) }
+                    SettingsChips("Wait for add-ons", "Quick starts sooner · All waits for every add-on to answer",
+                        listOf("quick" to "Quick", "balanced" to "Balanced", "all" to "All"), Prefs.apWait,
+                    ) { Prefs.setApWait(ctx, it) }
+                    SettingsChips("If it won't start", "Plays the next best stream instead",
+                        listOf("0" to "Off", "3" to "Next 3", "5" to "Next 5"), Prefs.apRetry.toString(),
+                    ) { Prefs.setApRetry(ctx, it.toInt()) }
+                    SettingsChips("Give a start", "How long a stream has to show its picture",
+                        listOf("20" to "20 s", "45" to "45 s", "90" to "90 s"), Prefs.apStart.toString(),
+                    ) { Prefs.setApStart(ctx, it.toInt()) }
+                    SettingsChips("Back from the player", "Where Back lands after a film started this way",
+                        listOf("title" to "Title page", "list" to "Streams list"), Prefs.apBack, divider = false,
+                    ) { Prefs.setApBack(ctx, it) }
+                }
+            }
+        }
     }
 }
 
