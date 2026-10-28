@@ -182,12 +182,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.99.1.apk
+          cp "$APK" Nebula-1.100.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.99.1 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.99.1 Nebula-1.99.1.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.99.1" \
-            --notes "Profiles keep to themselves across devices: a second profile no longer picks up the first profile's add-ons when the connection drops, signing into another account no longer brings your second profile (its name, PIN, history and add-ons) along, and signing in asks who's watching. (1.99.0: a profile can have a PIN.)"
+          gh release delete v1.100.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.100.0 Nebula-1.100.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.100.0" \
+            --notes "Autoplay the best stream on Android TV (Settings › Streams): Play on a film or episode starts its best stream with no list — ready debrid rows first, then the quality you aim for — and tries the next one by itself if it will not start. Options: Aim for, Instant debrid first, Wait for add-ons, If it won't start, Give a start, Back from the player. A Streams button in the player switches rows. Off by default; phones unchanged."
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
