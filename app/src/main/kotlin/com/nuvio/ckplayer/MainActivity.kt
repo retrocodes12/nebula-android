@@ -5928,7 +5928,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
     val backHere = remember { ReturnFocus.backTo(streamsEntry) }
     // Autoplay (a TV, Autoplay.kt): Play on a film or an episode — never Back to this list — starts its best stream by
     // itself; a card covers the list while the add-ons answer, and the list stays underneath it for the viewer
-    val apOn = remember { Prefs.autoplay && Account.isTv(ctx) && (item.type == "movie" || item.type == "series") && !backHere }
+    val apOn = remember { Prefs.bestPlay && Account.isTv(ctx) && (item.type == "movie" || item.type == "series") && !backHere }
     // left with nothing started (Back, a tab, a row picked by hand): the run's requests stop with the page, as they always did
     DisposableEffect(Unit) { onDispose { if (AutoplayRun.playing == null) AutoplayRun.endFor(item.type, item.id) } }
     // Speed tests (1.88.0, SpeedTest.kt): Test speeds measures the rows in their order on screen, ONE AT A TIME

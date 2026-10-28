@@ -227,15 +227,15 @@ internal fun SettingsStreamsScreen(onBack: () -> Unit) {
         }
         // a TV only (Autoplay.kt): Play starts the best stream, the list stays underneath; outranks the pick above
         if (remember(ctx) { Account.isTv(ctx) }) {
-            SettingsHeader("AUTOPLAY", "Play starts the film, not the list")
+            SettingsHeader("AUTOPLAY THE BEST STREAM", "Play starts the film, not the list")
             SettingsGroup {
-                SettingsToggle("Autoplay", "Play on a film or episode starts its best stream — no list", Prefs.autoplay,
-                    divider = Prefs.autoplay) { Prefs.setAutoplay(ctx, it) }
-                if (Prefs.autoplay) {
+                SettingsToggle("Autoplay the best stream", "Play on a film or episode starts its best stream — no list", Prefs.bestPlay,
+                    divider = Prefs.bestPlay) { Prefs.setBestPlay(ctx, it) }
+                if (Prefs.bestPlay) {
                     SettingsChips("Aim for", "The best quality worth starting · higher ones come after it",
                         listOf("2160" to "4K", "1080" to "1080p", "720" to "720p"), Prefs.apMax.toString(),
                     ) { Prefs.setApMax(ctx, it.toInt()) }
-                    SettingsToggle("Instant debrid first", "TorBox and other debrid rows that are ready play before higher quality",
+                    SettingsToggle("Instant debrid first", "Debrid rows that are ready play before higher quality",
                         Prefs.apInstant) { Prefs.setApInstant(ctx, it) }
                     SettingsChips("Wait for add-ons", "Quick starts sooner · All waits for every add-on to answer",
                         listOf("quick" to "Quick", "balanced" to "Balanced", "all" to "All"), Prefs.apWait,

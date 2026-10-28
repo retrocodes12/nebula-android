@@ -6,7 +6,7 @@ package com.nuvio.ckplayer
  * so AutoplayTest pins them; the card, the run and the player's part live in AutoplayUi.kt.
  */
 internal object Autoplay {
-    /** The settings (Settings › Streams › Autoplay) with their defaults. [max] = the quality rank aimed for (4K = 4). */
+    /** The settings (Settings › Streams › Autoplay the best stream) with their defaults. [max] = the quality rank aimed for (4K = 4). */
     data class Cfg(
         val max: Int = 4,
         val instant: Boolean = true,
