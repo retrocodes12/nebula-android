@@ -14,6 +14,12 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
+    <!-- The TV's programme store, for the launcher's Watch Next row (WatchNext.kt): seen from here under Android 11's package
+         visibility. No permission: an app needs none for its own Watch Next rows. -->
+    <queries>
+        <provider android:authorities="android.media.tv" />
+    </queries>
+
     <!-- Run on both phones and Android TV -->
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.software.leanback" android:required="false" />

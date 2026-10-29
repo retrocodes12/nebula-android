@@ -174,6 +174,7 @@ object Prefs {
     var welcome by mutableStateOf(true); private set              // the toast at start
     // ---- supporters (Plus level: Supporter Plus, Founder, Monthly) ----
     var earlyBuilds by mutableStateOf(false); private set         // offer pre-releases on the update card (Perks.kt)
+    var watchNext by mutableStateOf(true); private set            // TV: Continue watching in the launcher's Watch Next row (WatchNext.kt)
 
     fun load(ctx: Context) {
         val p = ctx.getSharedPreferences(P, Context.MODE_PRIVATE)
@@ -252,6 +253,7 @@ object Prefs {
         apBack = if (p.getString("pref_apback", "title") == "list") "list" else "title"
         welcome = p.getBoolean("pref_welcome", true)
         earlyBuilds = p.getBoolean("pref_earlybuilds", false)
+        watchNext = p.getBoolean("pref_watchnext", true)
         discType = p.getString("pref_disctype", "") ?: ""
         discCatalog = p.getString("pref_disccat", "") ?: ""
         discGenre = p.getString("pref_discgenre", "") ?: ""
@@ -364,6 +366,7 @@ object Prefs {
     fun setApBack(ctx: Context, v: String) { apBack = v; edit(ctx).putString("pref_apback", v).apply() }
     fun setWelcome(ctx: Context, v: Boolean) { welcome = v; edit(ctx).putBoolean("pref_welcome", v).apply() }
     fun setEarlyBuilds(ctx: Context, v: Boolean) { earlyBuilds = v; edit(ctx).putBoolean("pref_earlybuilds", v).apply() }
+    fun setWatchNext(ctx: Context, v: Boolean) { watchNext = v; edit(ctx).putBoolean("pref_watchnext", v).apply() }
 
     /**
      * Reset all settings: every `pref_*` key, the subtitle style, the Home arrangement

@@ -266,6 +266,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -365,7 +366,7 @@ private val REMOTE_WAKE_KEYS = setOf(
 )
 
 class MainActivity : ComponentActivity() {
-    private val pendingPlay = mutableStateOf<PlayReq?>(null)
+    private val pendingPlay = mutableStateOf<LinkReq?>(null)
 
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         KeyWatch.note(event)
@@ -435,6 +436,7 @@ class MainActivity : ComponentActivity() {
         // a Plus-level app icon whose perk lapsed goes back to Classic (AppIcons.kt; nothing is written otherwise)
         AppIcons.enforce(this)
         Social.load(this)
+        WatchNext.poke(this, soon = true)    // the launcher's Watch Next row from Continue watching (TV; WatchNext.kt)
         // only honor the launch intent on a fresh start — a recreated activity
         // (process restore, config change) must not jump back into the player
         pendingPlay.value = if (savedInstanceState == null) parsePlayIntent(intent) else null
@@ -448,6 +450,7 @@ class MainActivity : ComponentActivity() {
     // entry a task was opened from finishes that task, so never while a player is up: a screen switched off mid-film)
     override fun onStop() {
         super.onStop()
+        WatchNext.poke(this, soon = true)    // back on the launcher: its Watch Next row with the place just left
         if (activePipPlayer.value == null) AppIcons.settle(this)
     }
 
@@ -458,19 +461,11 @@ class MainActivity : ComponentActivity() {
         parsePlayIntent(intent)?.let { pendingPlay.value = it }
     }
 
-    // nebula://play?mpd=<manifest url>&t=<title>
-    private fun parsePlayIntent(intent: Intent?): PlayReq? {
+    // nebula://play?mpd=<manifest url>&t=<title>, and the resume and title-page forms (DeepLinks.kt checks every field)
+    private fun parsePlayIntent(intent: Intent?): LinkReq? {
         if (intent?.action != Intent.ACTION_VIEW) return null
         val data = intent.data ?: return null
-        if (!data.scheme.equals("nebula", ignoreCase = true)) return null
-        val mpd = data.getQueryParameter("mpd")?.trim().orEmpty()
-        if (mpd.isEmpty()) return null
-        // any web page can fire this link: only a web address may come through it, never file:// or content://
-        // (which would have the player read this app's own files, or another app's, on a stranger's say-so)
-        val scheme = runCatching { Uri.parse(mpd).scheme }.getOrNull()?.lowercase()
-        if (scheme != "http" && scheme != "https") return null
-        val title = (data.getQueryParameter("t") ?: data.getQueryParameter("title") ?: "Nebula Sports").trim()
-        return PlayReq(mpd, title)
+        return runCatching { DeepLinks.parse(data.scheme, data.host) { data.getQueryParameter(it) } }.getOrNull()
     }
 
     // ---------- picture-in-picture ----------
@@ -893,8 +888,6 @@ private class CatalogUiState {
     val gridState = LazyGridState()
 }
 
-/** A play request arriving from a nebula://play deep link. */
-data class PlayReq(val mpd: String, val title: String)
 
 /**
  * Watch-party UI state, file-level (like manifestCache) so it survives the nav
@@ -1009,7 +1002,7 @@ private fun saveAddons(ctx: Context, list: List<Addon>) {
 
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
-fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
+fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
     // Text size (Settings › Appearance) scales every sp in the app on top of the device's own setting
     val baseDensity = LocalDensity.current
     val density = Density(baseDensity.density, baseDensity.fontScale * Prefs.textScale)
@@ -1220,7 +1213,7 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
 
             // A deep-link play request jumps straight to the player; Back returns Home.
             LaunchedEffect(playReq) {
-                if (playReq != null) {
+                if (playReq is LinkReq.Play) {
                     // a bare address (often a live channel) belongs to no series: whatever chain the last show left goes
                     cancelHop(); seriesChain.clear()
                     stack = listOf(Screen.Home, Screen.Play(playReq.mpd, playReq.title))
@@ -1250,6 +1243,36 @@ fun AppRoot(playReq: PlayReq? = null, onConsumed: () -> Unit = {}) {
                 val a = addons.firstOrNull { it.manifestUrl == r.addonUrl } ?: addons.firstOrNull() ?: return
                 val id = if (r.type == "series") seriesIdOf(r.id) else r.id
                 push(Screen.Detail(a, MetaItem(id, r.type, r.name.split(" · ").first(), r.poster, r.shape)))
+            }
+
+            // The launcher's Watch Next row (WatchNext.kt) and a new-episode alert (NewEpisodes.kt): once who's watching
+            // is answered, resume that title of THIS profile, or open its title page. Only this profile's own records
+            // are resumed, and only an installed add-on is asked, whatever the link says.
+            LaunchedEffect(playReq) {
+                val req = playReq
+                if (req !is LinkReq.Resume && req !is LinkReq.Title) return@LaunchedEffect
+                snapshotFlow { Viewers.asking }.first { !it }
+                onConsumed()
+                cancelHop(); leavingPlayer(); ReturnFocus.clear()
+                stack = listOf(Screen.Home)
+                val addons = activeAddons(ctx)
+                when (req) {
+                    is LinkReq.Resume -> {
+                        val r = Progress.get(ctx, req.type, req.id)
+                            ?.takeIf { !it.done && !it.dismissed && it.pos >= Progress.MIN_POS_MS && it.dur > 0 }
+                        if (r != null) openProgress(r)
+                        else {
+                            val a = addons.firstOrNull() ?: return@LaunchedEffect
+                            val id = if (req.type == "series") seriesIdOf(req.id) else req.id
+                            push(Screen.Detail(a, MetaItem(id, req.type, "", null)))
+                        }
+                    }
+                    is LinkReq.Title -> {
+                        val a = addons.firstOrNull { it.manifestUrl == req.addon } ?: addons.firstOrNull() ?: return@LaunchedEffect
+                        push(Screen.Detail(a, MetaItem(req.id, req.type, req.name, null)))
+                    }
+                    else -> {}
+                }
             }
 
             // A torrent row (P2p.kt) carries no address until the engine has found the file in the
@@ -4828,6 +4851,8 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
                 ) { Prefs.setRelay(ctx, it) }
             }
         }
+        // outside the player: the TV's Watch Next row (PlaybackExtras.kt)
+        PlaybackExtrasGroup()
         // the viewer's own Seekr key: ready-made pictures for the scrub preview above (Seekr.kt)
         SeekrSettings()
         SettingsHeader("NEXT EPISODE", "Rolling on, skipping ahead and coming back")

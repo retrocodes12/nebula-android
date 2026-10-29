@@ -111,6 +111,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("io.coil-kt:coil-compose:2.6.0")
+    // the Android TV launcher's Watch Next row (WatchNext.kt). 1.1.0's AAR metadata: minCompileSdk 34, AGP 8.1.1
+    implementation("androidx.tvprovider:tvprovider:1.1.0")
 
     // P2P streams (P2p.kt). The per-processor artifacts are plain jars carrying lib/<abi>/libtorrent4j.so,
     // which the packager picks up as native libraries; they all pull in the shared Java classes.

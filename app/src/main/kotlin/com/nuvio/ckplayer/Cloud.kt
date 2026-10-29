@@ -118,6 +118,8 @@ object Cloud {
     internal fun hasToken(ctx: Context) = !token(ctx).isNullOrEmpty()
     /** A device token replaces the master secret for good. */
     internal fun setToken(ctx: Context, t: String) = cred(ctx).edit().putString("cloud_token", t).remove("cloud_secret").apply()
+    /** The account this device is signed into, or null (WatchNext.kt: whose rows the launcher holds). */
+    fun accountId(ctx: Context): String? = gid(ctx)?.takeIf { linked(ctx) }
     fun linked(ctx: Context) = !gid(ctx).isNullOrEmpty() && (!token(ctx).isNullOrEmpty() || !secret(ctx).isNullOrEmpty())
     /** "out" (nothing), "in" (a profile), or "legacy" (a link-code group with no profile yet). */
     fun state(ctx: Context): String = if (!linked(ctx)) "out" else if (profile != null) "in" else "legacy"
@@ -280,6 +282,7 @@ object Cloud {
         profile = null
         devices = emptyList()
         Social.reset(ctx)
+        WatchNext.signedOut(ctx)              // the launcher's Watch Next row goes with the sign-in (TV)
     }
 
     private suspend fun credentialDead(ctx: Context) {

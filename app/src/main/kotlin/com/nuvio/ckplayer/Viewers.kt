@@ -231,7 +231,10 @@ object Viewers {
         if (gate) { asking = true; launchGate = true }
     }
 
-    private fun setCurrent(ctx: Context, id: String) { current = id; prefs(ctx).edit().putString("viewer", id).apply() }
+    private fun setCurrent(ctx: Context, id: String) {
+        current = id; prefs(ctx).edit().putString("viewer", id).apply()
+        WatchNext.poke(ctx, soon = true)                  // the launcher's row is the other profile's now (TV)
+    }
 
     /** On to the other profile: what this one changed goes up under its own names first, then the other's history and
         add-ons are read (this device's copy at once, the cloud's after a pull) and every screen that shows them redraws. */

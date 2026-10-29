@@ -147,6 +147,11 @@ object Progress {
         if (rec.id.isEmpty()) return
         val m = load(ctx)
         val k = key(rec.type, rec.id)
+        // the launcher's Watch Next row (TV): what is listed changes now, a position moving waits its minute
+        val prev = m[k]
+        val ends = rec.done || (rec.dur > 0 && rec.pos > rec.dur - END_GAP_MS) || rec.pos < MIN_POS_MS
+        WatchNext.played(ctx)
+        WatchNext.poke(ctx, soon = ends || prev == null || prev.done || prev.dismissed)
         if (rec.done || (rec.dur > 0 && rec.pos > rec.dur - END_GAP_MS)) {
             m[k] = ProgressRec(rec.type, rec.id, done = true, at = System.currentTimeMillis())
             persist(ctx, m)
@@ -180,6 +185,7 @@ object Progress {
         val real = had != null && !had.dismissed && (had.done || (had.pos > 0 && had.dur > 0))
         m[k] = ProgressRec(type, id, done = true, hand = !real, at = System.currentTimeMillis())
         persist(ctx, m)
+        WatchNext.poke(ctx, soon = true)
     }
 
     /** Undo that, or a part-way position: the dismissed tombstone every list and
@@ -189,6 +195,7 @@ object Progress {
         val m = load(ctx)
         m[key(type, id)] = ProgressRec(type, id, dismissed = true, at = System.currentTimeMillis())
         persist(ctx, m)
+        WatchNext.poke(ctx, soon = true)
     }
 
     fun clear(ctx: Context, type: String, id: String) {
@@ -197,6 +204,7 @@ object Progress {
         if (m[k] != null) {
             m[k] = ProgressRec(type, id, dismissed = true, at = System.currentTimeMillis())
             persist(ctx, m)
+            WatchNext.poke(ctx, soon = true)
         }
     }
 
@@ -209,6 +217,7 @@ object Progress {
         cache = mm
         persistRaw(ctx, mm)
         syncVersion++
+        WatchNext.poke(ctx, soon = true)
     }
 
     /** The twenty most recent things worth resuming — newest first, or A to Z when Settings › Home says so. */
