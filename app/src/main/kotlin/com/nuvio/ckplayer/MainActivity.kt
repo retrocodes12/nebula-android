@@ -4399,8 +4399,13 @@ private fun SettingsScreen(
             SettingsRow(Icons.Filled.Palette, "Appearance", "Accent, surface, text, font and cards", true, onLayout)
             SettingsRow(Icons.Filled.Home, "Home", "Featured, Continue Watching, rows and title pages", true, onHome)
             SettingsRow(Icons.Filled.PlayArrow, "Playback", "Player, next episode, languages and subtitles", true, onPlayback)
-            // the Streams page holds Everything rows only (no E mark in the brief), so Essential does not list it
-            if (Prefs.everything) SettingsRow(Icons.Filled.FilterList, "Streams", "Order, quality floor, details and picking by itself", true, onStreams)
+            // listed in Essential too: the Streams page holds Essential rows (P2P, PICKING, AUTOPLAY THE BEST STREAM) and
+            // shows its Everything rows (THE LIST, the quality floor, the pick wait) only under Prefs.everything itself
+            SettingsRow(
+                Icons.Filled.FilterList, "Streams",
+                if (Prefs.everything) "Order, quality floor, details and picking by itself" else "Picking by itself and autoplaying the best one",
+                true, onStreams,
+            )
             SettingsRow(Icons.Filled.Extension, "Add-ons", addonsSub, true, onAddons)
             SettingsRow(Icons.Filled.Groups, "Watch party", "Watch in sync with friends using a code", true, onParty)
             SettingsRow(Icons.Filled.Favorite, "Friends", "Rate, share and recommend — experimental", true, onFriends)
