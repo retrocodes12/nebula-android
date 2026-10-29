@@ -16,11 +16,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 
-/** Settings › Playback: what Nebula does outside the player — the launcher's Watch Next row on a TV (WatchNext.kt),
-    new-episode alerts on a phone (NewEpisodes.kt). */
+/** Settings › Playback: night mode (NightMode.kt), then what Nebula does outside the player — the launcher's Watch Next
+    row on a TV (WatchNext.kt), new-episode alerts on a phone (NewEpisodes.kt). */
 @Composable
 internal fun PlaybackExtrasGroup() {
     val ctx = LocalContext.current
+    // Android 9 and later (the effect it needs); hidden below that
+    if (NightMode.available) {
+        SettingsHeader("SOUND", "How the film's sound is evened out on this device")
+        SettingsGroup {
+            SettingsToggle(
+                "Night mode",
+                "Loud moments quieter, quiet voices lifted · Also in the player's Audio list" +
+                    if (Account.isTv(ctx)) " · Not applied when the TV passes the sound to a sound bar or receiver untouched" else "",
+                Prefs.night, divider = false,
+            ) { Prefs.setNight(ctx, it) }
+        }
+    }
     if (Account.isTv(ctx)) {
         SettingsHeader("HOME SCREEN", "What the TV's own home screen shows from Nebula")
         SettingsGroup {

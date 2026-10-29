@@ -176,6 +176,7 @@ object Prefs {
     var earlyBuilds by mutableStateOf(false); private set         // offer pre-releases on the update card (Perks.kt)
     var watchNext by mutableStateOf(true); private set            // TV: Continue watching in the launcher's Watch Next row (WatchNext.kt)
     var newEpisodes by mutableStateOf(false); private set         // phone: a notification when a followed show has a new episode (NewEpisodes.kt)
+    var night by mutableStateOf(false); private set               // night mode: loud peaks quieter, quiet dialogue lifted (NightMode.kt) — this device only
 
     fun load(ctx: Context) {
         val p = ctx.getSharedPreferences(P, Context.MODE_PRIVATE)
@@ -256,6 +257,7 @@ object Prefs {
         earlyBuilds = p.getBoolean("pref_earlybuilds", false)
         watchNext = p.getBoolean("pref_watchnext", true)
         newEpisodes = p.getBoolean("pref_newep", false)
+        night = p.getBoolean("pref_night", false)
         discType = p.getString("pref_disctype", "") ?: ""
         discCatalog = p.getString("pref_disccat", "") ?: ""
         discGenre = p.getString("pref_discgenre", "") ?: ""
@@ -369,6 +371,7 @@ object Prefs {
     fun setWelcome(ctx: Context, v: Boolean) { welcome = v; edit(ctx).putBoolean("pref_welcome", v).apply() }
     fun setEarlyBuilds(ctx: Context, v: Boolean) { earlyBuilds = v; edit(ctx).putBoolean("pref_earlybuilds", v).apply() }
     fun setWatchNext(ctx: Context, v: Boolean) { watchNext = v; edit(ctx).putBoolean("pref_watchnext", v).apply() }
+    fun setNight(ctx: Context, v: Boolean) { night = v; edit(ctx).putBoolean("pref_night", v).apply() }
     /** Off forgets every show's last check, so turning it on again records first instead of posting what came out meanwhile. */
     fun setNewEpisodes(ctx: Context, v: Boolean) {
         newEpisodes = v

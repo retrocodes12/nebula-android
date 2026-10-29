@@ -7567,6 +7567,17 @@ private fun PlayerScreen(
             }
         }
     }
+    // Night mode (NightMode.kt) on the player's audio session, following its switch. Declared after the effect above,
+    // so it is let go first: the effect is released before the player is.
+    val night = remember { NightMode() }
+    DisposableEffect(exo) {
+        val nl = object : Player.Listener {
+            override fun onAudioSessionIdChanged(audioSessionId: Int) { night.apply(audioSessionId, Prefs.night) }
+        }
+        exo.addListener(nl)
+        onDispose { exo.removeListener(nl); night.release() }
+    }
+    LaunchedEffect(Prefs.night) { night.apply(exo.audioSessionId, Prefs.night) }
 
     // Restyle live whenever the subtitle appearance changes — a tap in the
     // panel here, or a synced-in choice made on another device. While the
@@ -7653,6 +7664,7 @@ private fun PlayerScreen(
                     scrubPreview?.status?.value,
                 ),
                 p2pLine = if (P2p.isLocal(url)) P2p.line() else null,
+                soundLine = NightMode.soundLine(Prefs.night, night.active),
                 decoderLine = when {
                     softDecode -> "on the processor ($softWhy)"
                     isSoftwareDecoderName(videoDecoderName) -> "on the processor (${videoDecoderName}) — this device's chip cannot"
@@ -7904,7 +7916,17 @@ private fun PlayerScreen(
             TrackSelectionDialogBuilder(context, label, exo, type)
                 .setShowDisableOption(false)
                 .apply { if (type == C.TRACK_TYPE_VIDEO) setAllowAdaptiveSelections(true) }
-                .build().keepChrome().show()
+                .build().keepChrome()
+                .apply {
+                    // the Audio list's own night mode switch (NightMode.kt): its third button, a tap flips it
+                    if (type == C.TRACK_TYPE_AUDIO && NightMode.available) (this as? android.app.AlertDialog)?.setButton(
+                        android.content.DialogInterface.BUTTON_NEUTRAL, if (Prefs.night) "Night mode · On" else "Night mode · Off",
+                    ) { _, _ ->
+                        Prefs.setNight(context, !Prefs.night)
+                        Toasts.show(if (Prefs.night) "Night mode on — loud moments quieter, quiet voices lifted." else "Night mode off.")
+                    }
+                }
+                .show()
         }
     }
     val landing = remember { LongArray(1) }                  // until when a wake's focus is still on its way
