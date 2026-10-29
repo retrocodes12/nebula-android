@@ -1,6 +1,7 @@
 package com.nuvio.ckplayer
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -166,10 +167,40 @@ object Stremio {
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val body = stream?.bufferedReader()?.use { it.readText() } ?: ""
-            if (code !in 200..299) throw RuntimeException("HTTP $code")
+            if (code !in 200..299) throw HttpStatus(code)
             body
         } finally {
             conn.disconnect()
+        }
+    }
+
+    /** An answer that was not a 2xx. Its message stays "HTTP <code>", as before; the code is kept for [streamRetryWorth]. */
+    class HttpStatus(val code: Int) : RuntimeException("HTTP $code")
+
+    /** How long a failed stream request waits before it is asked once more. */
+    const val STREAM_RETRY_MS = 2_000L
+
+    /** A stream list that failed is asked ONE more time after [STREAM_RETRY_MS] when the failure looks passing: the
+        connection dropped or the server stumbled (5xx, 408, 429). A refusal (404 and the other 4xx) or an answer that
+        was not a stream list is final. A read that already waited the whole [STREAM_READ_MS] is not asked again — a
+        second full wait would hold the add-on's row for three minutes. The caller's waiting row stays up meanwhile. */
+    internal fun streamRetryWorth(e: Throwable, elapsedMs: Long): Boolean = when (e) {
+        is HttpStatus -> httpWorthRetry(e.code)
+        is java.net.SocketTimeoutException -> elapsedMs < STREAM_READ_MS
+        is java.io.IOException -> true
+        else -> false
+    }
+
+    private suspend fun streamListText(u: String): String {
+        val t0 = System.nanoTime()
+        return try {
+            httpGetText(u, STREAM_READ_MS)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (!streamRetryWorth(e, (System.nanoTime() - t0) / 1_000_000)) throw e
+            delay(STREAM_RETRY_MS)
+            httpGetText(u, STREAM_READ_MS)
         }
     }
 
@@ -400,7 +431,7 @@ object Stremio {
     /** Parsed off the main thread: a torrent add-on can answer with hundreds of rows, and every add-on now answers at once. */
     suspend fun loadStreams(base: String, type: String, id: String): List<StreamItem> = withContext(Dispatchers.IO) {
         val u = "$base/stream/${enc(type)}/${enc(id)}.json"
-        val j = JSONObject(httpGetText(u, STREAM_READ_MS))
+        val j = JSONObject(streamListText(u))
         val arr = j.optJSONArray("streams") ?: return@withContext emptyList()
         val out = mutableListOf<StreamItem>()
         for (i in 0 until arr.length()) {
