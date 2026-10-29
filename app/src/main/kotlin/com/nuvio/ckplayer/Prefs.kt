@@ -161,7 +161,7 @@ object Prefs {
     var autoPick by mutableStateOf("off"); private set            // off / last (same as last time) / first
     val autoStream: Boolean get() = autoPick != "off"             // the old switch, kept for callers
     var pickWait by mutableStateOf(6); private set                // seconds auto-pick waits for slow add-ons
-    // Autoplay (Android TV only, Autoplay.kt): Play on a film or an episode starts its best stream — no list
+    // Autoplay (phone and TV, Autoplay.kt): Play on a film or an episode starts its best stream — no list
     var bestPlay by mutableStateOf(false); private set             // "Autoplay the best stream" (not Up next's autoplay)
     var apMax by mutableStateOf(2160); private set                 // aim for 2160 / 1080 / 720
     var apInstant by mutableStateOf(true); private set             // debrid rows ready at once before higher quality

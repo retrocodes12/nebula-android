@@ -1,7 +1,7 @@
 package com.nuvio.ckplayer
 
 /**
- * Autoplay (Android TV; the shared player's "shelf mode"): Play on a film or an episode starts its best stream with no list.
+ * Autoplay (phone and Android TV; the shared player's "shelf mode"): Play on a film or an episode starts its best stream with no list.
  * The rules alone — which row is best, when to stop waiting for slower add-ons, a debrid clip in place of the film — pure,
  * so AutoplayTest pins them; the card, the run and the player's part live in AutoplayUi.kt.
  */

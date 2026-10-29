@@ -225,8 +225,8 @@ internal fun SettingsStreamsScreen(onBack: () -> Unit) {
                 listOf("3" to "3 s", "6" to "6 s", "10" to "10 s"), Prefs.pickWait.toString(), divider = false,
             ) { Prefs.setPickWait(ctx, it.toInt()) }
         }
-        // a TV only (Autoplay.kt): Play starts the best stream, the list stays underneath; outranks the pick above
-        if (remember(ctx) { Account.isTv(ctx) }) {
+        // Autoplay.kt: Play starts the best stream, the list stays underneath; outranks the pick above
+        run {
             SettingsHeader("AUTOPLAY THE BEST STREAM", "Play starts the film, not the list")
             SettingsGroup {
                 SettingsToggle("Autoplay the best stream", "Play on a film or episode starts its best stream — no list", Prefs.bestPlay,

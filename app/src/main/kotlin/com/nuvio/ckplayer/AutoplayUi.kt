@@ -2,6 +2,8 @@ package com.nuvio.ckplayer
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +32,8 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -181,7 +185,8 @@ internal fun AutoplayStreamsSheet(cur: String, rows: List<Pair<StreamItem, Addon
 /**
  * The launch card: the title over its backdrop, who is being asked, then what starts — full screen, over the list and
  * then over the player until its first picture. It takes no focus; on the player any key sends it away (the streams page
- * swallows the key instead, [AutoplayRun.swallow]).
+ * swallows the key instead, [AutoplayRun.swallow]). On a phone a tap does the same and goes no further — it would
+ * otherwise land on the list or the player chrome underneath; the streams page reads the touch as the viewer taking over.
  */
 @Composable
 internal fun AutoplayCardHost() {
@@ -193,20 +198,28 @@ internal fun AutoplayCardHost() {
             if (KeyWatch.anyDownAt > c.at) { if (AutoplayRun.card === c) AutoplayRun.card = null; return@LaunchedEffect }
         }
     }
-    Box(Modifier.fillMaxSize().background(Bg)) {
+    val ctx = LocalContext.current
+    val touch = remember(ctx) { !Account.isTv(ctx) }
+    val narrow = LocalConfiguration.current.screenWidthDp < 600
+    val tap = remember { MutableInteractionSource() }
+    Box(Modifier.fillMaxSize().background(Bg).then(if (touch) Modifier.clickable(tap, indication = null) {
+        AutoplayRun.asking = false; if (AutoplayRun.card === c) AutoplayRun.card = null
+    } else Modifier)) {
         if (c.art != null) AsyncImage(model = c.art, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to Color(0xF2000000), 0.55f to Color(0x8C000000), 1f to Color(0x33000000))))
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.45f to Color.Transparent, 1f to Color(0xE6000000))))
-        Column(Modifier.align(Alignment.BottomStart).padding(start = 64.dp, end = 64.dp, bottom = 56.dp).widthIn(max = 760.dp)) {
+        Column(Modifier.align(Alignment.BottomStart)
+            .padding(start = if (narrow) 24.dp else 64.dp, end = if (narrow) 24.dp else 64.dp, bottom = if (narrow) 40.dp else 56.dp)
+            .widthIn(max = 760.dp)) {
             var logoOk by remember(c.logo) { mutableStateOf(false) }
             Box(contentAlignment = Alignment.BottomStart) {
                 if (c.logo != null) AsyncImage(
                     model = c.logo, contentDescription = c.title, contentScale = ContentScale.Fit, alignment = Alignment.BottomStart,
-                    modifier = Modifier.height(110.dp).widthIn(max = 460.dp).alpha(if (logoOk) 1f else 0f),
+                    modifier = Modifier.height(if (narrow) 72.dp else 110.dp).widthIn(max = if (narrow) 300.dp else 460.dp).alpha(if (logoOk) 1f else 0f),
                     // a wide wordmark only — a square badge reads worse than the title in type
                     onSuccess = { st -> val sz = st.painter.intrinsicSize; logoOk = sz.height > 0f && sz.width / sz.height >= 1.6f },
                 )
-                if (!logoOk) Text(c.title, color = TextC, fontFamily = Sans, fontSize = 40.sp, fontWeight = FontWeight.Bold,
+                if (!logoOk) Text(c.title, color = TextC, fontFamily = Sans, fontSize = if (narrow) 30.sp else 40.sp, fontWeight = FontWeight.Bold,
                     letterSpacing = (-1).sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
             if (c.sub != null) Text(c.sub, color = Color(0xB8EBEBF5), fontFamily = Sans, fontSize = 17.sp, maxLines = 1,
@@ -217,9 +230,10 @@ internal fun AutoplayCardHost() {
                 Text(c.line, color = TextC, fontFamily = Sans, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 2,
                     overflow = TextOverflow.Ellipsis)
             }
+            val shown = if (narrow) 3 else 6
             if (c.chips.isNotEmpty()) Row(Modifier.padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                c.chips.take(6).forEach { ch -> ApChipView(ch) }
-                if (c.chips.size > 6) Text("+${c.chips.size - 6}", color = MutedC, fontFamily = Mono, fontSize = 13.sp,
+                c.chips.take(shown).forEach { ch -> ApChipView(ch) }
+                if (c.chips.size > shown) Text("+${c.chips.size - shown}", color = MutedC, fontFamily = Mono, fontSize = 13.sp,
                     modifier = Modifier.align(Alignment.CenterVertically))
             }
         }
