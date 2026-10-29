@@ -113,6 +113,9 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.6.0")
     // the Android TV launcher's Watch Next row (WatchNext.kt). 1.1.0's AAR metadata: minCompileSdk 34, AGP 8.1.1
     implementation("androidx.tvprovider:tvprovider:1.1.0")
+    // new-episode alerts' ~12-hourly check (NewEpisodes.kt). 2.12.0's AAR metadata: minCompileSdk 35, AGP 8.6.0 (ours 36 / 8.9.1);
+    // it brings Room 2.7.0 and androidx.startup (minCompileSdk 34 / 31), lifecycle 2.6.2 and coroutines 1.9 floors under ours
+    implementation("androidx.work:work-runtime:2.12.0")
 
     // P2P streams (P2p.kt). The per-processor artifacts are plain jars carrying lib/<abi>/libtorrent4j.so,
     // which the packager picks up as native libraries; they all pull in the shared Java classes.

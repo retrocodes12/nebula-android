@@ -437,6 +437,7 @@ class MainActivity : ComponentActivity() {
         AppIcons.enforce(this)
         Social.load(this)
         WatchNext.poke(this, soon = true)    // the launcher's Watch Next row from Continue watching (TV; WatchNext.kt)
+        NewEpisodes.sync(this)               // new-episode alerts' schedule follows its switch (a phone; NewEpisodes.kt)
         // only honor the launch intent on a fresh start — a recreated activity
         // (process restore, config change) must not jump back into the player
         pendingPlay.value = if (savedInstanceState == null) parsePlayIntent(intent) else null
