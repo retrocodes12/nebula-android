@@ -21,6 +21,9 @@
 # which R8 would otherwise drop as unused.
 -keep class androidx.media3.decoder.** { *; }
 
+# The web player page bridge (DeviceEmbed): its methods are called only from the page's JavaScript, by name.
+-keepclassmembers class * { @android.webkit.JavascriptInterface <methods>; }
+
 # Any class with native methods keeps them and their names.
 -keepclasseswithmembernames,includedescriptorclasses class * { native <methods>; }
 

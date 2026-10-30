@@ -80,7 +80,7 @@ internal object MediaHttp {
         val patient = DefaultDataSource.Factory(ctx, httpFactory(ctx).setReadTimeoutMs(P2P_READ_MS))
         return DefaultMediaSourceFactory(ctx)
             // Play through your PC (Relay.kt) sits outside: while a TV play uses a relay every address is rewritten to it first
-            .setDataSourceFactory { ResolvingDataSource(Patient(quick.createDataSource(), patient.createDataSource()), withFreshLink(withStreamHeaders(Relay.resolver()))) }
+            .setDataSourceFactory { ResolvingDataSource(Patient(quick.createDataSource(), patient.createDataSource(), DeviceEmbed.Source()), withFreshLink(withStreamHeaders(Relay.resolver()))) }
             .setDrmSessionManagerProvider(drm)
     }
 
@@ -128,18 +128,24 @@ internal object MediaHttp {
  * One reader per address. A web host that stops answering should fail inside twenty seconds, but the
  * P2P engine's own loopback server (P2pServer) legitimately holds a response while the swarm finds
  * the next piece — the same twenty seconds would call a working stream broken. The address decides,
- * at open() time, which of the two readers actually does the work.
+ * at open() time, which of the readers actually does the work; a play opened from a web player page
+ * (DeviceEmbed) reads everything through that page.
  */
-private class Patient(private val quick: DataSource, private val patient: DataSource) : DataSource {
+private class Patient(private val quick: DataSource, private val patient: DataSource, private val page: DataSource) : DataSource {
     private var live: DataSource? = null
 
     override fun addTransferListener(transferListener: TransferListener) {
         quick.addTransferListener(transferListener)
         patient.addTransferListener(transferListener)
+        page.addTransferListener(transferListener)
     }
 
     override fun open(dataSpec: DataSpec): Long {
-        val d = if (P2p.isLocal(dataSpec.uri.toString())) patient else quick
+        val d = when {
+            DeviceEmbed.owns(dataSpec.uri) -> page
+            P2p.isLocal(dataSpec.uri.toString()) -> patient
+            else -> quick
+        }
         live = d
         return d.open(dataSpec)
     }

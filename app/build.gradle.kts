@@ -113,6 +113,9 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.6.0")
     // the Android TV launcher's Watch Next row (WatchNext.kt). 1.1.0's AAR metadata: minCompileSdk 34, AGP 8.1.1
     implementation("androidx.tvprovider:tvprovider:1.1.0")
+    // the web player pages a stream row can point at (DeviceEmbed): no X-Requested-With, the page muted from its first line.
+    // 1.18.0's AAR metadata: minCompileSdk 33, AGP 7.2.0
+    implementation("androidx.webkit:webkit:1.18.0")
     // new-episode alerts' ~12-hourly check (NewEpisodes.kt). 2.12.0's AAR metadata: minCompileSdk 35, AGP 8.6.0 (ours 36 / 8.9.1);
     // it brings Room 2.7.0 and androidx.startup (minCompileSdk 34 / 31), lifecycle 2.6.2 and coroutines 1.9 floors under ours
     implementation("androidx.work:work-runtime:2.12.0")

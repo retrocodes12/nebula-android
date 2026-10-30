@@ -6740,6 +6740,7 @@ private fun PlayerScreen(
     val infoRows = remember { mutableStateOf<List<InfoRow>>(emptyList()) }
     var viaRelay by remember { mutableStateOf<Relay.Live?>(null) }             // Play through your PC: the sharing computer this play goes through
     val headersClaim = remember { arrayOf<StreamHeaders.Active?>(null) }       // this play's own request headers (StreamHeaders)
+    val embedClaim = remember { arrayOf<DeviceEmbed.Session?>(null) }         // the web player page this play reads through (DeviceEmbed)
     var subOffsetMs by remember { mutableStateOf(0L) }
     // "Pick the line you just heard" (PickLine.kt): the line list while it is up in the Subtitles panel
     var pickLine by remember { mutableStateOf<PickLineState?>(null) }
@@ -7073,12 +7074,26 @@ private fun PlayerScreen(
         // Play through your PC (Relay.kt, the TV only): the sharing computer, when one answers — settled before the item is set
         Relay.via = null; viaRelay = null
         headersClaim[0] = StreamHeaders.begin(url)     // a host that answers only with its Referer gets it on every request
-        if (url.startsWith("http://") || url.startsWith("https://")) {
+        // A web player page (the sports add-on's "LIVE" rows): opened out of sight here, its stream played through it
+        DeviceEmbed.end(embedClaim[0]); embedClaim[0] = null
+        var playUrl = url
+        if (DeviceEmbed.isPage(url)) {
+            val act = activity
+            val s = if (act == null) null else runCatching { DeviceEmbed.open(act, url) }
+                .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
+            if (s == null) {
+                error = "This stream's page did not hand over a stream — it may be over, or not available here. Try another stream."
+                offerSwap("Won't play")
+                return@LaunchedEffect
+            }
+            embedClaim[0] = s
+            playUrl = s.stream
+        } else if (url.startsWith("http://") || url.startsWith("https://")) {
             val l = Relay.resolve(context)
             if (l != null) { Relay.via = l; viaRelay = l }
         }
         runCatching {
-            val b = MediaItem.Builder().setUri(url)
+            val b = MediaItem.Builder().setUri(playUrl)
                 // what the system's now-playing card, the TV's assistant and a headset announce: the title and the
                 // episode (it was nameless, then briefly the stream row's own label)
                 .setMediaMetadata(
@@ -7095,7 +7110,7 @@ private fun PlayerScreen(
                         MediaItem.DrmConfiguration.Builder(C.CLEARKEY_UUID).apply { if (laurl != null) setLicenseUri(laurl) }.build()
                     )
                 }
-                Regex("\\.m3u8", RegexOption.IGNORE_CASE).containsMatchIn(url) -> b.setMimeType(MimeTypes.APPLICATION_M3U8)
+                Regex("\\.m3u8", RegexOption.IGNORE_CASE).containsMatchIn(playUrl) -> b.setMimeType(MimeTypes.APPLICATION_M3U8)
             }
             val streamSubs = subs.mapIndexed { i, st ->
                 MediaItem.SubtitleConfiguration.Builder(Uri.parse(st.url))
@@ -7557,6 +7572,7 @@ private fun PlayerScreen(
             Relay.via = null            // the next play asks again
             MediaHttp.remap = null      // a fresh address belongs to its own play
             StreamHeaders.end(headersClaim[0])
+            DeviceEmbed.end(embedClaim[0])     // the page goes with the player
             P2p.leave(context)          // engine off, download cleared — on its own thread, stopping it blocks
             if (activePipPlayer.value === exo) activePipPlayer.value = null
             // Clears (API 31+) auto-enter so backing out of the player can't PiP the browse UI.
