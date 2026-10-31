@@ -438,6 +438,7 @@ class MainActivity : ComponentActivity() {
         Social.load(this)
         WatchNext.poke(this, soon = true)    // the launcher's Watch Next row from Continue watching (TV; WatchNext.kt)
         NewEpisodes.sync(this)               // new-episode alerts' schedule follows its switch (a phone; NewEpisodes.kt)
+        Downloads.start(this)                // what is saved comes up, and an unfinished download carries on (a phone)
         // only honor the launch intent on a fresh start — a recreated activity
         // (process restore, config change) must not jump back into the player
         pendingPlay.value = if (savedInstanceState == null) parsePlayIntent(intent) else null
@@ -634,7 +635,8 @@ private sealed interface Screen {
     data class Catalog(val addon: Addon, val initial: CatalogRef? = null) : Screen
     data class Episodes(val addon: Addon, val item: MetaItem) : Screen
     // decided: the viewer already chose Resume or Start over (a sheet), so "When you come back · Ask" asks nothing more
-    data class Streams(val addon: Addon, val item: MetaItem, val startOver: Boolean = false, val decided: Boolean = false) : Screen
+    // save: the page picks a source to download (Downloads.kt), not one to play
+    data class Streams(val addon: Addon, val item: MetaItem, val startOver: Boolean = false, val decided: Boolean = false, val save: Boolean = false) : Screen
     data class Play(
         val url: String,
         val title: String,
@@ -1043,6 +1045,51 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                 }
             }
             fun setTab(s: Screen) { cancelHop(); leavingPlayer(); ReturnFocus.clear(); stack = listOf(s) }
+
+            // Downloads (Downloads.kt). What is saved plays from the phone whether or not there is a connection: every
+            // Play on a saved title lands here instead of on its Streams page.
+            fun savedScreen(r: SavedRow, startOver: Boolean = false) = Screen.Play(
+                r.url, r.meta.streamName, r.meta.subs, r.meta.type, r.meta.id, r.meta.name, r.meta.poster, r.meta.addonUrl,
+                description = r.meta.description, startOver = startOver, sourceLine = r.meta.source,
+            )
+            fun playSaved(r: SavedRow, startOver: Boolean = false) {
+                if (r.meta.type != "series") seriesChain.clear()
+                else if (seriesChain.episodes.none { it.id == r.meta.id }) {
+                    // the next episode with no connection is the next saved one; the add-on's own list replaces this if it answers
+                    val (show, _) = DownloadPlan.nameParts(r.meta.name)
+                    val eps = Downloads.mine().filter { it.phase == DownloadPlan.Phase.DONE && DownloadPlan.nameParts(it.meta.name).first == show }
+                        .mapNotNull { s ->
+                            DownloadPlan.numbers(s.meta.name)?.let { (season, ep) ->
+                                val rest = DownloadPlan.nameParts(s.meta.name).second.orEmpty()
+                                Episode(s.meta.id, season, ep, rest.substringAfter(" · ", ""), null, null)
+                            }
+                        }
+                    val addons = activeAddons(ctx)
+                    val a = addons.firstOrNull { it.manifestUrl == r.meta.addonUrl } ?: addons.firstOrNull()
+                    seriesChain.set("series", show, a, eps)
+                    if (a != null) scope.launch { hydrateSeriesChain(ctx, a, "series", r.meta.id) }
+                }
+                if (r.meta.type == "series") seriesChain.index = seriesChain.episodes.indexOfFirst { it.id == r.meta.id }
+                push(savedScreen(r, startOver))
+            }
+            fun toStreams(s: Screen.Streams) {
+                val r = Downloads.saved(s.item.type, s.item.id)
+                if (r == null) push(s) else playSaved(r, s.startOver || (Prefs.resume == "startover" && !s.decided))
+            }
+            val askNotify = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { }
+            /** [page]: the source-picking page to leave once the download is on its way. */
+            fun startDownload(item: MetaItem, st: StreamItem, from: Addon, page: Screen?) {
+                Toasts.show("Checking this stream…")
+                scope.launch {
+                    val why = Downloads.add(ctx, st, from, item, StreamTwin.label(StreamTwin.sig(st, from)).ifEmpty { null })
+                    if (why != null) { Toasts.show(why); return@launch }
+                    if (page != null && stack.lastOrNull() === page) pop()
+                    Toasts.show(if (Prefs.dlWifi && Updates.metered(ctx)) "It will download on Wi-Fi · Library › Downloads" else "Downloading · Library › Downloads")
+                    if (Build.VERSION.SDK_INT >= 33 && Prefs.firstDownload(ctx) && !NewEpisodes.canNotify(ctx)) {
+                        askNotify.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }
+            }
             // the remote's Search button and the system's search request (MainActivity → BrowseKeys)
             DisposableEffect(Unit) {
                 val open: () -> Unit = { setTab(Screen.Search) }
@@ -1230,6 +1277,7 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
             /** Resume something from the Continue watching row (or start it over). `decided` = the
                 viewer picked Resume/Start over on a sheet, so the streams page does not ask again. */
             fun openProgress(r: ProgressRec, fresh: Boolean = false, decided: Boolean = false) {
+                Downloads.saved(r.type, r.id)?.let { playSaved(it, fresh); return }
                 val addons = activeAddons(ctx)
                 val a = addons.firstOrNull { it.manifestUrl == r.addonUrl } ?: addons.firstOrNull() ?: return
                 seriesChain.clear()
@@ -1251,7 +1299,7 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
             // are resumed, and only an installed add-on is asked, whatever the link says.
             LaunchedEffect(playReq) {
                 val req = playReq
-                if (req !is LinkReq.Resume && req !is LinkReq.Title) return@LaunchedEffect
+                if (req !is LinkReq.Resume && req !is LinkReq.Title && req !is LinkReq.Downloads) return@LaunchedEffect
                 snapshotFlow { Viewers.asking }.first { !it }
                 onConsumed()
                 cancelHop(); leavingPlayer(); ReturnFocus.clear()
@@ -1272,6 +1320,7 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                         val a = addons.firstOrNull { it.manifestUrl == req.addon } ?: addons.firstOrNull() ?: return@LaunchedEffect
                         push(Screen.Detail(a, MetaItem(req.id, req.type, req.name, null)))
                     }
+                    is LinkReq.Downloads -> { openDownloadsTab(); stack = listOf(Screen.Library) }
                     else -> {}
                 }
             }
@@ -1329,6 +1378,13 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                 ahead of time (or chosen now, the same way), replacing the player in
                 place so Back doesn't have to walk back through every episode. */
             fun playEpisode(ep: Episode) {
+                Downloads.saved("series", ep.id)?.let { r ->
+                    if (stack.lastOrNull() !is Screen.Play) return
+                    cancelHop()
+                    seriesChain.index = seriesChain.episodes.indexOfFirst { it.id == ep.id }
+                    stack = stack.dropLast(1) + savedScreen(r)
+                    return
+                }
                 val origin = seriesChain.addon ?: return
                 // the player this hop replaces: if the viewer has left it by the time a stream is found
                 // (Back, a tab, a party, a deep link), the answer is dropped instead of reopening the player
@@ -1507,6 +1563,7 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                                     onStartOver = { r -> openProgress(r, fresh = true, decided = true) },
                                     onDetails = { r -> openProgressDetails(r) },
                                     onCustomise = { push(Screen.SettingsHome) },
+                                    onDownloads = { openDownloadsTab(); setTab(Screen.Library) },
                                 )
                                 is Screen.Guide -> GuideScreen(onOpen = { a, item -> openMeta(a, item) })
                                 is Screen.Search -> SearchScreen(
@@ -1576,6 +1633,7 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                                     onDetails = { r -> openProgressDetails(r) },
                                     onGoHome = { setTab(Screen.Home) },
                                     onGoSearch = { setTab(Screen.Search) },
+                                    onPlaySaved = { r -> playSaved(r) },
                                     onOpen = { li ->
                                         val addons = activeAddons(ctx)
                                         val a = addons.firstOrNull { it.manifestUrl == li.addonUrl } ?: addons.firstOrNull()
@@ -1603,13 +1661,20 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                                     onEpisodes = { push(Screen.Episodes(s.addon, s.item)) },
                                     onPlayMovie = {
                                         seriesChain.clear()
-                                        push(Screen.Streams(s.addon, s.item.copy(runtime = metaFullCache[s.item.type + ":" + s.item.id]?.runtime)))
+                                        toStreams(Screen.Streams(s.addon, s.item.copy(runtime = metaFullCache[s.item.type + ":" + s.item.id]?.runtime)))
+                                    },
+                                    onDownloadMovie = { push(Screen.Streams(s.addon, s.item.copy(runtime = metaFullCache[s.item.type + ":" + s.item.id]?.runtime), save = true)) },
+                                    onDownloadEpisode = { ep ->
+                                        push(Screen.Streams(s.addon, MetaItem(
+                                            ep.id, "series", seriesChain.label(ep), s.item.poster, background = s.item.background ?: ep.thumbnail,
+                                            runtime = metaFullCache[s.item.type + ":" + s.item.id]?.runtime,
+                                        ), save = true))
                                     },
                                     onResumeEpisode = { r -> openProgress(r) },
                                     onPlayEpisode = { ep, intent ->
                                         seriesChain.index = seriesChain.episodes.indexOfFirst { it.id == ep.id }
                                         val label = seriesChain.label(ep)
-                                        push(Screen.Streams(s.addon, MetaItem(
+                                        toStreams(Screen.Streams(s.addon, MetaItem(
                                             ep.id, "series", label, s.item.poster,
                                             // the streams header is a landscape banner — hand it the
                                             // backdrop, not a portrait poster to crop
@@ -1631,10 +1696,16 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                                 is Screen.Episodes -> EpisodesScreen(
                                     s.addon, s.item,
                                     onBack = { pop() },
+                                    onDownloadEpisode = { ep ->
+                                        push(Screen.Streams(s.addon, MetaItem(
+                                            ep.id, "series", seriesChain.label(ep), s.item.poster, background = s.item.background ?: ep.thumbnail,
+                                            runtime = metaFullCache[s.item.type + ":" + s.item.id]?.runtime,
+                                        ), save = true))
+                                    },
                                     onPlayEpisode = { ep, intent ->
                                         seriesChain.index = seriesChain.episodes.indexOfFirst { it.id == ep.id }
                                         val label = seriesChain.label(ep)
-                                        push(Screen.Streams(s.addon, MetaItem(
+                                        toStreams(Screen.Streams(s.addon, MetaItem(
                                             ep.id, "series", label, s.item.poster,
                                             // the streams header is a landscape banner — hand it the
                                             // backdrop, not a portrait poster to crop
@@ -1654,6 +1725,8 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                                     onBack = { pop() },
                                     fresh = s.startOver,
                                     decided = s.decided,
+                                    saving = s.save,
+                                    onSave = { st, from -> startDownload(s.item, st, from, s.takeIf { it.save }) },
                                     // "None of your add-ons plays this" → Settings › Add-ons (Back comes back here)
                                     onAddons = { push(Screen.Addons) },
                                     onPlay = { st, from, byHand, fresh ->
@@ -3492,6 +3565,7 @@ private fun HomeScreen(
     onStartOver: (ProgressRec) -> Unit = {},
     onDetails: (ProgressRec) -> Unit = {},
     onCustomise: () -> Unit = {},
+    onDownloads: () -> Unit = {},
 ) {
     val ctx = LocalContext.current
     val screenEntry = LocalScreenEntry.current
@@ -3678,7 +3752,7 @@ private fun HomeScreen(
                     }
                 }
             }
-            st.rows.isEmpty() && st.continueRows.isEmpty() -> Box(Modifier.padding(top = 30.dp)) { HomeNoRows(st, onCustomise) }
+            st.rows.isEmpty() && st.continueRows.isEmpty() -> Box(Modifier.padding(top = 30.dp)) { HomeNoRows(st, onCustomise, onDownloads) }
             // The remote's landing spot, on a real control: View Details on the hero, else the first Continue watching
             // card, else the first card — once the rows have settled. (A focusGroup's own Enter search started from
             // the list's top-left and picked the first card UNDER the hero; the pivot scroll then cropped two thirds
@@ -3769,7 +3843,7 @@ private fun HomeScreen(
                                 }
                             }
                         }
-                    } else if (st.builtAt > 0) Box(Modifier.padding(top = 30.dp)) { HomeNoRows(st, onCustomise) }
+                    } else if (st.builtAt > 0) Box(Modifier.padding(top = 30.dp)) { HomeNoRows(st, onCustomise, onDownloads) }
                 }
                 itemsIndexed(st.rows, key = { _, row -> row.addon.manifestUrl + "/" + row.catalog.type + "/" + row.catalog.id }, contentType = { _, _ -> "row" }) { ri, r ->
                     val rowKey = r.addon.manifestUrl + "/" + r.catalog.type + "/" + r.catalog.id
@@ -3808,7 +3882,7 @@ private fun HomeScreen(
                 }
                 // add-ons unreachable but Continue watching kept the screen useful
                 if (st.rows.isEmpty() && !st.loading) item(key = "retry", contentType = "retry") {
-                    Box(Modifier.padding(top = 24.dp)) { HomeNoRows(st, onCustomise) }
+                    Box(Modifier.padding(top = 24.dp)) { HomeNoRows(st, onCustomise, onDownloads) }
                 }
                 // the way into the arrangement, at the foot of the rows it arranges
                 if (st.rows.isNotEmpty()) item(key = "foot", contentType = "foot") {
@@ -3824,14 +3898,18 @@ private fun HomeScreen(
 
 /** Home with nothing to show: every row switched off by hand is not an outage. */
 @Composable
-private fun HomeNoRows(st: HomeUiState, onCustomise: () -> Unit) {
+private fun HomeNoRows(st: HomeUiState, onCustomise: () -> Unit, onDownloads: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         if (st.hidden > 0 && st.wanted == 0) {
             Text("Every row is switched off.", color = MutedC, fontSize = 14.sp, modifier = Modifier.padding(bottom = 10.dp))
             Chip("Customise Home", false, onClick = onCustomise)
         } else {
             Text("Couldn’t reach your add-ons right now.", color = MutedC, fontSize = 14.sp, modifier = Modifier.padding(bottom = 10.dp))
-            Chip("Retry", false) { st.invalidate() }
+            // no connection is no reason to have nothing to watch
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Chip("Retry", false) { st.invalidate() }
+                if (Downloads.mine().any { it.phase == DownloadPlan.Phase.DONE }) Chip("Downloads", false, onClick = onDownloads)
+            }
         }
     }
 }
@@ -5007,6 +5085,8 @@ private fun DetailScreen(
     onResumeEpisode: (ProgressRec) -> Unit,
     onPlayEpisode: (Episode, PlayIntent) -> Unit = { _, _ -> },
     onOpenMeta: (MetaItem) -> Unit = {},
+    onDownloadMovie: () -> Unit = {},
+    onDownloadEpisode: (Episode) -> Unit = {},
 ) {
     val ctx = LocalContext.current
     val ck = item.type + ":" + item.id
@@ -5288,6 +5368,7 @@ private fun DetailScreen(
                 if (inList) "Remove from My List" else "Add to My List",
                 on = inList,
             ) { inList = Library.toggle(ctx, item.type, item, addon.manifestUrl) }
+            if (item.type == "movie" && Downloads.available(ctx)) DownloadAction(item.type, item.id, onPlay = { playTitle() }, onDownload = onDownloadMovie)
             val pool = if (item.type == "series") surprisePool(episodes) else emptyList()
             if (pool.size >= 2 || Social.on) RoundAction(Icons.Filled.MoreVert, "More") { moreOpen = true }
         }
@@ -5413,6 +5494,7 @@ private fun DetailScreen(
                     onStartOver = { onPlayEpisode(ep, PlayIntent.START_OVER) },
                     // a mark moves "Up next"; the season on screen deliberately stays put
                     onMarked = { marks++; upNextId = seriesUpNext(ctx, item.type, episodes)?.id },
+                    download = if (Downloads.available(ctx)) ({ onDownloadEpisode(ep) }) else null,
                 )
             }
             item { Spacer(Modifier.height(24.dp)) }
@@ -5475,6 +5557,7 @@ private fun EpisodeRow(
     onResume: () -> Unit = onClick,
     onStartOver: () -> Unit = onClick,
     onMarked: () -> Unit = {},
+    download: (() -> Unit)? = null,      // a phone: the arrow at the row's end (Downloads.kt)
 ) {
     val ctx = LocalContext.current
     // the tick is read here rather than passed in, so a mark made in the sheet
@@ -5547,6 +5630,7 @@ private fun EpisodeRow(
                         Text(ep.overview, color = MutedC, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp))
                     }
                 }
+                if (download != null) DownloadMark("series", ep.id, onPlay = onClick, onDownload = download)
             }
         }
     }
@@ -5820,6 +5904,7 @@ private fun EpisodesScreen(
     onBack: () -> Unit,
     onPlayEpisode: (Episode, PlayIntent) -> Unit,
     onFallback: () -> Unit,
+    onDownloadEpisode: (Episode) -> Unit = {},
 ) {
     val ctx = LocalContext.current
     var episodes by remember { mutableStateOf<List<Episode>>(emptyList()) }
@@ -5904,6 +5989,7 @@ private fun EpisodesScreen(
                     onStartOver = { onPlayEpisode(ep, PlayIntent.START_OVER) },
                     // a mark moves "Up next"; the season on screen deliberately stays put
                     onMarked = { upNextId = seriesUpNext(ctx, item.type, episodes)?.id },
+                    download = if (Downloads.available(ctx)) ({ onDownloadEpisode(ep) }) else null,
                 )
             }
         }
@@ -5914,7 +6000,7 @@ private fun EpisodesScreen(
 // add-on the item came from PLUS every other installed add-on whose manifest
 // serves streams for this type/id, and show the answers grouped per add-on.
 @Composable
-private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fresh: Boolean = false, decided: Boolean = false, onAddons: () -> Unit, onPlay: (StreamItem, Addon, Boolean, Boolean) -> Unit) {
+private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fresh: Boolean = false, decided: Boolean = false, saving: Boolean = false, onSave: (StreamItem, Addon) -> Unit = { _, _ -> }, onAddons: () -> Unit, onPlay: (StreamItem, Addon, Boolean, Boolean) -> Unit) {
     var sections by remember { mutableStateOf<List<Pair<Addon, List<StreamItem>>>>(emptyList()) }
     var status by remember { mutableStateOf("Loading streams…") }
     var loading by remember { mutableStateOf(true) }
@@ -5936,12 +6022,13 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
     // (Settings › Playback) sets the starting point: Resume, Start over, or Ask — a two-option sheet
     // before the first play, unless the viewer already chose on a Continue Watching sheet.
     val savedAt = remember(item.id) { Progress.resumeAt(ctx, item.type, item.id) }
-    val asking = Prefs.resume == "ask" && savedAt > 0 && !decided
+    val asking = !saving && Prefs.resume == "ask" && savedAt > 0 && !decided
     var startOver by remember(item.id) { mutableStateOf((fresh || (Prefs.resume == "startover" && !decided)) && savedAt > 0) }
     var chosen by remember(item.id) { mutableStateOf(!asking) }                   // Resume or Start over settled
     var pending by remember { mutableStateOf<Pair<StreamItem, Addon>?>(null) }    // a play waiting on the sheet
     var pendingByHand by remember { mutableStateOf(true) }
     fun play(s: StreamItem, from: Addon, byHand: Boolean) {
+        if (saving) { onSave(s, from); return }       // the page picks a source to download
         if (!chosen) { pending = s to from; pendingByHand = byHand; return }
         onPlay(s, from, byHand, startOver)
     }
@@ -5959,7 +6046,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
     val backHere = remember { ReturnFocus.backTo(streamsEntry) }
     // Autoplay (Autoplay.kt): Play on a film or an episode — never Back to this list — starts its best stream by
     // itself; a card covers the list while the add-ons answer, and the list stays underneath it for the viewer
-    val apOn = remember { Prefs.bestPlay && (item.type == "movie" || item.type == "series") && !backHere }
+    val apOn = remember { !saving && Prefs.bestPlay && (item.type == "movie" || item.type == "series") && !backHere }
     // left with nothing started (Back, a tab, a row picked by hand): the run's requests stop with the page, as they always did
     DisposableEffect(Unit) { onDispose { if (AutoplayRun.playing == null) AutoplayRun.endFor(item.type, item.id) } }
     // Speed tests (1.88.0, SpeedTest.kt): Test speeds measures the rows in their order on screen, ONE AT A TIME
@@ -6017,11 +6104,16 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             poster = item.poster, shape = item.posterShape,
             actions = listOf(
                 // the player and a test must not share the line (nor the host): playing stops the test
-                SheetAction(Icons.Filled.PlayArrow, "Play") { stopSpeeds(); play(s, from, true) },
+                SheetAction(if (saving) Icons.Filled.Download else Icons.Filled.PlayArrow, if (saving) "Download" else "Play") { stopSpeeds(); play(s, from, true) },
                 SheetAction(Icons.Filled.Speed, speeds[s.url]?.words() ?: "Test this stream’s speed", keepOpen = true, id = "speed") {
                     if (speeds[s.url] !is RowSpeed.Testing) testSpeeds(listOf(s))
                 },
-            ),
+                // this row, kept on the phone (Downloads.kt)
+                SheetAction(Icons.Filled.Download, "Download") { stopSpeeds(); onSave(s, from) }.takeIf {
+                    !saving && (item.type == "movie" || item.type == "series") && Downloads.available(ctx) &&
+                        Downloads.savable(s) && Downloads.find(item.type, item.id) == null
+                },
+            ).filterNotNull(),
             onDismiss = { holdFor = null },
         )
     }
@@ -6062,7 +6154,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
         // per-title latch kept auto-pick off for that title for the rest of the session.
         var picked = false
         fun decide() {
-            if (picked || ap || Prefs.autoPick == "off" || backHere) return   // Autoplay outranks it
+            if (saving || picked || ap || Prefs.autoPick == "off" || backHere) return   // Autoplay outranks it
             // a viewer already walking the list — remote or finger — is choosing by hand (web: autoPickNow's lastKeyAt
             // and lastPointerAt); the list now arrives well inside the wait, so this matters more than it did
             if (KeyWatch.lastDownAt > openedAt || KeyWatch.lastTouchAt > openedAt) return
@@ -6197,7 +6289,10 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
         }
         loading = false
     }
-    val shown = sections.filter { filter == null || it.first.name == filter }
+    // picking a source to download: only rows that can be kept, and an add-on with none of them leaves the page
+    val shown = sections.filter { filter == null || it.first.name == filter }.let { list ->
+        if (!saving) list else list.map { (a, rows) -> a to rows.filter { Downloads.savable(it) } }.filter { it.second.isNotEmpty() }
+    }
     // A remote lands on the top row as soon as there is one (web parity) and follows it while a higher-ranked add-on
     // answers above — but only until the viewer presses something here; focus is never pulled out from under a hand.
     val remote = remember(ctx) { Account.isTv(ctx) } || LocalInputModeManager.current.inputMode == InputMode.Keyboard
@@ -6266,7 +6361,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                     }
                 }
             }
-            if (savedAt > 0) item(key = "resume") {
+            if (savedAt > 0 && !saving) item(key = "resume") {
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -6318,6 +6413,13 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                         }
                     }
                 }
+            }
+            if (saving) item(key = "saving") {
+                Text(
+                    if (answered && !loading && shown.isEmpty() && sections.isNotEmpty()) "None of these streams can be downloaded. Live, protected and P2P streams stay online."
+                    else "Choose a source to download",
+                    color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 16.dp).padding(top = 6.dp),
+                )
             }
             // once rows are on screen, the add-ons still answering are named above them (their own rows come later)
             if (waiting.isNotEmpty() && sections.isNotEmpty()) item(key = "waiting") { StreamsWaitLine(waiting, waitSlow) }
@@ -6637,7 +6739,7 @@ internal fun langLabel(code: String): String = runCatching {
 /** Add-on subtitle links carry no extension and are sometimes CP1252 — download one and hand back its text as
     UTF-8 (parseSubCues sniffs SRT or WebVTT from it). A cancelled download stays cancelled: a player left while a
     subtitle loaded used to say "Could not load that subtitle" over whatever came next. */
-private suspend fun subText(st: SubTrack): String? {
+internal suspend fun subText(st: SubTrack): String? {
     val raw = try {
         Stremio.httpGetBytes(st.url)
     } catch (e: kotlinx.coroutines.CancellationException) {
@@ -6741,6 +6843,7 @@ private fun PlayerScreen(
     var viaRelay by remember { mutableStateOf<Relay.Live?>(null) }             // Play through your PC: the sharing computer this play goes through
     val headersClaim = remember { arrayOf<StreamHeaders.Active?>(null) }       // this play's own request headers (StreamHeaders)
     val embedClaim = remember { arrayOf<DeviceEmbed.Session?>(null) }         // the web player page this play reads through (DeviceEmbed)
+    val savedClaim = remember { arrayOf<Downloads.Claim?>(null) }             // the saved copy this play reads from (Downloads)
     var subOffsetMs by remember { mutableStateOf(0L) }
     // "Pick the line you just heard" (PickLine.kt): the line list while it is up in the Subtitles panel
     var pickLine by remember { mutableStateOf<PickLineState?>(null) }
@@ -6759,7 +6862,8 @@ private fun PlayerScreen(
     val textOwed = remember { BooleanArray(1) }                                 // the stream's tracks are to come back on
     // Scrub preview (ScrubPreview.kt): a second, silent reader of a progressive file hands the tip its frames;
     // rebuilt per URL, released with the player. While a preview is up the chrome stays awake.
-    val scrubPreview = remember(url) { if (ScrubPreview.eligible(url)) ScrubPreview(url, context) else null }
+    // (a saved play has no second reader: it goes to the host, which may be no connection at all)
+    val scrubPreview = remember(url) { if (ScrubPreview.eligible(url) && !Downloads.isSaved(url)) ScrubPreview(url, context) else null }
     DisposableEffect(scrubPreview) { onDispose { scrubPreview?.release() } }
     // Seekr previews (Seekr.kt): with the viewer's own key and a film/episode id Seekr can place, ONE lookup once the
     // length is known; its pictures come first and the reader above is the fallback. Any player, a TV's too, encrypted
@@ -7074,6 +7178,7 @@ private fun PlayerScreen(
         // Play through your PC (Relay.kt, the TV only): the sharing computer, when one answers — settled before the item is set
         Relay.via = null; viaRelay = null
         headersClaim[0] = StreamHeaders.begin(url)     // a host that answers only with its Referer gets it on every request
+        savedClaim[0] = Downloads.begin(url)           // already on the phone: read from there, whatever the connection
         // A web player page (the sports add-on's "LIVE" rows): opened out of sight here, its stream played through it
         DeviceEmbed.end(embedClaim[0]); embedClaim[0] = null
         var playUrl = url
@@ -7112,6 +7217,8 @@ private fun PlayerScreen(
                 }
                 Regex("\\.m3u8", RegexOption.IGNORE_CASE).containsMatchIn(playUrl) -> b.setMimeType(MimeTypes.APPLICATION_M3U8)
             }
+            // read back as it was saved: its own key in the cache, the one picture of a playlist that was kept
+            savedClaim[0]?.let { s -> b.setCustomCacheKey(s.cacheKey).setStreamKeys(s.keys); s.mime?.let { b.setMimeType(it) } }
             val streamSubs = subs.mapIndexed { i, st ->
                 MediaItem.SubtitleConfiguration.Builder(Uri.parse(st.url))
                     .setId("sub:$i")                         // the panel badges these with the stream's add-on
@@ -7572,6 +7679,7 @@ private fun PlayerScreen(
             Relay.via = null            // the next play asks again
             MediaHttp.remap = null      // a fresh address belongs to its own play
             StreamHeaders.end(headersClaim[0])
+            Downloads.end(savedClaim[0])
             DeviceEmbed.end(embedClaim[0])     // the page goes with the player
             P2p.leave(context)          // engine off, download cleared — on its own thread, stopping it blocks
             if (activePipPlayer.value === exo) activePipPlayer.value = null

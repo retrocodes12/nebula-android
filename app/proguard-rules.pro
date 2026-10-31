@@ -24,6 +24,9 @@
 # The web player page bridge (DeviceEmbed): its methods are called only from the page's JavaScript, by name.
 -keepclassmembers class * { @android.webkit.JavascriptInterface <methods>; }
 
+# Downloads: Media3 finds its playlist downloader by name (DefaultDownloaderFactory).
+-keep class androidx.media3.exoplayer.hls.offline.HlsDownloader$Factory { *; }
+
 # Any class with native methods keeps them and their names.
 -keepclasseswithmembernames,includedescriptorclasses class * { native <methods>; }
 

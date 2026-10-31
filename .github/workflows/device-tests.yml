@@ -1,6 +1,6 @@
 name: Device tests
 
-# On-device tests (app/src/androidTest) on an emulator, against real Media3 decoding: Seekr's sprite sheets and AV1.
+# On-device tests (app/src/androidTest) on an emulator, against real Media3 decoding: Seekr's sprite sheets, AV1, Downloads.
 # The media is made here (ffmpeg's test source, the Sintel trailer — CC BY, Blender Foundation), never committed.
 on:
   workflow_dispatch:
@@ -39,7 +39,11 @@ jobs:
           curl -sSfL -o sintel.mp4 https://download.blender.org/durian/trailer/sintel_trailer-1080p.mp4
           ffmpeg -v error -y -ss 4 -t 24 -i sintel.mp4 -an -c:v libsvtav1 -preset 10 -crf 32 -g 48 -pix_fmt yuv420p $A/av1.mkv
           ffprobe -v error -show_entries stream=codec_name,width,height,r_frame_rate -of csv=p=0 $A/av1.mkv
-          ls -la $A | head -12
+          # a film over DownloadPlan.MIN_FILE_BYTES and the same clip as a finished playlist, for DownloadsDeviceTest
+          mkdir -p $A/dl/hls
+          ffmpeg -v error -y -f lavfi -i "testsrc2=s=640x360:r=25:d=30,noise=alls=80:allf=t" -f lavfi -i "sine=f=440:d=30" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -b:v 8M -minrate 8M -maxrate 8M -bufsize 1M -c:a aac -b:a 96k -movflags +faststart $A/dl/film.mp4
+          ffmpeg -v error -y -i $A/dl/film.mp4 -c copy -f hls -hls_time 6 -hls_playlist_type vod -hls_segment_filename "$A/dl/hls/seg%03d.ts" $A/dl/hls/index.m3u8
+          ls -la $A $A/dl | head -24
 
       - name: Enable KVM
         run: |
@@ -59,4 +63,4 @@ jobs:
           ram-size: 3072M
           heap-size: 512M
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim
-          script: gradle connectedDebugAndroidTest --no-daemon -PemulatorAbis --stacktrace || touch /tmp/gradle-failed; adb logcat -d | grep -E "AV1-DEVICE|SEEKR-DEVICE|AndroidRuntime|TestRunner|ExoPlayerImplInternal|MediaCodec|nextlib|Ffmpeg" | tail -120; test -z "$(find app/build/outputs/androidTest-results -name '*.xml' -exec grep -l '<failure' {} +)" && test ! -e /tmp/gradle-failed
+          script: gradle connectedDebugAndroidTest --no-daemon -PemulatorAbis --stacktrace || touch /tmp/gradle-failed; adb logcat -d | grep -E "AV1-DEVICE|SEEKR-DEVICE|DOWNLOADS-DEVICE|AndroidRuntime|TestRunner|ExoPlayerImplInternal|MediaCodec|nextlib|Ffmpeg" | tail -120; test -z "$(find app/build/outputs/androidTest-results -name '*.xml' -exec grep -l '<failure' {} +)" && test ! -e /tmp/gradle-failed

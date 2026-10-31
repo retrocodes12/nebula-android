@@ -9,7 +9,8 @@ import java.net.URLEncoder
  *  - `nebula://play?open=resume&type=<type>&id=<id>` resumes something this profile has started (the Android TV
  *    launcher's Watch Next row, WatchNext.kt);
  *  - `nebula://play?open=title&type=<type>&id=<id>&addon=<manifest>&n=<name>` opens a title page (a new-episode alert,
- *    NewEpisodes.kt).
+ *    NewEpisodes.kt);
+ *  - `nebula://play?open=downloads` opens Library › Downloads (a download's notification, Downloads.kt).
  * Any web page can fire these, so each field is checked here and the app acts only on its own data: a resume needs a
  * record in this profile's history, a title page's add-on must be one that is installed (else the first one is asked).
  */
@@ -17,6 +18,7 @@ sealed class LinkReq {
     data class Play(val mpd: String, val title: String) : LinkReq()
     data class Resume(val type: String, val id: String) : LinkReq()
     data class Title(val type: String, val id: String, val addon: String, val name: String) : LinkReq()
+    data object Downloads : LinkReq()
 }
 
 object DeepLinks {
@@ -55,6 +57,7 @@ object DeepLinks {
                 val name = q("n")?.trim().orEmpty().filter { it >= ' ' }.take(120)
                 return LinkReq.Title(type, id, addon, name)
             }
+            "downloads" -> return LinkReq.Downloads
             else -> return null
         }
     }
