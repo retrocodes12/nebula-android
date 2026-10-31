@@ -109,7 +109,7 @@ class SubBarsDeviceTest {
     }
 
     private fun toBars() {
-        while (SubStyle.get(ctx).getValue("pos") != SubStyle.BARS) SubStyle.cycle(ctx, "pos")
+        while (SubStyle.get(ctx).getValue("pos") != SubStyle.BARS) SubStyle.cycle(ctx, "pos", -1)   // from Bottom, one step
     }
 
     private fun whiteBox(b: Bitmap, x0: Int = 0, y0: Int = 0, x1: Int = b.width, y1: Int = b.height): Box? {

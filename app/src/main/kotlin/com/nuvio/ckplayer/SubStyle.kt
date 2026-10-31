@@ -209,8 +209,9 @@ object SubStyle {
             over, if (own != null && own.parent === frame) frame.indexOfChild(own) + 1 else frame.childCount,
             ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
         )
-        // Black bars moves both past the frame's edge: without this the frame would cut them off there
-        if (frame !== pv) frame.clipChildren = false
+        // Black bars moves both past the frame's edge. The frame must not cut them off there, and neither may the player
+        // above it: a view group clips each child to that child's own bounds, so the frame's overflow needs both to let go
+        if (frame !== pv) { frame.clipChildren = false; pv.clipChildren = false }
         // Fill makes the picture's frame larger than the screen (it is centred, its edges cut off): both subtitle
         // views live in that frame, so they are pulled back inside the screen by the overhang, or a 4:3 film's
         // lines would sit below the bottom edge
