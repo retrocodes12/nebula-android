@@ -486,7 +486,7 @@ object Cloud {
         "ratings" -> Ratings.all(ctx).toString()
         "sub_style" -> {
             val style = JSONObject()
-            SubStyle.get(ctx).forEach { (k, v) -> style.put(k, v) }
+            SubStyle.synced(ctx).forEach { (k, v) -> style.put(k, v) }   // never Black bars: this device's own
             JSONObject().put("style", style).put("at", SubStyle.at(ctx)).toString()
         }
         "seekr" -> Seekr.doc(ctx)

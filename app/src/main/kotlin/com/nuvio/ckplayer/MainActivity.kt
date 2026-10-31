@@ -4890,28 +4890,27 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
                 divider = false,
             ) { Prefs.setResume(ctx, it) }
         }
-        if (all) {
-            SettingsHeader("LANGUAGES", "Preferred audio and subtitle tracks")
-            SettingsGroup {
-                SettingsPick(
-                    "Audio language", "Preferred track when a stream carries several",
-                    Prefs.LANGS, Prefs.audioLang,
-                ) { Prefs.setAudioLang(ctx, it) }
-                SettingsPick(
-                    "Subtitle language", "Preferred captions when a stream carries several",
-                    Prefs.LANGS, Prefs.subLang,
-                ) { Prefs.setSubLang(ctx, it) }
-                SettingsPick(
-                    "Second choice", "Used when the first language is missing",
-                    Prefs.LANGS_NONE, Prefs.subLang2,
-                ) { Prefs.setSubLang2(ctx, it) }
-                SettingsChips(
-                    "Subtitles when a video starts",
-                    "Off until you pick · your preferred language when the stream has it · Always shows the first track when nothing matches",
-                    listOf("off" to "Off", "preferred" to "Preferred language", "always" to "Always"), Prefs.subStart,
-                    divider = false,
-                ) { Prefs.setSubStart(ctx, it) }
-            }
+        // in Essential too: it is the default, and the only way to subtitles that come on by themselves (issue #2)
+        SettingsHeader("LANGUAGES", "Preferred audio and subtitle tracks")
+        SettingsGroup {
+            SettingsPick(
+                "Audio language", "Preferred track when a stream carries several",
+                Prefs.LANGS, Prefs.audioLang,
+            ) { Prefs.setAudioLang(ctx, it) }
+            SettingsPick(
+                "Subtitle language", "Preferred captions when a stream carries several",
+                Prefs.LANGS, Prefs.subLang,
+            ) { Prefs.setSubLang(ctx, it) }
+            SettingsPick(
+                "Second choice", "Used when the first language is missing",
+                Prefs.LANGS_NONE, Prefs.subLang2,
+            ) { Prefs.setSubLang2(ctx, it) }
+            SettingsChips(
+                "Subtitles when a video starts",
+                "Off until you pick · your preferred language when the stream has it · Always shows the first track when nothing matches",
+                listOf("off" to "Off", "preferred" to "Preferred language", "always" to "Always"), Prefs.subStart,
+                divider = false,
+            ) { Prefs.setSubStart(ctx, it) }
         }
         SettingsHeader("SUBTITLES", "How captions look on screen")
         SettingsGroup {
@@ -7599,10 +7598,9 @@ private fun PlayerScreen(
     // panel here, or a synced-in choice made on another device. While the
     // chrome is up, cues lift clear of the lower third.
     LaunchedEffect(SubStyle.version.value, chromeVisible, overlaySubView) {
-        listOfNotNull(playerViewRef?.subtitleView, overlaySubView).forEach {
-            SubStyle.apply(context, it)
-            if (chromeVisible) it.setBottomPaddingFraction(0.32f)
-        }
+        val views = listOfNotNull(playerViewRef?.subtitleView, overlaySubView)
+        views.forEach { SubStyle.apply(context, it) }
+        SubStyle.place(context, views, playerViewRef, chromeVisible)
     }
 
     // the month's recap (WatchLog, on this device only), under the name the chrome shows: its own small clock, kept out
@@ -8115,30 +8113,7 @@ private fun PlayerScreen(
                     descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
                     setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
                     playerViewRef = this
-                    subtitleView?.let { SubStyle.apply(ctx, it) }
-                    // add-on subtitles (loadPick) draw on a second SubtitleView just above the stream's own, inside the
-                    // picture's frame — so they size and sit exactly as those do (spread over the whole screen they
-                    // were 3.6x larger on an upright phone, and sat in a wide film's black bar)
-                    val own = subtitleView
-                    val frame = own?.parent as? android.view.ViewGroup ?: this
-                    val over = SubtitleView(ctx).apply { isFocusable = false; SubStyle.apply(ctx, this) }
-                    frame.addView(
-                        over, if (own != null && own.parent === frame) frame.indexOfChild(own) + 1 else frame.childCount,
-                        android.view.ViewGroup.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT),
-                    )
-                    overlaySubView = over
-                    // Fill makes the picture's frame larger than the screen (it is centred, its edges cut off): both subtitle
-                    // views live in that frame, so they are pulled back inside the screen by the overhang, or a 4:3 film's
-                    // lines would sit below the bottom edge
-                    val pv = this
-                    frame.addOnLayoutChangeListener { _, l, t, r, b, _, _, _, _ ->
-                        if (frame === pv) return@addOnLayoutChangeListener
-                        val ox = maxOf(0, ((r - l) - pv.width) / 2)
-                        val oy = maxOf(0, ((b - t) - pv.height) / 2)
-                        listOfNotNull(own, over).forEach { v ->
-                            if (v.paddingLeft != ox || v.paddingTop != oy) v.post { v.setPadding(ox, oy, ox, oy) }
-                        }
-                    }
+                    overlaySubView = SubStyle.mount(ctx, this) { chromeVisible }
                 }
             },
             update = { pv ->

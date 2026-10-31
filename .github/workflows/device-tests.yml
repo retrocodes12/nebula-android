@@ -1,6 +1,6 @@
 name: Device tests
 
-# On-device tests (app/src/androidTest) on an emulator, against real Media3 decoding: Seekr's sprite sheets and AV1.
+# On-device tests (app/src/androidTest) on an emulator, against real Media3 decoding: Seekr's sprite sheets, AV1, subtitles on the black bars.
 # The media is made here (ffmpeg's test source, the Sintel trailer — CC BY, Blender Foundation), never committed.
 on:
   workflow_dispatch:
@@ -39,6 +39,9 @@ jobs:
           curl -sSfL -o sintel.mp4 https://download.blender.org/durian/trailer/sintel_trailer-1080p.mp4
           ffmpeg -v error -y -ss 4 -t 24 -i sintel.mp4 -an -c:v libsvtav1 -preset 10 -crf 32 -g 48 -pix_fmt yuv420p $A/av1.mkv
           ffprobe -v error -show_entries stream=codec_name,width,height,r_frame_rate -of csv=p=0 $A/av1.mkv
+          # a 2.39:1 clip with a subtitle file for SubBarsDeviceTest
+          ffmpeg -v error -y -f lavfi -i "color=c=0x3060A0:s=640x268:r=25:d=20" -c:v libx264 -preset ultrafast -pix_fmt yuv420p $A/letter.mp4
+          printf 'WEBVTT\n\n00:00:00.000 --> 00:00:30.000\nHgjpqy subtitle line one\nand the second line here\n' > $A/letter.vtt
           ls -la $A | head -12
 
       - name: Enable KVM
@@ -59,4 +62,12 @@ jobs:
           ram-size: 3072M
           heap-size: 512M
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim
-          script: gradle connectedDebugAndroidTest --no-daemon -PemulatorAbis --stacktrace || touch /tmp/gradle-failed; adb logcat -d | grep -E "AV1-DEVICE|SEEKR-DEVICE|AndroidRuntime|TestRunner|ExoPlayerImplInternal|MediaCodec|nextlib|Ffmpeg" | tail -120; test -z "$(find app/build/outputs/androidTest-results -name '*.xml' -exec grep -l '<failure' {} +)" && test ! -e /tmp/gradle-failed
+          script: gradle connectedDebugAndroidTest --no-daemon -PemulatorAbis --stacktrace || touch /tmp/gradle-failed; adb logcat -d | grep -E "AV1-DEVICE|SEEKR-DEVICE|BARS-DEVICE|AndroidRuntime|TestRunner|ExoPlayerImplInternal|MediaCodec|nextlib|Ffmpeg" | tail -120; adb pull /data/local/tmp/barshots barshots || true; test -z "$(find app/build/outputs/androidTest-results -name '*.xml' -exec grep -l '<failure' {} +)" && test ! -e /tmp/gradle-failed
+
+      - name: Keep the black-bars pictures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: barshots
+          path: barshots
+          if-no-files-found: ignore

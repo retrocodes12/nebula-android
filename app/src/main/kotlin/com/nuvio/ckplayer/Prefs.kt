@@ -305,7 +305,13 @@ object Prefs {
     fun setBuffer(ctx: Context, v: Int) { buffer = v; edit(ctx).putInt("pref_buffer", v).apply() }
     fun setRelay(ctx: Context, v: String) { relay = v; edit(ctx).putString("pref_relay", v).apply() }
     fun setAudioLang(ctx: Context, v: String) { audioLang = v; edit(ctx).putString("pref_audiolang", v).apply() }
-    fun setSubLang(ctx: Context, v: String) { subLang = v; edit(ctx).putString("pref_sublang", v).apply() }
+    fun setSubLang(ctx: Context, v: String) {
+        subLang = v
+        edit(ctx).putString("pref_sublang", v).apply()
+        // load()'s rule at once: with no choice of its own a picked language means Preferred — it used to wait for the
+        // next cold start, which on a TV box can be weeks, and the first film after the pick stayed without subtitles
+        if (!ctx.getSharedPreferences(P, Context.MODE_PRIVATE).contains("pref_substart")) subStart = if (v.isNotEmpty()) "preferred" else "off"
+    }
     fun setSubLang2(ctx: Context, v: String) { subLang2 = v; edit(ctx).putString("pref_sublang2", v).apply() }
     fun setSubStart(ctx: Context, v: String) { subStart = v; edit(ctx).putString("pref_substart", v).apply() }
     fun setTimeDisplay(ctx: Context, v: String) { timeDisplay = v; edit(ctx).putString("pref_timedisplay", v).apply() }
