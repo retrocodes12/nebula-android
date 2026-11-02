@@ -44,6 +44,14 @@ internal fun PlaybackExtrasGroup() {
         }
         return
     }
+    SettingsHeader("DOWNLOADS", "Films and episodes kept on this phone")
+    SettingsGroup {
+        SettingsToggle(
+            "Download on Wi-Fi only",
+            "Off, downloads use mobile data too · What is saved is in Library › Downloads",
+            Prefs.dlWifi, divider = false,
+        ) { Prefs.setDlWifi(ctx, it); Downloads.networkChanged(ctx) }
+    }
     // Android 13+ asks before an app may post; refused, the switch stays off and says where to allow it
     var refused by remember { mutableStateOf(false) }
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->

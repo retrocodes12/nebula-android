@@ -56,9 +56,11 @@ import coil.compose.AsyncImage
 
 /** Which Library tab is up — file-level so it survives leaving the tab (only the top screen is composed). */
 private var libTab by mutableStateOf(0)
+/** A download's notification, and Home with no connection, land here. */
+internal fun openDownloadsTab() { libTab = 3 }
 
 /**
- * Library: My List · Continue Watching · Upcoming as one segmented pill, each with a real empty state
+ * Library: My List · Continue Watching · Upcoming (+ Downloads on a phone) as one segmented pill, each with a real empty state
  * (a glyph, one line, one sentence, one button that goes somewhere useful) instead of a bare sentence.
  * Saved titles and upcoming episodes are the same data as before; Continue Watching is Home's records,
  * full width, with the same long-press sheet.
@@ -74,6 +76,7 @@ internal fun LibraryScreen(
     onDetails: (ProgressRec) -> Unit = {},
     onGoHome: () -> Unit = {},
     onGoSearch: () -> Unit = {},
+    onPlaySaved: (SavedRow) -> Unit = {},
 ) {
     val ctx = LocalContext.current
     val screenEntry = LocalScreenEntry.current
@@ -150,11 +153,13 @@ internal fun LibraryScreen(
             Chip("My List", libTab == 0, inSeg = true) { libTab = 0 }
             Chip(if (narrow) "Continue" else "Continue Watching", libTab == 1, inSeg = true) { libTab = 1 }
             Chip("Upcoming", libTab == 2, inSeg = true) { libTab = 2 }
+            if (Downloads.available(ctx)) Chip("Downloads", libTab == 3, inSeg = true) { libTab = 3 }
         }
         Spacer(Modifier.height(14.dp))
         when (libTab) {
             0 -> MyListTab(items, onOpen, onLong = { sheetFor = it }, onGoHome = onGoHome)
             1 -> ContinueTab(continueRows, onResume, onLong = { cwSheet = it }, onGoSearch = onGoSearch)
+            3 -> DownloadsTab(onPlaySaved, onGoHome)
             else -> UpcomingTab(items, upcoming, onPlayEpisode, onGoHome)
         }
     }

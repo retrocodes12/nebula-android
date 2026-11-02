@@ -182,12 +182,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.102.2.apk
+          cp "$APK" Nebula-1.103.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.102.2 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.102.2 Nebula-1.102.2.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.102.2" \
-            --notes "Add-ons have a menu now: tap the three dots on a row to copy the add-on's manifest address, or to open its own settings page right inside the app. Saving new settings updates the add-on where it sits, keeping its place in the list and whether it is on. Remove moved into the same menu."
+          gh release delete v1.103.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.103.0 Nebula-1.103.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.103.0" \
+            --notes "Downloads: keep a film or an episode on your phone and watch it with no connection. Tap the download arrow, choose a source, and find it in Library under Downloads. Downloads use Wi-Fi only unless you change that in Settings, Playback. Saved copies stay inside the app on this phone. Live streams, protected streams, web player pages and torrents can't be saved. Phones only."
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)

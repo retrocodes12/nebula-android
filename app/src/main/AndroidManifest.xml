@@ -131,6 +131,10 @@
                 android:resource="@xml/file_paths" />
         </provider>
         <service
+            android:name=".DownloadsService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <service
             android:name=".SoundShareService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />

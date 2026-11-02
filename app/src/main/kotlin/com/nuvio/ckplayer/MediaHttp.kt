@@ -80,7 +80,7 @@ internal object MediaHttp {
         val patient = DefaultDataSource.Factory(ctx, httpFactory(ctx).setReadTimeoutMs(P2P_READ_MS))
         return DefaultMediaSourceFactory(ctx)
             // Play through your PC (Relay.kt) sits outside: while a TV play uses a relay every address is rewritten to it first
-            .setDataSourceFactory { ResolvingDataSource(Patient(quick.createDataSource(), patient.createDataSource(), DeviceEmbed.Source()), withFreshLink(withStreamHeaders(Relay.resolver()))) }
+            .setDataSourceFactory { ResolvingDataSource(Patient(quick.createDataSource(), patient.createDataSource(), DeviceEmbed.Source(), Downloads.reader(ctx)), withFreshLink(withStreamHeaders(Relay.resolver()))) }
             .setDrmSessionManagerProvider(drm)
     }
 
@@ -129,19 +129,26 @@ internal object MediaHttp {
  * P2P engine's own loopback server (P2pServer) legitimately holds a response while the swarm finds
  * the next piece — the same twenty seconds would call a working stream broken. The address decides,
  * at open() time, which of the readers actually does the work; a play opened from a web player page
- * (DeviceEmbed) reads everything through that page.
+ * (DeviceEmbed) reads everything through that page, and a saved one (Downloads) through what the phone already holds.
  */
-private class Patient(private val quick: DataSource, private val patient: DataSource, private val page: DataSource) : DataSource {
+private class Patient(
+    private val quick: DataSource,
+    private val patient: DataSource,
+    private val page: DataSource,
+    private val saved: DataSource?,
+) : DataSource {
     private var live: DataSource? = null
 
     override fun addTransferListener(transferListener: TransferListener) {
         quick.addTransferListener(transferListener)
         patient.addTransferListener(transferListener)
         page.addTransferListener(transferListener)
+        saved?.addTransferListener(transferListener)
     }
 
     override fun open(dataSpec: DataSpec): Long {
         val d = when {
+            saved != null && Downloads.active != null && dataSpec.uri.scheme.orEmpty().startsWith("http") -> saved
             DeviceEmbed.owns(dataSpec.uri) -> page
             P2p.isLocal(dataSpec.uri.toString()) -> patient
             else -> quick
