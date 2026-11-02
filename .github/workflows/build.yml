@@ -182,12 +182,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.102.0.apk
+          cp "$APK" Nebula-1.102.1.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.102.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.102.0 Nebula-1.102.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.102.0" \
-            --notes "Streams that are a web player page now play: Nebula opens the page out of sight on your device and plays the stream it carries (the sports add-on's LIVE rows for NBA, NHL and NFL games)."
+          gh release delete v1.102.1 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.102.1 Nebula-1.102.1.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.102.1" \
+            --notes "Subtitles can sit on the black bars: choose Position, Black bars in Settings, Playback, Subtitle style, or in the player's Subtitles panel. On a film with black bars the lines go to the very bottom of the screen at the same size; a film without them keeps the lines where Bottom does. The choice is saved on this device only. Your subtitle languages, first and second choice, now show in Essential settings too, and picking a language turns them on by itself straight away."
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
