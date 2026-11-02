@@ -182,12 +182,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.102.1.apk
+          cp "$APK" Nebula-1.102.2.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.102.1 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.102.1 Nebula-1.102.1.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.102.1" \
-            --notes "Subtitles can sit on the black bars: choose Position, Black bars in Settings, Playback, Subtitle style, or in the player's Subtitles panel. On a film with black bars the lines go to the very bottom of the screen at the same size; a film without them keeps the lines where Bottom does. The choice is saved on this device only. Your subtitle languages, first and second choice, now show in Essential settings too, and picking a language turns them on by itself straight away."
+          gh release delete v1.102.2 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.102.2 Nebula-1.102.2.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.102.2" \
+            --notes "Add-ons have a menu now: tap the three dots on a row to copy the add-on's manifest address, or to open its own settings page right inside the app. Saving new settings updates the add-on where it sits, keeping its place in the list and whether it is on. Remove moved into the same menu."
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
