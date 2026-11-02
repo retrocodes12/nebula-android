@@ -107,6 +107,7 @@ import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircleOutline
@@ -618,6 +619,7 @@ private sealed interface Screen {
     data object Search : Screen
     data object Library : Screen
     data object Addons : Screen
+    data class AddonConfigure(val addon: Addon) : Screen     // its settings page (AddonConfigScreen.kt)
     data object Settings : Screen
     data object SettingsSubtitles : Screen
     data object SettingsLayout : Screen
@@ -1167,6 +1169,11 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
             // ---- cross-device sync wiring ----
             var libraryVersion by remember { mutableStateOf(0) }
             var addonsVersion by remember { mutableStateOf(0) }
+            // an add-on off takes its titles out of Continue watching, and its catalogs out of Discover's pickers
+            fun addonsChanged() {
+                manifestCache.clear(); homeState.invalidate(); homeState.invalidateContinue(); searchState.discover.optionsLoaded = false
+                if (Account.isTv(ctx)) Guide.refresh(ctx, force = true)
+            }
             LaunchedEffect(Unit) {
                 // each profile keeps its own add-ons: a switch (here or a removal synced from elsewhere) is a new list
                 var seenViewer = Viewers.current
@@ -1518,10 +1525,19 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                                     version = addonsVersion,
                                     onBack = { pop() },
                                     onOpen = { push(Screen.Catalog(it)) },
-                                    // an add-on off takes its titles out of Continue watching, and its catalogs out of Discover's pickers
-                                    onAddonsChanged = {
-                                        manifestCache.clear(); homeState.invalidate(); homeState.invalidateContinue(); searchState.discover.optionsLoaded = false
-                                        if (Account.isTv(ctx)) Guide.refresh(ctx, force = true)
+                                    onConfigure = { push(Screen.AddonConfigure(it)) },
+                                    onAddonsChanged = { addonsChanged() },
+                                )
+                                is Screen.AddonConfigure -> AddonConfigScreen(
+                                    addon = s.addon,
+                                    onBack = { pop() },
+                                    onSave = { info ->
+                                        // the rank is stamped too: to other devices this is a removal plus an addition
+                                        Cloud.noteAddonOrder(ctx)
+                                        saveAddons(ctx, AddonConfig.replaced(loadAddons(ctx), s.addon.manifestUrl, info.addon))
+                                        addonsChanged()
+                                        Toasts.show("Saved ${info.addon.name}")
+                                        pop()
                                     },
                                 )
                                 is Screen.Settings -> SettingsScreen(
@@ -4024,7 +4040,7 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
 
 // ---------- add-ons (manage sources) ----------
 @Composable
-private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Unit, onAddonsChanged: () -> Unit) {
+private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Unit, onConfigure: (Addon) -> Unit, onAddonsChanged: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var addons by remember(version) { mutableStateOf(loadAddons(ctx)) }
@@ -4032,6 +4048,8 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
     var status by remember { mutableStateOf("") }
     var statusErr by remember { mutableStateOf(false) }
     var statusDone by remember { mutableStateOf(false) }     // "Added X": wears a check
+    var menuFor by remember { mutableStateOf<Addon?>(null) }  // the row whose ⋮ sheet is up
+    var menuInfo by remember { mutableStateOf<ManifestInfo?>(null) }
 
     // ---- ranking ----
     // Rows are a fixed height, so a drag is just "how many rows have I passed",
@@ -4073,6 +4091,34 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
         addons = next
         onAddonsChanged()
         return to
+    }
+    fun removeAddon(a: Addon) {
+        // the row takes focus with it: hand it to the next add-on (or the one before)
+        val at = addons.indexOfFirst { it.manifestUrl == a.manifestUrl }
+        val nb = addons.getOrNull(at + 1) ?: addons.getOrNull(at - 1)
+        val list = addons.filterNot { it.manifestUrl == a.manifestUrl }
+        saveAddons(ctx, list); addons = list; onAddonsChanged()
+        if (nb != null) ReturnFocus.handTo(screenEntry, "addon/" + nb.manifestUrl)
+    }
+
+    menuFor?.let { a ->
+        // whether it has settings is the manifest's word. Configure lands above the other rows once that is known,
+        // and the sheet grows from the bottom, so nothing moves under a finger.
+        LaunchedEffect(a.manifestUrl) {
+            menuInfo = null
+            menuInfo = runCatching { manifestFor(a.manifestUrl) }
+                .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+                .getOrNull()
+        }
+        CardSheet(
+            title = a.name, sub = AddonConfig.host(a.manifestUrl), poster = a.logo, shape = "square",
+            actions = buildList {
+                if (menuInfo?.configurable == true) add(SheetAction(Icons.Filled.Tune, "Configure") { onConfigure(a) })
+                add(SheetAction(Icons.Filled.ContentCopy, "Copy manifest URL") { copyAddonLink(ctx, a) })
+                add(SheetAction(Icons.Filled.Delete, "Remove", destructive = true) { removeAddon(a) })
+            },
+            onDismiss = { menuFor = null },
+        )
     }
 
     LazyColumn(
@@ -4288,18 +4334,13 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
                                 )
                             }
                         }
+                        // Configure, Copy and Remove share one sheet: a fourth control beside On/Off and the grip left a
+                        // phone's row no room for the add-on's name
                         IconButton(
-                            onClick = {
-                                // the row takes focus with it: hand it to the next add-on (or the one before)
-                                val at = addons.indexOfFirst { it.manifestUrl == a.manifestUrl }
-                                val nb = addons.getOrNull(at + 1) ?: addons.getOrNull(at - 1)
-                                val list = addons.filterNot { it.manifestUrl == a.manifestUrl }
-                                saveAddons(ctx, list); addons = list; onAddonsChanged()
-                                if (nb != null) ReturnFocus.handTo(screenEntry, "addon/" + nb.manifestUrl)
-                            },
+                            onClick = { menuFor = a },
                             modifier = Modifier.size(36.dp).focusRing(CircleShape, landing = false),
                         ) {
-                            Icon(Icons.Filled.Close, contentDescription = "Remove", tint = MutedC, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Filled.MoreVert, contentDescription = "More for ${a.name}", tint = MutedC, modifier = Modifier.size(20.dp))
                         }
                 }
                 }
