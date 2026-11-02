@@ -38,6 +38,8 @@ data class ManifestInfo(
     val hasSubs: Boolean = false,
     val subTypes: List<String>? = null,
     val subIdPrefixes: List<String>? = null,
+    /** Serves a settings page beside its manifest (AddonConfig.kt). */
+    val configurable: Boolean = false,
 ) {
     /** Stremio semantics: stream resource + matching type + matching id prefix (absent = match all). */
     fun canStream(type: String, id: String): Boolean = matches(hasStreams, streamTypes, streamIdPrefixes, type, id)
@@ -288,7 +290,7 @@ object Stremio {
         val (hasStreams, sTypes, sPrefixes) = scopes.getValue("stream").out()
         val (hasMeta, mTypes, mPrefixes) = scopes.getValue("meta").out()
         val (hasSubs, subTypes, subPrefixes) = scopes.getValue("subtitles").out()
-        return ManifestInfo(addon, cats, hasStreams, sTypes, sPrefixes, hasMeta, mTypes, mPrefixes, hasSubs, subTypes, subPrefixes)
+        return ManifestInfo(addon, cats, hasStreams, sTypes, sPrefixes, hasMeta, mTypes, mPrefixes, hasSubs, subTypes, subPrefixes, AddonConfig.configurable(j))
     }
 
     /** Full meta for one title, or null when the add-on has nothing. */
