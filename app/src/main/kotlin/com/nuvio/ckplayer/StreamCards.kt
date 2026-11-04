@@ -290,7 +290,8 @@ internal fun ReleaseCardBody(
         }
         if (spec.row) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (spec.res) Box(Modifier.width(56.dp)) { c.res?.let { ResChip(it) } }
+                // a slot one width for every row, so the titles keep one edge ("1080p" is the widest chip)
+                if (spec.res) Box(Modifier.width(68.dp)) { c.res?.let { ResChip(it) } }
                 Column(Modifier.weight(1f)) {
                     Text(title, fontSize = titleSp, fontFamily = Sans, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     if (c.badges.isNotEmpty() || c.langs.isNotEmpty() || c.pills.isNotEmpty())
