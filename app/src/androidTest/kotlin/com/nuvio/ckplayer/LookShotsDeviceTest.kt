@@ -56,8 +56,11 @@ class LookShotsDeviceTest {
     private val ctx get() = ins.targetContext
     private var act: Activity? = null
 
-    private class Owner : LifecycleOwner, SavedStateRegistryOwner {
+    private class Owner : LifecycleOwner, SavedStateRegistryOwner, androidx.lifecycle.ViewModelStoreOwner,
+        androidx.activity.OnBackPressedDispatcherOwner {
         private val reg = LifecycleRegistry(this)
+        override val viewModelStore = androidx.lifecycle.ViewModelStore()
+        override val onBackPressedDispatcher = androidx.activity.OnBackPressedDispatcher()
         private val ss = SavedStateRegistryController.create(this)
         override val lifecycle: Lifecycle get() = reg
         override val savedStateRegistry: SavedStateRegistry get() = ss.savedStateRegistry
@@ -85,6 +88,10 @@ class LookShotsDeviceTest {
             v.setViewTreeSavedStateRegistryOwner(owner)
             act!!.window.decorView.setViewTreeLifecycleOwner(owner)
             act!!.window.decorView.setViewTreeSavedStateRegistryOwner(owner)
+            listOf(v, act!!.window.decorView).forEach {
+                androidx.lifecycle.setViewTreeViewModelStoreOwner(it, owner)
+                androidx.activity.setViewTreeOnBackPressedDispatcherOwner(it, owner)
+            }
             v.setContent(content)
             act!!.setContentView(v)
         }
