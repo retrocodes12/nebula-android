@@ -152,6 +152,7 @@ internal fun PhoneChrome(
     AnimatedVisibility(visible, enter = fadeIn(), exit = fadeOut()) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val compact = maxHeight < 480.dp
+            val upright = maxWidth < 600.dp
             val side = if (compact) 28.dp else 20.dp
             // the whole picture dims a little under the controls (Nuvio's), deeper at the edges where the words are
             Box(Modifier.fillMaxSize().background(Color(0x47000000)))
@@ -224,7 +225,7 @@ internal fun PhoneChrome(
                 )
                 Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                     // a phone held upright has room for four before the chevron, on its side for five
-                    val first = if (maxWidth < 600.dp) 4 else 5
+                    val first = if (upright) 4 else 5
                     val shown = if (open || tools.size <= first + 1) tools else tools.take(first)
                     Row(
                         Modifier.weight(1f).horizontalScroll(rememberScrollState()).animateContentSize()
