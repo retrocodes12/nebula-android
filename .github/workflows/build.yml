@@ -182,12 +182,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.103.0.apk
+          cp "$APK" Nebula-1.103.1.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.103.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.103.0 Nebula-1.103.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.103.0" \
-            --notes "Downloads: keep a film or an episode on your phone and watch it with no connection. Tap the download arrow, choose a source, and find it in Library under Downloads. Downloads use Wi-Fi only unless you change that in Settings, Playback. Saved copies stay inside the app on this phone. Live streams, protected streams, web player pages and torrents can't be saved. Phones only."
+          gh release delete v1.103.1 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.103.1 Nebula-1.103.1.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.103.1" \
+            --notes "New stream cards: each stream shows what the file is (title, source, codec, size, seeds), its picture and sound marks, its languages, the add-on and service that have it, and the file's name. Settings, Streams, Stream cards offers Release, Compact, One line, Minimal and Classic, each with a live preview, and Custom to build your own."
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
