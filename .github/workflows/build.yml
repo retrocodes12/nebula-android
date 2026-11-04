@@ -182,12 +182,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.103.1.apk
+          cp "$APK" Nebula-1.103.2.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.103.1 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.103.1 Nebula-1.103.1.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.103.1" \
-            --notes "New stream cards: each stream shows what the file is (title, source, codec, size, seeds), its picture and sound marks, its languages, the add-on and service that have it, and the file's name. Settings, Streams, Stream cards offers Release, Compact, One line, Minimal and Classic, each with a live preview, and Custom to build your own."
+          gh release delete v1.103.2 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.103.2 Nebula-1.103.2.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.103.2" \
+            --notes "Autoplay's add-on chips wrap onto a second line on a phone instead of squeezing (a long add-on name broke its count one digit a line). Also in this version: the stream card designs from 1.103.1."
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
