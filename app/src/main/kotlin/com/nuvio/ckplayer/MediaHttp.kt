@@ -125,6 +125,44 @@ internal object MediaHttp {
 }
 
 /**
+ * Where a file's link ended up after its redirects. A debrid row's address is the add-on's own resolve link
+ * (Torrentio's /resolve/…, Comet's /playback/…), which answers every request with a redirect to the service's
+ * file server — and the add-on takes a second or more to give that answer. Starting a film opens the file
+ * three or four times (its header, its index at the end, the resume point), so each start paid that wait
+ * three or four times over, and every jump paid it again. The first answer is kept for the play instead:
+ * later opens go straight to the file server, and fall back to the add-on's link once if it stops answering.
+ * Files only — a playlist or a manifest is asked at its own address every time (a live one must stay fresh).
+ */
+internal object Redirects {
+    private const val TTL_MS = 20 * 60_000L
+    private val map = java.util.concurrent.ConcurrentHashMap<String, Pair<String, Long>>()
+
+    fun target(from: String): String? {
+        val e = map[from] ?: return null
+        if (System.currentTimeMillis() - e.second < TTL_MS) return e.first
+        map.remove(from)
+        return null
+    }
+
+    fun note(from: String, to: String) {
+        if (from == to) return
+        if (map.size > 64) map.clear()
+        map[from] = to to System.currentTimeMillis()
+    }
+
+    fun forget(from: String) { map.remove(from) }
+
+    /** A file the player reads in pieces, not a playlist, a manifest or a web page. */
+    fun isFile(headers: Map<String, List<String>>, url: String): Boolean {
+        val type = headers.entries.firstOrNull { it.key.equals("Content-Type", ignoreCase = true) }
+            ?.value?.firstOrNull()?.lowercase().orEmpty()
+        if (type.isEmpty()) return !Regex("""\.(m3u8?|mpd)(\?|#|$)""", RegexOption.IGNORE_CASE).containsMatchIn(url)
+        if ("mpegurl" in type || "dash" in type || type.startsWith("text/") || "json" in type || "xml" in type) return false
+        return type.startsWith("video/") || type.startsWith("audio/") || "octet-stream" in type || "matroska" in type
+    }
+}
+
+/**
  * One reader per address. A web host that stops answering should fail inside twenty seconds, but the
  * P2P engine's own loopback server (P2pServer) legitimately holds a response while the swarm finds
  * the next piece — the same twenty seconds would call a working stream broken. The address decides,
@@ -154,7 +192,26 @@ private class Patient(
             else -> quick
         }
         live = d
-        return d.open(dataSpec)
+        val u = dataSpec.uri.toString()
+        if (d !== quick || dataSpec.httpMethod != DataSpec.HTTP_METHOD_GET || !(u.startsWith("http://") || u.startsWith("https://")))
+            return d.open(dataSpec)
+        // the file server the add-on's link sent us to last time (Redirects): straight there, the add-on asked again only
+        // when that stops answering
+        Redirects.target(u)?.let { to ->
+            try {
+                return d.open(dataSpec.withUri(Uri.parse(to)))
+            } catch (e: java.io.InterruptedIOException) {
+                throw e
+            } catch (e: IOException) {
+                Redirects.forget(u)
+                runCatching { d.close() }
+            }
+        }
+        val n = d.open(dataSpec)
+        val end = d.uri?.toString()
+        if (end != null && end != u && (end.startsWith("http://") || end.startsWith("https://")) && Redirects.isFile(d.responseHeaders, end))
+            Redirects.note(u, end)
+        return n
     }
 
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
@@ -218,7 +275,8 @@ internal class RangeSource(private val url: String, private val ua: String) : Me
         size = if (lastEnd >= 0 && pos >= lastEnd && pos < lastEnd + WINDOW) minOf(size * 2, WINDOW_MAX) else WINDOW
         val start = pos - pos % WINDOW
         val end = if (total > 0) minOf(start + size - 1, total - 1) else start + size - 1
-        val req = Request.Builder().url(url)
+        val via = Redirects.target(url)                 // the file server the player's own reads already found (Redirects)
+        val req = Request.Builder().url(via ?: url)
             .header("User-Agent", ua)
             .header("Accept", "*/*")
             .header("Accept-Encoding", "identity")      // what the player sends; no transparent gzip on video bytes
@@ -239,7 +297,10 @@ internal class RangeSource(private val url: String, private val ua: String) : Me
                         }
                     }
                     200 -> { failure = "host does not support range requests"; return null }
-                    else -> { failure = "host refused the second connection (${res.code})"; return null }
+                    else -> {
+                        if (via != null) { Redirects.forget(url); return window(pos) }
+                        failure = "host refused the second connection (${res.code})"; return null
+                    }
                 }
                 val bytes = res.body?.bytes() ?: ByteArray(0)     // at most one window
                 if (bytes.isEmpty()) { failure = "empty reply from the host"; return null }
