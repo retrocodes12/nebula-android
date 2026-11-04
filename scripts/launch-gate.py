@@ -177,25 +177,28 @@ if not video: fail.append('the player screen never opened')
 # a tap in the middle wakes the controls the way a viewer would
 size = re.search(r'(\d+)x(\d+)', sh('wm', 'size'))
 w, h = (int(size.group(1)), int(size.group(2))) if size else (1080, 2400)
+# inside the picture whichever way up: the player turns a phone on its side as a video starts (Settings › Playback)
+side = min(w, h) // 2
 time.sleep(8)
-adb('shell', 'input', 'tap', str(w // 2), str(h // 2)); time.sleep(1.5)
-adb('shell', 'input', 'keyevent', 'KEYCODE_MEDIA_PAUSE')
-played = False
-for _ in range(6):                        # up to ~18 s
-    time.sleep(3)
-    if 'Paused' in texts(): played = True; break
-print('player: paused board', 'seen' if played else 'NOT seen (network? — reported, not blocking)', flush=True)
-# a finger's controls (PhoneChrome): a tap shows or hides them, so look, and tap once more if they are away. Blocking:
+adb('shell', 'input', 'tap', str(side), str(side)); time.sleep(1.5)
+# a finger's controls (PhoneChrome), looked for while playing (a phone on its side gives a paused screen to the pause
+# board): a tap shows or hides them, so look, and tap once more if they are away. Blocking:
 # a phone release whose controls never appear has no way to pause, seek or leave
 def phone_controls():
     descs = [(n.get('content-desc') or '') for n in nodes()]
     return 'Lock the screen' in descs and 'Play/Pause' in descs
 seen = phone_controls()
 if not seen:
-    adb('shell', 'input', 'tap', str(w // 2), str(h // 2)); time.sleep(1.5)
+    adb('shell', 'input', 'tap', str(side), str(side)); time.sleep(1.5)
     seen = phone_controls()
 print('player: phone controls', 'seen' if seen else 'NOT SEEN', flush=True)
 if not seen: fail.append("the phone's player controls never appeared after a tap")
+adb('shell', 'input', 'keyevent', 'KEYCODE_MEDIA_PAUSE')
+played = False
+for _ in range(6):                        # up to ~18 s
+    time.sleep(3)
+    if 'Paused' in texts(): played = True; break
+print('player: paused board', 'seen' if played else 'NOT seen (network? — reported, not blocking)', flush=True)
 if AV1:
     av1 = av1_phase(AV1)
     print('av1: ' + ('PASSED' if not av1 else 'FAILED: ' + '; '.join(av1)), flush=True)

@@ -7845,6 +7845,8 @@ private fun PlayerScreen(
     // of this function's body (PlayerScreen is one very large method — see the launch gate)
     WatchLogTicker(exo, showName, started)
     // one clock drives the chrome: position, buffered, playing, live — while the app is on screen (`started`, above)
+    // keys, not a finger (a TV, or a phone with a remote or a keyboard): the controls stay while paused, as on a TV
+    val keysDrive by rememberUpdatedState(Account.isTv(context) || LocalInputModeManager.current.inputMode == InputMode.Keyboard)
     LaunchedEffect(started) {
         if (!started) return@LaunchedEffect
         while (true) {
@@ -7879,7 +7881,7 @@ private fun PlayerScreen(
             // waits — but only when the board WILL come; at 0:00, in picture-in-picture or under Up next it never does,
             // and hiding the controls there left a bare picture)
             // Never while TalkBack explores the screen: a reader walking through the controls cannot race a fade.
-            val pausedShort = boardCan && context.resources.configuration.screenHeightDp < 480
+            val pausedShort = boardCan && context.resources.configuration.screenHeightDp < 480 && !keysDrive
             if (chromeVisible && (exo.isPlaying || pausedShort) && !subPanelOpen && !sleepMenuOpen && !scrubbing && !trackListOpen &&
                 !touchExploring(context) &&
                 now - chromeTouchedAt > (Prefs.controlsHide * 1000f).toLong()) chromeVisible = false
