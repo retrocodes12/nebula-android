@@ -182,12 +182,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.103.2.apk
+          cp "$APK" Nebula-1.104.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.103.2 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.103.2 Nebula-1.103.2.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.103.2" \
-            --notes "Autoplay's add-on chips wrap onto a second line on a phone instead of squeezing (a long add-on name broke its count one digit a line). Also in this version: the stream card designs from 1.103.1."
+          gh release delete v1.104.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.104.0 Nebula-1.104.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.104.0" \
+            --notes "Streams start faster: a debrid row's file is no longer asked of its add-on again on every connection (an MP4 with its index at the end started in 1.4 s instead of 3.8 s on the test). A new look on phones and tablets: bare player controls with a screen lock and a Next Episode card, and cleaner Continue watching cards. A phone turns sideways as a video starts (Settings › Playback), brightness and volume swipes on the left and right halves, whole-season downloads, and Autoplay's add-on chips wrap on a narrow screen."
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
