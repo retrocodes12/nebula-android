@@ -119,6 +119,7 @@ import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.CloudOff
@@ -2463,7 +2464,7 @@ internal fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick
             Modifier.fillMaxWidth().aspectRatio(16f / 9f)
                 .clip(shape)
                 .background(SurfaceC)
-                .border(if (ring) 2.dp else 1.dp, if (ring) Color.White else Color(0x14FFFFFF), shape),
+                .then(if (ring) Modifier.border(2.dp, Color.White, shape) else Modifier),
         ) {
             // initials under the picture, so a picture that never arrives leaves a named card, not a black one
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -2478,30 +2479,34 @@ internal fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick
                     contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
                 )
             }
+            // Nuvio's card (the Founder's 11-04 screenshot): the still carries a soft fall of shade towards its foot
+            // and the words sit straight on it — "S1 E8", the show, the episode's name in small capitals — with the
+            // way through as a hairline along the very bottom, not a glass chip and an accent bar
             Box(Modifier.matchParentSize().background(Brush.verticalGradient(
-                0f to Color(0x00000000), 0.4f to Color(0x33000000), 1f to Color(0xE6000000))))
-            // how much is left, as a glass chip in the corner
-            if (left > 0) Text(
-                fmtLeft(left), color = Ink, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, fontFamily = Sans, maxLines = 1,
-                modifier = Modifier.align(Alignment.TopEnd).padding(10.dp)
-                    .background(BarGlass, Pill).border(1.dp, Hairline, Pill)
-                    .padding(horizontal = 10.dp, vertical = 5.dp),
-            )
+                0f to Color(0x00000000), 0.35f to Color(0x14000000), 0.7f to Color(0x8C000000), 1f to Color(0xD9000000))))
             val pct = if (r.dur > 0) (r.pos.toFloat() / r.dur).coerceIn(0f, 1f) else 0f
-            Column(Modifier.align(Alignment.BottomStart).padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
-                if (tag != null) Eyebrow(tag, color = Color(0xD1EBEBF5))
+            Column(Modifier.align(Alignment.BottomStart).padding(start = 14.dp, end = 14.dp, bottom = if (pct > 0f) 16.dp else 13.dp)) {
+                // an episode names itself; a film says how much is left in the same small line
+                val top = tag ?: if (left > 0) fmtLeft(left) else null
+                if (top != null) Text(
+                    top, color = Color.White, fontSize = 12.5.sp, fontFamily = Sans, fontWeight = FontWeight.SemiBold,
+                    maxLines = 1, letterSpacing = 0.2.sp,
+                )
                 Text(
-                    title, color = Color.White, fontSize = 16.sp, fontFamily = Sans,
-                    fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = if (tag != null) 3.dp else 0.dp),
+                    title, color = Color.White, fontSize = 18.sp, fontFamily = Sans,
+                    fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, letterSpacing = (-0.2).sp,
+                    modifier = Modifier.padding(top = if (top != null) 2.dp else 0.dp),
                 )
                 if (sub != null) Text(
-                    sub, color = Color(0xB3EBEBF5), fontSize = 12.5.sp, maxLines = 1,
-                    overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 1.dp),
+                    sub.uppercase(), color = Color(0xB3FFFFFF), fontSize = 11.5.sp, fontFamily = Sans, fontWeight = FontWeight.Medium,
+                    letterSpacing = 0.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp),
                 )
-                // a rounded track under the title (tvOS's own place for it): along the card's foot the rounded corner
-                // clipped the first ~5 % away, so an episode a few minutes in showed no bar at all
-                if (pct > 0f) ResumeTrack(pct, Modifier.padding(top = 9.dp))
+            }
+            if (pct > 0f) Box(
+                Modifier.align(Alignment.BottomStart).padding(start = 14.dp, end = 14.dp, bottom = 7.dp)
+                    .fillMaxWidth().height(3.dp).clip(Pill).background(Color(0x40FFFFFF)),
+            ) {
+                Box(Modifier.fillMaxWidth(pct.coerceIn(0.03f, 1f)).fillMaxHeight().clip(Pill).background(Color.White))
             }
         }
     }
@@ -6907,6 +6912,9 @@ private fun PlayerScreen(
     var activeAddonSub by remember { mutableStateOf<String?>(null) }
     // the Title Card chrome replaces Media3's controller entirely
     var chromeVisible by remember { mutableStateOf(true) }
+    // the phone's screen lock (PhoneChrome's padlock): every touch goes to the unlock button until it is pressed
+    var locked by remember { mutableStateOf(false) }
+    var lockHintAt by remember { mutableStateOf(0L) }
     var chromeTouchedAt by remember { mutableStateOf(System.currentTimeMillis()) }
     var trackListOpen by remember { mutableStateOf(false) }   // the Audio or Quality list is up over the video
     var isPlayingState by remember { mutableStateOf(false) }
@@ -8320,7 +8328,8 @@ private fun PlayerScreen(
     // On a phone on its side the chrome keeps the title beside Back; on a TV-height screen it sits above the
     // scrubber, so the cards that float above the chrome (Skip, Up next) start higher there.
     val shortScreen = LocalConfiguration.current.screenHeightDp < 480
-    val aboveChrome = if (!chromeVisible) 40.dp else if (shortScreen) 150.dp else 214.dp
+    // a phone's controls (PhoneChrome) end lower: a thin bar and one row of icons
+    val aboveChrome = if (!chromeVisible) 40.dp else if (!tvBox) 104.dp else if (shortScreen) 150.dp else 214.dp
     // A phone turned on its side is watching: the status and navigation bars go (a swipe shows them for a moment)
     // without a trip to the Fullscreen button, and come back upright; leaving the player restores them (onDispose).
     // The button still locks landscape. Not on a TV (no bars to hide) and not in picture-in-picture.
@@ -8439,7 +8448,7 @@ private fun PlayerScreen(
         if (boardUp && !pip) Box(Modifier.fillMaxSize().background(Color(0x7A000000)))
         if (!pip) Box(Modifier.fillMaxSize().onFocusChanged { chromeHasFocus = it.hasFocus }) { TitleCardChrome(
             // the Subtitles panel is a dim over the picture: the controls step away while it is open (the web's P0-6)
-            visible = chromeVisible && !subPanelOpen,
+            visible = chromeVisible && !subPanelOpen && !locked,
             title = showName,
             isPlaying = isPlayingState,
             isLive = isLiveState,
@@ -8448,6 +8457,7 @@ private fun PlayerScreen(
             sourceLine = sourceLine,
             showClock = Prefs.clock,
             seekStepMs = Prefs.seekStep * 1000L,
+            onLock = if (tvBox) null else ({ locked = true; chromeVisible = false; lockHintAt = System.currentTimeMillis() }),
             subtitlesFocus = subsFocus,
             playFocus = playFocus,
             sleepFocus = sleepFocus,
@@ -8690,7 +8700,23 @@ private fun PlayerScreen(
             LaunchedEffect(st.url, chromeVisible) { if (!chromeVisible && skipKind == null) runCatching { swapFocus.requestFocus() } }
         }
         // Up next: offered near the end, counts down and autoplays once the episode ends.
-        if (upnextOpen && nextEpisode != null && !pip) {
+        if (upnextOpen && nextEpisode != null && !pip && !tvBox) {
+            val nextReady = NextEp.ready
+            val srcLine = remember(nextEpisode.id, nextReady) { NextEp.sourceLine(context, nextEpisode.id) }
+            NextEpisodeCard(
+                ep = nextEpisode, fallbackArt = poster,
+                kicker = if (stillAsk) "Still watching?" else "Next Episode",
+                counting = if (upnextCounting) upnextLeft else null,
+                sourceLine = srcLine,
+                playFocus = upnextFocus,
+                // a hand on Play ends the autoplay run the Still watching? count is about
+                onPlay = { upnextCounting = false; autoRun = 0; onPlayNext(nextEpisode) },
+                onDismiss = { upnextCounting = false; upnextOpen = false; upnextDismissed = true; onCancelNext() },
+                modifier = Modifier.align(Alignment.BottomEnd)
+                    .padding(start = 20.dp, end = 20.dp, bottom = if (chromeVisible) aboveChrome else 40.dp)
+                    .onFocusChanged { upnextHasFocus = it.hasFocus },
+            )
+        } else if (upnextOpen && nextEpisode != null && !pip) {
             Column(
                 Modifier.align(Alignment.BottomEnd)
                     .padding(end = 20.dp, bottom = if (chromeVisible) aboveChrome else 150.dp)
@@ -8811,6 +8837,35 @@ private fun PlayerScreen(
         }
         error?.let {
             Text(it, color = Color(0xFFFF6B6B), modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp))
+        }
+        // Locked: one layer over everything takes every touch; a tap shows the unlock button for three seconds
+        if (locked && !pip) {
+            var hintOn by remember { mutableStateOf(true) }
+            LaunchedEffect(lockHintAt) { hintOn = true; delay(3000); hintOn = false }
+            Box(
+                Modifier.fillMaxSize().pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val e = awaitPointerEvent()
+                            e.changes.forEach { it.consume() }
+                            if (e.changes.any { it.pressed && !it.previousPressed }) lockHintAt = System.currentTimeMillis()
+                        }
+                    }
+                },
+            ) {
+                androidx.compose.animation.AnimatedVisibility(hintOn, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.Center)) {
+                    Row(
+                        Modifier.background(Color(0xB3000000), RoundedCornerShape(50))
+                            .clickable { locked = false; chromeVisible = true; chromeTouchedAt = System.currentTimeMillis() }
+                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Filled.LockOpen, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                        Text("Tap to unlock", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(start = 10.dp))
+                    }
+                }
+            }
         }
     }
 }

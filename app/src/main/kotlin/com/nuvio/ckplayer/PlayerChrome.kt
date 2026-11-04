@@ -428,7 +428,27 @@ internal fun TitleCardChrome(
     scrubFrame: State<Bitmap?>? = null,       // the scrub preview's frame for the position being previewed
     onScrub: (Long?) -> Unit = {},            // a preview position is up (finger or remote); null when it ends
     seekStepMs: Long = 10_000L,               // Skip by (Settings › Playback): the transport's step
+    onLock: (() -> Unit)? = null,             // a phone or tablet: Nuvio's bare layout (PhoneChrome.kt) with a screen lock
 ) {
+    if (onLock != null) {
+        PhoneChrome(
+            visible = visible, title = title, episodeTag = episodeTag, sourceLine = sourceLine,
+            isPlaying = isPlaying, isLive = isLive, clock = clock, partyBadge = partyBadge, showClock = showClock,
+            dimTitle = dimTitle, seekStepMs = seekStepMs, scrubFrame = scrubFrame, playFocus = playFocus,
+            tools = phoneTools(
+                hasNext = hasNext, showSubtitles = showSubtitles, showAudio = showAudio, qualityLabel = qualityLabel,
+                speedLabel = speedLabel, fitLabel = fitLabel, sleepLabel = sleepLabel, partyActive = partyActive,
+                canInvite = canInvite, infoOn = infoOn, canPip = canPip, canFullscreen = canFullscreen,
+                subtitlesFocus = subtitlesFocus, sleepFocus = sleepFocus,
+                onNext = onNext, onSubtitles = onSubtitles, onAudio = onAudio, onQuality = onQuality, onStreams = onStreams,
+                onSpeedCycle = onSpeedCycle, onFitCycle = onFitCycle, onSleep = onSleep, onParty = onParty,
+                onInvite = onInvite, onReact = onReact, onInfo = onInfo, onPip = onPip, onFullscreen = onFullscreen,
+            ),
+            onBack = onBack, onLock = onLock, onPlayPause = onPlayPause, onSeekBy = onSeekBy, onSeekTo = onSeekTo,
+            onScrub = onScrub, onGoLive = onGoLive,
+        )
+        return
+    }
     val ctx = LocalContext.current
     // remaining ↔ total on the right pill: Settings › Playback › Right time pill sets it, and a tap on the
     // pill flips the setting itself (outside the fade, so a hidden chrome forgets nothing)

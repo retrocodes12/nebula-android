@@ -409,6 +409,7 @@ internal fun Scrubber(
     stepMs: Long = 10_000L,          // Skip by (Settings › Playback): one press; ×3 after five quick ones, ×6 after ten
     kick: Pair<Int, Int>? = null,    // (direction, serial): a ←/→ that woke the hidden chrome — take focus, take that step
     onKickTaken: (Int) -> Unit = {},  // the serial it was given, so a stale one never clears a newer kick
+    thin: Boolean = false,           // the phone's bar (PhoneChrome): a 4 dp line with a knob, not the tvOS rail
 ) {
     val context = LocalContext.current
     val tv = remember { Account.isTv(context) }
@@ -541,10 +542,17 @@ internal fun Scrubber(
                 }
                 .padding(top = 12.dp, bottom = 12.dp),       // the drawn rail: 14 dp, 12 dp down, as before
         ) {
-            val h = if (seekFocused || active) 12.dp else 9.dp
+            val h = if (thin) (if (active) 6.dp else 4.dp) else if (seekFocused || active) 12.dp else 9.dp
             Box(Modifier.align(Alignment.CenterStart).fillMaxWidth().height(h).background(Color(0x3DFFFFFF), Pill))
             Box(Modifier.align(Alignment.CenterStart).fillMaxWidth(bufFrac).height(h).background(Color(0x61FFFFFF), Pill))
             Box(Modifier.align(Alignment.CenterStart).fillMaxWidth(frac).height(h).background(Ink, Pill))
+            // the phone's bar keeps a small knob at the playhead while nothing is being dragged
+            if (thin && !active && durationMs > 0) Box(
+                Modifier.align(Alignment.CenterStart)
+                    .offset { IntOffset((frac * trackWidth - 6.dp.toPx()).roundToInt(), 0) }
+                    .size(12.dp)
+                    .background(Ink, CircleShape),
+            )
             // the ghost knob: where a commit would land
             if (active) Box(
                 Modifier.align(Alignment.CenterStart)
