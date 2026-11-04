@@ -158,6 +158,7 @@ internal fun SettingsStreamsScreen(onBack: () -> Unit) {
     ) {
         BackBar("Streams", null, onBack)
         LandOnFirstControl()
+        StreamCardDesigns()
         SettingsHeader("P2P", "Torrents, played on this device")
         SettingsGroup {
             if (!P2p.available) SettingsRow(
@@ -206,8 +207,11 @@ internal fun SettingsStreamsScreen(onBack: () -> Unit) {
                     "Streams your connection cannot carry", "Measured while you watch · Marked rows are never picked for you · Move down keeps them under the ones that fit",
                     listOf("move" to "Mark and move down", "mark" to "Mark only", "off" to "Ignore"), Prefs.slowMark,
                 ) { Prefs.setSlowMark(ctx, it) }
-                SettingsToggle("Stream details", "Size, bitrate and seeds at the end of a row", Prefs.streamFacts) { Prefs.setStreamFacts(ctx, it) }
-                SettingsToggle("Badges", "The small picture and sound marks under a name", Prefs.streamBadges) { Prefs.setStreamBadges(ctx, it) }
+                // parts of a design now (Stream cards above); they still shape the Classic row
+                if (Prefs.streamStyle == "classic") {
+                    SettingsToggle("Stream details", "Size, bitrate and seeds at the end of a row", Prefs.streamFacts) { Prefs.setStreamFacts(ctx, it) }
+                    SettingsToggle("Badges", "The small picture and sound marks under a name", Prefs.streamBadges) { Prefs.setStreamBadges(ctx, it) }
+                }
                 SettingsChips(
                     "Add-on on each row", "Where a stream comes from",
                     listOf("initial" to "Initial", "name" to "Name", "hidden" to "Hidden"), Prefs.addonMark, divider = false,

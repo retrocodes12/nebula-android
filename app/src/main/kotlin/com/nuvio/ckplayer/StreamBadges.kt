@@ -48,15 +48,18 @@ object StreamBadges {
 
     data class Match(val badges: List<String>, val fired: List<Regex>)
 
-    fun match(raw: String, skipGroup: String? = null): Match {
+    fun match(raw: String, skipGroup: String? = null): Match = match(raw, setOfNotNull(skipGroup), 6)
+
+    /** The same, skipping every group in [skip] (shown elsewhere on a release card) and stopping at [cap] badges. */
+    fun match(raw: String, skip: Set<String>, cap: Int): Match {
         val seen = HashSet<String>()
         val badges = ArrayList<String>()
         val fired = ArrayList<Regex>()
         for ((group, re, file) in PACK) {
             if (!re.containsMatchIn(raw)) continue
             fired.add(re)                              // every match cleans the text line
-            if (group == skipGroup) continue           // shown elsewhere (resolution plate)
-            if (group in seen || badges.size >= 6) continue
+            if (group in skip) continue                // shown elsewhere (resolution plate, the card's tags)
+            if (group in seen || badges.size >= cap) continue
             seen.add(group)
             badges.add(BASE + file)
         }
@@ -172,21 +175,28 @@ object StreamBadges {
         "\uD83C\uDDEE\uD83C\uDDF3" to "Hindi", "\uD83C\uDDF5\uD83C\uDDF1" to "Polish",
         "\uD83C\uDDE7\uD83C\uDDF7" to "Portuguese", "\uD83C\uDDF7\uD83C\uDDFA" to "Russian",
         "\uD83C\uDDEF\uD83C\uDDF5" to "Japanese", "\uD83C\uDDF0\uD83C\uDDF7" to "Korean",
+        "\uD83C\uDDF3\uD83C\uDDF1" to "Dutch", "\uD83C\uDDE8\uD83C\uDDF3" to "Chinese", "\uD83C\uDDF9\uD83C\uDDFC" to "Chinese",
+        "\uD83C\uDDF8\uD83C\uDDE6" to "Arabic", "\uD83C\uDDF9\uD83C\uDDF7" to "Turkish", "\uD83C\uDDF2\uD83C\uDDFD" to "Latino",
     )
     private val RE_FLAG = Regex("""[\x{1F1E6}-\x{1F1FF}]""")
 
-    private fun langsIn(raw: String): String {
+    /** The languages a row names, in order (words first, then flags), at most [max]. */
+    fun langList(raw: String, max: Int): List<String> {
         val out = LinkedHashSet<String>()
         RE_LANG.findAll(raw).forEach { m ->
-            if (out.size < 4) {
+            if (out.size < max) {
                 var n = m.groupValues[1].replace(Regex("""\s+"""), " ")
                 n = n.lowercase().replaceFirstChar { it.uppercase() }
                 if (n == "Dual audio") n = "Dual Audio"
                 out.add(n)
             }
         }
-        FLAG_LANGS.forEach { (f, n) -> if (out.size < 4 && raw.contains(f)) out.add(n) }
-        val list = out.toList()
+        FLAG_LANGS.forEach { (f, n) -> if (out.size < max && raw.contains(f)) out.add(n) }
+        return out.toList()
+    }
+
+    private fun langsIn(raw: String): String {
+        val list = langList(raw, 4)
         if (list.isEmpty()) return ""
         return list.take(3).joinToString(" + ") + (if (list.size > 3) " +" + (list.size - 3) else "")
     }

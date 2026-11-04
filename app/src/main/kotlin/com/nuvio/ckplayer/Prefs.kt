@@ -146,6 +146,8 @@ object Prefs {
     var streamFacts by mutableStateOf(true); private set          // size · bitrate · seeds column
     var streamBadges by mutableStateOf(true); private set
     var addonMark by mutableStateOf("initial"); private set       // initial / name / hidden
+    var streamStyle by mutableStateOf("release"); private set     // StreamCards.DESIGNS id (classic = the plate-first row)
+    var streamCustom by mutableStateOf(""); private set           // StreamCards.encode of the Custom design ("" = never made)
     var slowMark by mutableStateOf("move"); private set           // move / mark / off — rows this connection cannot carry
     // what this device measured its connection to be, in bits per second, while something played (0 = nothing yet);
     // a measurement, not a choice — it lives outside the pref_ keys so Reset all settings leaves it alone
@@ -237,6 +239,8 @@ object Prefs {
         streamFacts = p.getBoolean("pref_streamfacts", true)
         streamBadges = p.getBoolean("pref_streambadges", true)
         addonMark = p.getString("pref_addonmark", "initial") ?: "initial"
+        streamStyle = p.getString("pref_streamstyle", "release") ?: "release"
+        streamCustom = p.getString("pref_streamcustom", "") ?: ""
         slowMark = p.getString("pref_slowmark", "move") ?: "move"
         bw = if (System.currentTimeMillis() - p.getLong("bw_at", 0L) < 30L * 86_400_000L) p.getLong("bw_bps", 0L) else 0L
         speedBps = p.getLong("speed_bps", 0L)
@@ -330,6 +334,8 @@ object Prefs {
     fun setStreamFacts(ctx: Context, v: Boolean) { streamFacts = v; edit(ctx).putBoolean("pref_streamfacts", v).apply() }
     fun setStreamBadges(ctx: Context, v: Boolean) { streamBadges = v; edit(ctx).putBoolean("pref_streambadges", v).apply() }
     fun setAddonMark(ctx: Context, v: String) { addonMark = v; edit(ctx).putString("pref_addonmark", v).apply() }
+    fun setStreamStyle(ctx: Context, v: String) { streamStyle = v; edit(ctx).putString("pref_streamstyle", v).apply() }
+    fun setStreamCustom(ctx: Context, v: String) { streamCustom = v; edit(ctx).putString("pref_streamcustom", v).apply() }
     fun setSlowMark(ctx: Context, v: String) { slowMark = v; edit(ctx).putString("pref_slowmark", v).apply() }
     /** One sample of the engine's bandwidth estimate: weighted toward the newest play, never a single reading. */
     /** A sample of the connection (the player's clock, every ~5 s of play): kept in memory — [saveBandwidth] writes it

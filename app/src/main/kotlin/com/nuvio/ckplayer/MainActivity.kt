@@ -6333,6 +6333,8 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
     val shown = sections.filter { filter == null || it.first.name == filter }.let { list ->
         if (!saving) list else list.map { (a, rows) -> a to rows.filter { Downloads.savable(it) } }.filter { it.second.isNotEmpty() }
     }
+    // every card names its add-on (a design with the add-on pill, the mark not Hidden): the add-on headings go
+    val cardsNameAddon = StreamCards.specFor(Prefs.streamStyle, Prefs.streamCustom)?.addon == true && Prefs.addonMark != "hidden"
     // A remote lands on the top row as soon as there is one (web parity) and follows it while a higher-ranked add-on
     // answers above — but only until the viewer presses something here; focus is never pulled out from under a hand.
     val remote = remember(ctx) { Account.isTv(ctx) } || LocalInputModeManager.current.inputMode == InputMode.Keyboard
@@ -6471,7 +6473,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             // keyed by add-on and place, not by position: add-ons answer in any order and a slower one lands ABOVE a
             // faster one, so position keys would slide a different stream under the row the remote is on
             shown.forEachIndexed { sectionIndex, (from, streams) ->
-                if (sections.size > 1) item(key = "head/${from.manifestUrl}") {
+                if (sections.size > 1 && !cardsNameAddon) item(key = "head/${from.manifestUrl}") {
                     Text(
                         from.name, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold,
                         modifier = Modifier.padding(horizontal = 16.dp).padding(top = 6.dp),
@@ -6631,6 +6633,34 @@ private fun StreamRow(
     speed: RowSpeed? = null, onHold: (() -> Unit)? = null,
     onPlay: (StreamItem) -> Unit,
 ) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    // Settings › Streams › Stream cards: a release card in the chosen design (StreamCards.kt), or Classic below
+    val spec = remember(Prefs.streamStyle, Prefs.streamCustom) { StreamCards.specFor(Prefs.streamStyle, Prefs.streamCustom) }
+    FocusCard(
+        shape = RoundedCornerShape(if (spec == null) 14.dp else if (spec.dense) 14.dp else 18.dp), modifier = modifier.fillMaxWidth(),
+        onClick = { onPlay(s) }, onLongClick = onHold, zoom = false, interactionSource = interaction, landing = false,
+    ) {
+        if (spec != null) {
+            val card = remember(s.url, spec, Prefs.addonMark) { StreamCards.build(s, addonName, pageTitle, spec, Prefs.addonMark) }
+            ReleaseCardBody(
+                card, spec, focused, usual = usual,
+                eyebrow = listOfNotNull("SAME AS LAST TIME".takeIf { usual }, "P2P".takeIf { s.isTorrent }).joinToString(" · "),
+                eyebrowAccent = usual,
+                warn = if (stutter) "may stutter here" else if (slow) "may stall here" else null,
+                extra = speed?.let { sp -> { SpeedLine(sp) } },
+            )
+        } else StreamRowBody(s, addonName, pageTitle, usual, slow, stutter, focused, speed)
+    }
+}
+
+/** The Classic row: resolution plate, release name, badges, and a right-hand spec column. Also drawn small by the
+    Stream cards gallery (ClassicRowPreview). */
+@Composable
+internal fun StreamRowBody(
+    s: StreamItem, addonName: String, pageTitle: String, usual: Boolean, slow: Boolean, stutter: Boolean, focused: Boolean,
+    speed: RowSpeed?,
+) {
     val raw = remember(s.url) { s.name + "\n" + s.title }
     val plate = remember(s.url) { StreamBadges.plate(raw) }
     val m = remember(s.url) { StreamBadges.match(raw, if (plate != null) "resolution" else null) }
@@ -6645,14 +6675,8 @@ private fun StreamRow(
             StreamBadges.cleanDesc(f.desc, addonName, pageTitle).takeIf { it.isNotEmpty() },
         ).joinToString("  ·  ")
     }
-    val interaction = remember { MutableInteractionSource() }
-    val focused by interaction.collectIsFocusedAsState()
-    // the card's own source is this one, so the plate below does light on focus (the source was never passed, so it
-    // never did); a full-width row wears the ring instead of growing past the screen's edges
-    FocusCard(
-        shape = RoundedCornerShape(14.dp), modifier = modifier.fillMaxWidth(), onClick = { onPlay(s) }, onLongClick = onHold,
-        zoom = false, interactionSource = interaction, landing = false,
-    ) {
+    // the card's own source is StreamRow's, so the plate below lights on focus; a full-width row wears the ring
+    run {
         Row(
             Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(14.dp))
                 .border(1.dp, if (usual) Line2 else LineC, RoundedCornerShape(14.dp)).padding(12.dp),
@@ -6728,6 +6752,11 @@ private fun StreamRow(
         }
     }
 }
+
+/** The Classic row drawn small in Settings › Streams › Stream cards. */
+@Composable
+internal fun ClassicRowPreview(s: StreamItem, addonName: String) =
+    StreamRowBody(s, addonName, "The Dark Knight", usual = false, slow = false, stutter = false, focused = false, speed = null)
 
 /** One party reaction, floating up and fading like the web player's. */
 @Composable
