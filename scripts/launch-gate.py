@@ -191,7 +191,8 @@ seen = phone_controls()
 if not seen:
     adb('shell', 'input', 'tap', str(side), str(side)); time.sleep(1.5)
     seen = phone_controls()
-print('player: phone controls', 'seen' if seen else 'NOT SEEN', flush=True)
+print('player: phone controls', 'seen' if seen else 'NOT SEEN: ' + ' | '.join(x for x in (((n.get('text') or '') + (n.get('content-desc') or '')).strip() for n in nodes()) if x)[:400], flush=True)
+if not seen: print('player: screen ' + sh('wm', 'size').strip() + ' ' + sh('dumpsys', 'window', 'displays').count('mRotation=1').__str__(), flush=True)
 if not seen: fail.append("the phone's player controls never appeared after a tap")
 adb('shell', 'input', 'keyevent', 'KEYCODE_MEDIA_PAUSE')
 played = False
