@@ -259,22 +259,27 @@ internal fun PhoneChrome(
                     val pos = clock.pos
                     val dur = clock.dur
                     val off = clock.liveOff
-                    Text(
-                        when {
-                            isLive -> if (off > 12_000) "−" + fmtTime(off) + " behind live" else "Live"
-                            dur <= 0 -> fmtTime(pos)
-                            showTotal -> fmtTime(pos) + " / " + fmtTime(dur)
-                            else -> fmtTime(pos) + " / −" + fmtTime((dur - pos).coerceAtLeast(0L))
-                        },
-                        color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
-                        style = TextStyle(shadow = IconShadow, fontFeatureSettings = "tnum"),
-                        modifier = Modifier.clickable(
+                    // elapsed as its own text (the release's launch gate reads the playing clock off the screen), then the rest
+                    val tnum = TextStyle(shadow = IconShadow, fontFeatureSettings = "tnum")
+                    Row(
+                        Modifier.clickable(
                             interactionSource = remember { MutableInteractionSource() }, indication = null,
                         ) {
                             if (isLive) onGoLive()
                             else { showTotal = !showTotal; Prefs.setTimeDisplay(ctx, if (showTotal) "total" else "left") }
                         }.padding(vertical = 10.dp, horizontal = 4.dp),
-                    )
+                    ) {
+                        if (isLive) Text(
+                            if (off > 12_000) "−" + fmtTime(off) + " behind live" else "Live",
+                            color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, style = tnum,
+                        ) else {
+                            Text(fmtTime(pos), color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, style = tnum)
+                            if (dur > 0) Text(
+                                if (showTotal) " / " + fmtTime(dur) else " / −" + fmtTime((dur - pos).coerceAtLeast(0L)),
+                                color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, style = tnum,
+                            )
+                        }
+                    }
                 }
             }
         }
