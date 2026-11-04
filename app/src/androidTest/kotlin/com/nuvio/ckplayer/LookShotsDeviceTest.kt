@@ -1,7 +1,6 @@
 package com.nuvio.ckplayer
 
 import android.app.Activity
-import android.app.UiAutomation
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -16,6 +15,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -23,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.unit.dp
@@ -75,9 +76,7 @@ class LookShotsDeviceTest {
         return "file://" + f.absolutePath
     }
 
-    private fun show(rotation: Int, content: @Composable () -> Unit) {
-        ins.uiAutomation.setRotation(rotation)
-        SystemClock.sleep(1200)
+    private fun show(content: @Composable () -> Unit) {
         act = ins.startActivitySync(Intent(Intent.ACTION_MAIN).setClassName(ctx.packageName, "android.app.Activity").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         ins.runOnMainSync {
             val owner = Owner()
@@ -109,13 +108,12 @@ class LookShotsDeviceTest {
 
     @After fun close() {
         act?.let { a -> ins.runOnMainSync { a.finish() } }
-        ins.uiAutomation.setRotation(UiAutomation.ROTATION_UNFREEZE)
     }
 
     @Test fun continueCards() {
         val ep = still("ep", 0xFF16305C.toInt(), 0xFF5A7FC0.toInt())
         val film = still("film", 0xFF3A2414.toInt(), 0xFFB07040.toInt())
-        show(UiAutomation.ROTATION_FREEZE_0) {
+        show {
             Column(Modifier.fillMaxSize().background(Bg).padding(top = 80.dp)) {
                 Text("Continue watching", color = Color.White, fontSize = 20.sp, modifier = Modifier.padding(start = 16.dp, bottom = 12.dp))
                 Row(Modifier.padding(start = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -144,8 +142,10 @@ class LookShotsDeviceTest {
             onSleep = {}, onParty = {}, onInvite = {}, onReact = {}, onInfo = {}, onPip = {}, onFullscreen = {},
         )
         val next = Episode("tt1:1:8", 1, 8, "AP Physics", null, ep)
-        show(UiAutomation.ROTATION_FREEZE_90) {
-            Box(Modifier.fillMaxSize().background(Color.Black)) {
+        // a phone on its side, drawn turned a quarter on the upright screen (turning the emulator itself took it down)
+        show {
+            Box(Modifier.fillMaxSize().background(Color.DarkGray), contentAlignment = Alignment.Center) {
+            Box(Modifier.requiredSize(860.dp, 396.dp).graphicsLayer { rotationZ = 90f }.background(Color.Black)) {
                 AsyncImage(model = ep, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                 PhoneChrome(
                     visible = true, title = "Carrie", episodeTag = "S1 E7 · Prom Night", sourceLine = "1080p · Torrentio",
@@ -157,6 +157,7 @@ class LookShotsDeviceTest {
                     next, null, "Next Episode", null, null, FocusRequester(), {}, {},
                     Modifier.align(Alignment.BottomEnd).padding(start = 20.dp, end = 20.dp, bottom = 104.dp),
                 )
+            }
             }
         }
         shot("look-player")
