@@ -82,6 +82,7 @@ class LookShotsDeviceTest {
     }
 
     private fun show(content: @Composable () -> Unit) {
+        coil.Coil.setImageLoader(coil.ImageLoader.Builder(ctx).allowHardware(false).build())
         act = ins.startActivitySync(Intent(Intent.ACTION_MAIN).setClassName(ctx.packageName, "android.app.Activity").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         ins.runOnMainSync {
             val owner = Owner()
@@ -102,8 +103,13 @@ class LookShotsDeviceTest {
     }
 
     private fun shot(name: String) {
-        val b = ins.uiAutomation.takeScreenshot()
-        assertTrue("nothing on screen", b != null && b.width > 0)
+        // drawn in software from the view itself (the emulator went down taking screenshots of a hardware surface)
+        var b: Bitmap? = null
+        ins.runOnMainSync {
+            val v = act!!.window.decorView
+            b = Bitmap.createBitmap(v.width, v.height, Bitmap.Config.ARGB_8888).also { v.draw(Canvas(it)) }
+        }
+        assertTrue("nothing on screen", b != null && b!!.width > 0)
         val f = File(ctx.getExternalFilesDir("barshots")!!.also { it.mkdirs() }, "$name.png")
         f.outputStream().use { b!!.compress(Bitmap.CompressFormat.PNG, 100, it) }
         shell("mkdir -p /data/local/tmp/barshots")
