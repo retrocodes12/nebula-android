@@ -4899,6 +4899,10 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
         LandOnFirstControl()
         SettingsHeader("PLAYER", if (all) "Gestures, speed, the controls, picture quality and the buffer" else "Picture quality and the buffer")
         SettingsGroup {
+            if (!Account.isTv(ctx)) SettingsToggle(
+                "Sideways when a video starts", "The phone turns to landscape and full screen as playback begins · the full-screen button turns it back",
+                Prefs.landscapeStart,
+            ) { Prefs.setLandscapeStart(ctx, it) }
             // Essential keeps Picture quality alone here; every other row is an Everything row (the brief's E marks)
             if (all) {
                 SettingsToggle(
@@ -6882,7 +6886,19 @@ private fun PlayerScreen(
     val startSpeed = remember { if (Prefs.speedDefault == "last") Prefs.lastSpeed else (Prefs.speedDefault.toFloatOrNull() ?: 1f) }
     var speedLabel by remember { mutableStateOf(speedText(startSpeed)) }
     var fitMode by remember { mutableStateOf(Prefs.fit) }          // picture size, kept per device (Prefs.fit)
-    var isFullscreen by remember { mutableStateOf(false) }
+    // a phone turns sideways and goes full screen as a video starts (Settings › Playback › Sideways when a video starts);
+    // the full-screen button still turns it back. TVs and anything already wider than tall are left as they are
+    val startSideways = remember {
+        Prefs.landscapeStart && !Account.isTv(context) && activity != null && !activity.isInPictureInPictureMode &&
+            context.resources.configuration.orientation != android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    }
+    var isFullscreen by remember { mutableStateOf(startSideways) }
+    LaunchedEffect(Unit) {
+        if (startSideways) activity?.let {
+            it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            setImmersive(it, true)
+        }
+    }
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
     var skipFlash by remember { mutableStateOf<Triple<Int, Int, Long>?>(null) } // zone (-1/+1), total secs, stamp
     var heldSpeed by remember { mutableStateOf<Float?>(null) }                  // speed to restore after hold-to-speed
