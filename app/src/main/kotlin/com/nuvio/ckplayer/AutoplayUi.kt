@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.nuvio.ckplayer
 
 import androidx.compose.foundation.background
@@ -7,6 +9,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -231,7 +234,10 @@ internal fun AutoplayCardHost() {
                     overflow = TextOverflow.Ellipsis)
             }
             val shown = if (narrow) 3 else 6
-            if (c.chips.isNotEmpty()) Row(Modifier.padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // the chips wrap onto a second line: in one Row a phone gave the second chip the leftover width and its count
+            // broke one digit a line inside a tall pill (his screenshot, 11-04)
+            if (c.chips.isNotEmpty()) FlowRow(Modifier.padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 c.chips.take(shown).forEach { ch -> ApChipView(ch) }
                 if (c.chips.size > shown) Text("+${c.chips.size - shown}", color = MutedC, fontFamily = Mono, fontSize = 13.sp,
                     modifier = Modifier.align(Alignment.CenterVertically))
@@ -253,8 +259,8 @@ private fun ApChipView(ch: ApChip) {
         }, CircleShape).border(1.dp, Color(0x66FFFFFF), CircleShape))
         Spacer(Modifier.width(7.dp))
         Text(ch.name, color = if (ch.count == 0) MutedC else TextC, fontFamily = Sans, fontSize = 13.sp, maxLines = 1,
-            overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 180.dp))
+            softWrap = false, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 180.dp))
         if (ch.count != null) Text(if (ch.count > 0) ch.count.toString() else "none", color = MutedC, fontFamily = Mono,
-            fontSize = 12.sp, modifier = Modifier.padding(start = 7.dp))
+            fontSize = 12.sp, maxLines = 1, softWrap = false, modifier = Modifier.padding(start = 7.dp))
     }
 }
