@@ -8457,7 +8457,9 @@ private fun PlayerScreen(
             sourceLine = sourceLine,
             showClock = Prefs.clock,
             seekStepMs = Prefs.seekStep * 1000L,
-            onLock = if (tvBox) null else ({ locked = true; chromeVisible = false; lockHintAt = System.currentTimeMillis() }),
+            // Nuvio's bare layout for a finger only: a TV, or a phone driven by keys, keeps the glass and its focus rings
+            onLock = if (tvBox || LocalInputModeManager.current.inputMode == InputMode.Keyboard) null
+                else ({ locked = true; chromeVisible = false; lockHintAt = System.currentTimeMillis() }),
             subtitlesFocus = subsFocus,
             playFocus = playFocus,
             sleepFocus = sleepFocus,
