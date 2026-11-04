@@ -32,8 +32,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -210,7 +208,7 @@ object StreamCards {
         val f = StreamBadges.facts(s.videoSize, s.title, all.fired)
         val name = StreamBadges.cleanName(s.name, addonName).ifEmpty { f.provider ?: "Stream" }
         val title = relTitle(file).ifEmpty { name }
-        val marks = StreamBadges.match(raw, setOf("resolution", "source", "video-codec", "bit-depth", "audio-channels"), 4)
+        val marks = StreamBadges.match(raw, setOf("resolution", "source", "video-codec", "bit-depth", "audio-channels"), 4, white = true)
         val pills = ArrayList<String>()
         if (spec.addon && addonName.isNotBlank() && addonMark != "hidden") pills.add(addonName)
         if (spec.service) {
@@ -242,13 +240,6 @@ object StreamCards {
     )
 }
 
-// the pack's logos come in brand colours; the card draws them white, as the marks on a disc box are (grayscale × 1.9)
-private val WhiteMarks = ColorFilter.colorMatrix(ColorMatrix(floatArrayOf(
-    0.4047f, 1.3585f, 0.1368f, 0f, 0f,
-    0.4047f, 1.3585f, 0.1368f, 0f, 0f,
-    0.4047f, 1.3585f, 0.1368f, 0f, 0f,
-    0f, 0f, 0f, 1f, 0f,
-)))
 
 /** A release card's body (the StreamRow wraps it in its FocusCard). [eyebrow] = "SAME AS LAST TIME" / "P2P";
     [warn] = "may stall here" and the like; [extra] = the speed test's line. */
@@ -343,7 +334,7 @@ private fun ResChip(res: String) {
 private fun Marks(c: StreamCards.Card, small: Boolean) {
     c.badges.forEach { b ->
         AsyncImage(
-            model = b, contentDescription = null, contentScale = ContentScale.Fit, colorFilter = WhiteMarks,
+            model = b, contentDescription = null, contentScale = ContentScale.Fit,
             modifier = Modifier.height(if (small) 15.dp else 19.dp).widthIn(max = 80.dp).padding(vertical = 1.dp),
         )
     }

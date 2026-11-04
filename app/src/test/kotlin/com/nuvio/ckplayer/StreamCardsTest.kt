@@ -48,7 +48,7 @@ class StreamCardsTest {
         assertEquals(listOf("Torrentio", "TorrentGalaxy"), c.pills)
         assertEquals(listOf("MULTI", "EN", "NL"), c.langs)
         assertTrue(c.file.endsWith("FraMeSToR.mkv"))
-        assertTrue(c.badges.isNotEmpty() && c.badges.size <= 4)
+        assertTrue(c.badges.isNotEmpty() && c.badges.size <= 4 && c.badges.all { it.contains("/badges/w/") })
         assertTrue(c.badges.none { it.contains("HEVC") || it.contains("remux") || it.contains("4k_ultra") || it.contains("7_1") })
         val hidden = StreamCards.build(StreamCards.SAMPLE, "Torrentio", "The Dark Knight", StreamCards.RELEASE, "hidden")
         assertEquals(listOf("TorrentGalaxy"), hidden.pills)

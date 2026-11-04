@@ -51,7 +51,7 @@ object StreamBadges {
     fun match(raw: String, skipGroup: String? = null): Match = match(raw, setOfNotNull(skipGroup), 6)
 
     /** The same, skipping every group in [skip] (shown elsewhere on a release card) and stopping at [cap] badges. */
-    fun match(raw: String, skip: Set<String>, cap: Int): Match {
+    fun match(raw: String, skip: Set<String>, cap: Int, white: Boolean = false): Match {
         val seen = HashSet<String>()
         val badges = ArrayList<String>()
         val fired = ArrayList<Regex>()
@@ -61,7 +61,7 @@ object StreamBadges {
             if (group in skip) continue                // shown elsewhere (resolution plate, the card's tags)
             if (group in seen || badges.size >= cap) continue
             seen.add(group)
-            badges.add(BASE + file)
+            badges.add(BASE + (if (white) "w/" else "") + file)   // badges/w/: white copies for release cards (no colour filter)
         }
         return Match(badges, fired)
     }
