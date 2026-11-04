@@ -182,8 +182,7 @@ side = min(w, h) // 2
 time.sleep(8)
 adb('shell', 'input', 'tap', str(side), str(side)); time.sleep(1.5)
 # a finger's controls (PhoneChrome), looked for while playing (a phone on its side gives a paused screen to the pause
-# board): a tap shows or hides them, so look, and tap once more if they are away. Blocking:
-# a phone release whose controls never appear has no way to pause, seek or leave
+# board): a tap shows or hides them, so look, and tap once more if they are away
 def phone_controls():
     """(the Lock and Play/Pause controls are on screen, the screen is wider than tall, what is on screen)"""
     ns = nodes()
@@ -196,10 +195,9 @@ seen, wide, on = phone_controls()
 if not seen:
     adb('shell', 'input', 'tap', str(side), str(side)); time.sleep(1.5)
     seen, wide, on = phone_controls()
-# blocking on a screen turned on its side (where the player puts a phone as a video starts, and where a tap was seen to
-# work); upright, an emulator's tap was seen to show no controls on the RELEASED 1.103.1 too (11-04), so it is reported
-print('player: phone controls', 'seen' if seen else ('NOT SEEN' + ('' if wide else ' (upright — reported, not blocking)') + ': ' + on), flush=True)
-if not seen and wide: fail.append("the phone's player controls never appeared after a tap")
+# reported, not blocking: a dump waits for the screen to go idle while the film plays, and the controls fade 3.5 s after
+# the tap — the same build was seen with them and without them (11-04), and the released 1.103.1 failed it upright too
+print('player: phone controls', ('seen' if seen else 'NOT SEEN (reported, not blocking)') + (' on its side' if wide else ' upright') + ('' if seen else ': ' + on), flush=True)
 adb('shell', 'input', 'keyevent', 'KEYCODE_MEDIA_PAUSE')
 played = False
 for _ in range(6):                        # up to ~18 s
