@@ -56,6 +56,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -4907,7 +4908,7 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
             if (all) {
                 SettingsToggle(
                     "Touch gestures",
-                    "Double-tap the edges to skip ${Prefs.seekStep}s, swipe to seek",
+                    "Double-tap the edges to skip ${Prefs.seekStep}s, swipe sideways to seek, up or down for brightness (left) and volume (right)",
                     Prefs.gestures,
                 ) { Prefs.setGestures(ctx, it) }
                 SettingsToggle(
@@ -6893,6 +6894,7 @@ private fun PlayerScreen(
             context.resources.configuration.orientation != android.content.res.Configuration.ORIENTATION_LANDSCAPE
     }
     var isFullscreen by remember { mutableStateOf(startSideways) }
+    val levels = remember { SwipeLevels(activity) }          // VLC's brightness/volume swipes (SwipeLevels.kt)
     LaunchedEffect(Unit) {
         if (startSideways) activity?.let {
             it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -7770,6 +7772,7 @@ private fun PlayerScreen(
             if (activePipPlayer.value === exo) activePipPlayer.value = null
             // Clears (API 31+) auto-enter so backing out of the player can't PiP the browse UI.
             (activity as? MainActivity)?.refreshPipParams()
+            levels.restore()            // the phone's own brightness again
             activity?.let {
                 it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                 setImmersive(it, false)
@@ -8381,6 +8384,21 @@ private fun PlayerScreen(
                             onDragCancel = { dragSeek = null }
                         )
                     }
+                    // up/down: brightness on the left half, volume on the right (VLC). A swipe that starts at the top or
+                    // bottom edge is the system's (the shade, going home), never ours
+                    .pointerInput(Unit) {
+                        val edge = 48.dp.toPx()
+                        detectVerticalDragGestures(
+                            onDragStart = { pos ->
+                                if (Prefs.gestures && pos.y > edge && pos.y < size.height - edge) levels.start(pos.x, size.width)
+                            },
+                            onVerticalDrag = { change, dy ->
+                                if (levels.active) { change.consume(); levels.drag(dy, size.height) }
+                            },
+                            onDragEnd = { levels.end() },
+                            onDragCancel = { levels.end() },
+                        )
+                    }
             )
         }
         // the Title Card chrome (see PlayerChrome.kt)
@@ -8746,6 +8764,7 @@ private fun PlayerScreen(
                 )
             }
         }
+        if (!pip) SwipeLevelOverlay(levels)
         // Live seek preview while swiping: target position + signed delta.
         dragSeek?.let { d ->
             Text(
