@@ -185,15 +185,21 @@ adb('shell', 'input', 'tap', str(side), str(side)); time.sleep(1.5)
 # board): a tap shows or hides them, so look, and tap once more if they are away. Blocking:
 # a phone release whose controls never appear has no way to pause, seek or leave
 def phone_controls():
-    descs = [(n.get('content-desc') or '') for n in nodes()]
-    return 'Lock the screen' in descs and 'Play/Pause' in descs
-seen = phone_controls()
+    """(the Lock and Play/Pause controls are on screen, the screen is wider than tall, what is on screen)"""
+    ns = nodes()
+    descs = [(n.get('content-desc') or '') for n in ns]
+    b = re.findall(r'\d+', ns[0].get('bounds') or '') if ns else []
+    wide = len(b) == 4 and int(b[2]) - int(b[0]) > int(b[3]) - int(b[1])
+    seen = 'Lock the screen' in descs and 'Play/Pause' in descs
+    return seen, wide, ' | '.join(x for x in (((n.get('text') or '') + (n.get('content-desc') or '')).strip() for n in ns) if x)[:400]
+seen, wide, on = phone_controls()
 if not seen:
     adb('shell', 'input', 'tap', str(side), str(side)); time.sleep(1.5)
-    seen = phone_controls()
-print('player: phone controls', 'seen' if seen else 'NOT SEEN: ' + ' | '.join(x for x in (((n.get('text') or '') + (n.get('content-desc') or '')).strip() for n in nodes()) if x)[:400], flush=True)
-if not seen: print('player: screen ' + sh('wm', 'size').strip() + ' ' + sh('dumpsys', 'window', 'displays').count('mRotation=1').__str__(), flush=True)
-if not seen: fail.append("the phone's player controls never appeared after a tap")
+    seen, wide, on = phone_controls()
+# blocking on a screen turned on its side (where the player puts a phone as a video starts, and where a tap was seen to
+# work); upright, an emulator's tap was seen to show no controls on the RELEASED 1.103.1 too (11-04), so it is reported
+print('player: phone controls', 'seen' if seen else ('NOT SEEN' + ('' if wide else ' (upright — reported, not blocking)') + ': ' + on), flush=True)
+if not seen and wide: fail.append("the phone's player controls never appeared after a tap")
 adb('shell', 'input', 'keyevent', 'KEYCODE_MEDIA_PAUSE')
 played = False
 for _ in range(6):                        # up to ~18 s
