@@ -1085,8 +1085,15 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                 Toasts.show("Checking this stream…")
                 scope.launch {
                     val why = Downloads.add(ctx, st, from, item, StreamTwin.label(StreamTwin.sig(st, from)).ifEmpty { null })
+                    val plan = SeasonDownload.pending?.takeIf { it.firstId == item.id }
                     if (why != null) { Toasts.show(why); return@launch }
                     if (page != null && stack.lastOrNull() === page) pop()
+                    if (plan != null) {
+                        SeasonDownload.pending = null
+                        Toasts.show("Downloading ${item.name} · finding the same source for the rest of Season ${plan.season}…")
+                        Toasts.show(SeasonDownload.queueRest(ctx, st, from, plan))
+                        return@launch
+                    }
                     Toasts.show(if (Prefs.dlWifi && Updates.metered(ctx)) "It will download on Wi-Fi · Library › Downloads" else "Downloading · Library › Downloads")
                     if (Build.VERSION.SDK_INT >= 33 && Prefs.firstDownload(ctx) && !NewEpisodes.canNotify(ctx)) {
                         askNotify.launch(android.Manifest.permission.POST_NOTIFICATIONS)
@@ -1686,6 +1693,14 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                                             ep.id, "series", seriesChain.label(ep), s.item.poster, background = s.item.background ?: ep.thumbnail,
                                             runtime = metaFullCache[s.item.type + ":" + s.item.id]?.runtime,
                                         ), save = true))
+                                    },
+                                    onDownloadSeason = { eps ->
+                                        val items = eps.map { ep -> MetaItem(
+                                            ep.id, "series", seriesChain.label(ep), s.item.poster, background = s.item.background ?: ep.thumbnail,
+                                            runtime = metaFullCache[s.item.type + ":" + s.item.id]?.runtime,
+                                        ) }
+                                        SeasonDownload.pending = SeasonDownload.Plan(items[0].id, eps[0].season, items.drop(1))
+                                        push(Screen.Streams(s.addon, items[0], save = true))
                                     },
                                     onResumeEpisode = { r -> openProgress(r) },
                                     onPlayEpisode = { ep, intent ->
@@ -5131,6 +5146,7 @@ private fun DetailScreen(
     onPlayEpisode: (Episode, PlayIntent) -> Unit = { _, _ -> },
     onOpenMeta: (MetaItem) -> Unit = {},
     onDownloadMovie: () -> Unit = {},
+    onDownloadSeason: (List<Episode>) -> Unit = {},
     onDownloadEpisode: (Episode) -> Unit = {},
 ) {
     val ctx = LocalContext.current
@@ -5512,6 +5528,22 @@ private fun DetailScreen(
                     items(seasons.size) { i ->
                         val sn = seasons[i]
                         Chip(if (sn == 0) "Specials" else "Season $sn", sn == currentSeason, modifier = Modifier.returnTo("season/$sn")) { selectedSeason = sn }
+                    }
+                }
+            }
+            // the whole season in one go (SeasonDownload.kt): a source picked once, the rest follow; the episode arrows stay
+            if (!epsLoading && Downloads.available(ctx)) {
+                val toSave = currentSeason?.let { SeasonDownload.candidates(episodes, it, java.time.LocalDate.now().toString()) }.orEmpty()
+                val busy = SeasonDownload.progress
+                if (toSave.size >= 2 || busy != null) item(key = "season-dl") {
+                    Row(Modifier.fillMaxWidth().padding(start = chipEdge(), end = chipEdge(), bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (busy != null) {
+                            CircularProgressIndicator(Modifier.size(16.dp), color = TextC, strokeWidth = 2.dp)
+                            Spacer(Modifier.width(10.dp))
+                            Text("Finding the same source · $busy", color = MutedC, fontSize = 13.sp)
+                        } else Chip(
+                            (if (currentSeason == 0) "Download the specials" else "Download Season $currentSeason") + " · ${toSave.size} episodes", false,
+                        ) { onDownloadSeason(toSave) }
                     }
                 }
             }
@@ -6464,6 +6496,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             if (saving) item(key = "saving") {
                 Text(
                     if (answered && !loading && shown.isEmpty() && sections.isNotEmpty()) "None of these streams can be downloaded. Live, protected and P2P streams stay online."
+                    else if (SeasonDownload.pending?.firstId == item.id) "Choose a source for Season ${SeasonDownload.pending?.season} — the other episodes get the same one"
                     else "Choose a source to download",
                     color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 16.dp).padding(top = 6.dp),
                 )
