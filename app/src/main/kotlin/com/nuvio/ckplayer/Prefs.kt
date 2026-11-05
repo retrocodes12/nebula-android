@@ -147,6 +147,7 @@ object Prefs {
     var streamBadges by mutableStateOf(true); private set
     var addonMark by mutableStateOf("initial"); private set       // initial / name / hidden
     var landscapeStart by mutableStateOf(true); private set        // a phone turns sideways when a video starts
+    var advisory by mutableStateOf(true); private set              // the content advisory as a title starts (Advisory.kt)
     var streamStyle by mutableStateOf("release"); private set     // StreamCards.DESIGNS id (classic = the plate-first row)
     var streamCustom by mutableStateOf(""); private set           // StreamCards.encode of the Custom design ("" = never made)
     var slowMark by mutableStateOf("move"); private set           // move / mark / off — rows this connection cannot carry
@@ -242,6 +243,7 @@ object Prefs {
         addonMark = p.getString("pref_addonmark", "initial") ?: "initial"
         streamStyle = p.getString("pref_streamstyle", "release") ?: "release"
         landscapeStart = p.getBoolean("pref_landscapestart", true)
+        advisory = p.getBoolean("pref_advisory", true)
         streamCustom = p.getString("pref_streamcustom", "") ?: ""
         slowMark = p.getString("pref_slowmark", "move") ?: "move"
         bw = if (System.currentTimeMillis() - p.getLong("bw_at", 0L) < 30L * 86_400_000L) p.getLong("bw_bps", 0L) else 0L
@@ -337,6 +339,7 @@ object Prefs {
     fun setStreamBadges(ctx: Context, v: Boolean) { streamBadges = v; edit(ctx).putBoolean("pref_streambadges", v).apply() }
     fun setAddonMark(ctx: Context, v: String) { addonMark = v; edit(ctx).putString("pref_addonmark", v).apply() }
     fun setLandscapeStart(ctx: Context, v: Boolean) { landscapeStart = v; edit(ctx).putBoolean("pref_landscapestart", v).apply() }
+    fun setAdvisory(ctx: Context, v: Boolean) { advisory = v; edit(ctx).putBoolean("pref_advisory", v).apply() }
     fun setStreamStyle(ctx: Context, v: String) { streamStyle = v; edit(ctx).putString("pref_streamstyle", v).apply() }
     fun setStreamCustom(ctx: Context, v: String) { streamCustom = v; edit(ctx).putString("pref_streamcustom", v).apply() }
     fun setSlowMark(ctx: Context, v: String) { slowMark = v; edit(ctx).putString("pref_slowmark", v).apply() }

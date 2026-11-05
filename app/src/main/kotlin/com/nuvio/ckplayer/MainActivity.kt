@@ -21,6 +21,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.Animatable
@@ -5026,8 +5027,14 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
                 "A pill appears over an episode's recap and opening titles, or Auto jumps past them for you · Timestamps come from a community database, looked up by episode",
                 listOf("button" to "Show button", "auto" to "Auto", "off" to "Off"),
                 Prefs.skipIntro,
-                divider = all,
             ) { Prefs.setSkipIntro(ctx, it) }
+            SettingsChips(
+                "Content advisory",
+                "What a film or show contains — violence, language, frightening scenes, nudity, drink and drugs — shown for a few seconds as it starts · From public viewer ratings, looked up by title",
+                listOf("show" to "Show", "off" to "Off"),
+                if (Prefs.advisory) "show" else "off",
+                divider = all,
+            ) { Prefs.setAdvisory(ctx, it == "show") }
             if (all) SettingsChips(
                 "When you come back", "Starting point for something you have started · Ask offers both before the first play",
                 listOf("resume" to "Resume", "ask" to "Ask", "startover" to "Start over"), Prefs.resume,
@@ -7159,6 +7166,19 @@ private fun PlayerScreen(
         if (Prefs.skipIntro != "off" && SkipSegments.eligible(contentType, contentId)) skipSegs = SkipSegments.load(contentId)
     }
     LaunchedEffect(skipNote) { if (skipNote != null) { delay(1600); skipNote = null } }
+    // The content advisory (Advisory.kt): asked as the episode or film opens, shown once as it first plays.
+    // Keyed on the episode, so the hop into the next one shows it again.
+    var advWarns by remember(contentId) { mutableStateOf<List<Advisory.Warn>>(emptyList()) }
+    var advUp by remember(contentId) { mutableStateOf<List<Advisory.Warn>?>(null) }
+    var advShown by remember(contentId) { mutableStateOf(false) }
+    if (contentId != null) LaunchedEffect(contentId, Prefs.advisory) {
+        advWarns = emptyList()
+        val tt = Advisory.ttOf(contentId)
+        if (Prefs.advisory && tt != null) advWarns = Advisory.load(tt) ?: emptyList()
+    }
+    LaunchedEffect(isPlayingState, advWarns) {
+        if (isPlayingState && !advShown && advWarns.isNotEmpty() && Prefs.advisory) { advShown = true; advUp = advWarns }
+    }
     fun skipNow() {
         val hit = SkipSegments.at(skipSegs, exo.currentPosition)
         skipKind = null
@@ -8330,6 +8350,8 @@ private fun PlayerScreen(
     // On a phone on its side the chrome keeps the title beside Back; on a TV-height screen it sits above the
     // scrubber, so the cards that float above the chrome (Skip, Up next) start higher there.
     val shortScreen = LocalConfiguration.current.screenHeightDp < 480
+    // Nuvio's bare phone layout (PhoneChrome.kt) for a finger; a TV, or a phone driven by keys, keeps the glass
+    val phoneLook = !tvBox && LocalInputModeManager.current.inputMode != InputMode.Keyboard
     // a phone's controls (PhoneChrome) end lower: a thin bar and one row of icons
     val aboveChrome = if (!chromeVisible) 40.dp else if (!tvBox) 104.dp else if (shortScreen) 150.dp else 214.dp
     // A phone turned on its side is watching: the status and navigation bars go (a swipe shows them for a moment)
@@ -8460,7 +8482,7 @@ private fun PlayerScreen(
             showClock = Prefs.clock,
             seekStepMs = Prefs.seekStep * 1000L,
             // Nuvio's bare layout for a finger only: a TV, or a phone driven by keys, keeps the glass and its focus rings
-            onLock = if (tvBox || LocalInputModeManager.current.inputMode == InputMode.Keyboard) null
+            onLock = if (!phoneLook) null
                 else ({ locked = true; chromeVisible = false; lockHintAt = System.currentTimeMillis() }),
             subtitlesFocus = subsFocus,
             playFocus = playFocus,
@@ -8470,7 +8492,7 @@ private fun PlayerScreen(
             onGoLive = { exo.seekToDefaultPosition(); chromeTouchedAt = System.currentTimeMillis() },
             canFullscreen = !tvBox,
             canInvite = !tvBox,
-            dimTitle = boardUp,
+            dimTitle = boardUp || (advUp != null && phoneLook),   // a phone: the advisory takes the title's place
             infoOn = pinfoOn,
             onInfo = { pinfoOn = !pinfoOn; chromeTouchedAt = System.currentTimeMillis() },
             sleepLabel = sleepLabel,
@@ -8667,6 +8689,19 @@ private fun PlayerScreen(
                 onPickEmbedded = { subsOff() },
                 onOff = { subsOff() },
                 onClose = { closePanel() },
+            )
+        }
+        // The content advisory, top-left. A phone (Nuvio's layout) draws it where the title sits — the title
+        // steps aside while it shows; the glass chrome keeps its round Back there, so it moves below while awake.
+        advUp?.let { w ->
+            if (pip || subPanelOpen) return@let
+            val advTop by animateDpAsState(
+                if (phoneLook) 14.dp else if (chromeVisible && !locked) 84.dp else 28.dp, tween(260), label = "advTop",
+            )
+            AdvisoryOverlay(
+                w, onDone = { advUp = null },
+                modifier = Modifier.align(Alignment.TopStart)
+                    .padding(start = if (phoneLook) (if (shortScreen) 28.dp else 20.dp) else 32.dp, top = advTop),
             )
         }
         // Skip intro / recap: a glass pill above the pills row, at the bottom edge when the chrome
