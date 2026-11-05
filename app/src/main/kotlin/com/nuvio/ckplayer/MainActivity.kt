@@ -170,6 +170,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -3677,11 +3678,15 @@ private fun HeroHeader(rows: List<CatRow>, onOpen: (Addon, MetaItem) -> Unit, de
                     modifier = Modifier.padding(bottom = 10.dp),
                 )
             }
-            // one meta line — type · first genre · year(s); the rating stays on the poster badge
+            // one meta line — type · first genre · year(s) · age rating (asked for the featured titles only, Advisory.kt)
+            val heroAge by produceState(Advisory.certKnown(m.id), m.id) {
+                if (value.isEmpty()) Advisory.ttOf(m.id)?.let { value = Advisory.load(it)?.cert.orEmpty() }
+            }
             val facts = listOfNotNull(
                 if (m.type == "series") "Series" else "Movie",
                 m.genres.firstOrNull(),
                 m.releaseInfo?.replace('-', '\u2013'),
+                heroAge.ifEmpty { null },
             ).joinToString("  \u00B7  ")
             Text(
                 facts, color = Color(0xD1EBEBF5), fontSize = 14.sp, fontWeight = FontWeight.Medium,
@@ -5471,9 +5476,14 @@ private fun DetailScreen(
             full?.videos?.map { it.season }?.filter { it > 0 }?.distinct()?.size
                 ?.takeIf { it > 0 }?.let { "$it season" + (if (it > 1) "s" else "") },
         ).joinToString(" · ")   // (the web's "   ·   " is collapsed by HTML; spelled out here it read as three gaps)
+        // the age rating where this device is ("UA", "PG-13"; Advisory.kt), asked once a title
+        val age by produceState(Advisory.certKnown(item.id), item.id) {
+            if (value.isEmpty()) Advisory.ttOf(item.id)?.let { value = Advisory.load(it)?.cert.orEmpty() }
+        }
         // facts in the mono register; the IMDb figure is a plate, not a badge
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             if (facts.isNotEmpty()) Eyebrow(facts, color = Color(0xD1FFFFFF))
+            if (age.isNotEmpty()) AgePlate(age, 12.sp)
             (full?.imdbRating ?: item.imdbRating)?.let { r ->
                 Text(
                     "★ $r", color = Color.White, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
@@ -7288,7 +7298,7 @@ private fun PlayerScreen(
     if (contentId != null) LaunchedEffect(contentId, Prefs.advisory) {
         advWarns = emptyList()
         val tt = Advisory.ttOf(contentId)
-        if (Prefs.advisory && tt != null) advWarns = Advisory.load(tt) ?: emptyList()
+        if (Prefs.advisory && tt != null) advWarns = Advisory.load(tt)?.rows() ?: emptyList()   // "Rated · UA" first
     }
     LaunchedEffect(isPlayingState, advWarns) {
         if (isPlayingState && !advShown && advWarns.isNotEmpty() && Prefs.advisory) { advShown = true; advUp = advWarns }
