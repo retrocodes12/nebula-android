@@ -86,6 +86,8 @@ internal fun LibraryScreen(
     var continueRows by remember(version) { mutableStateOf(Progress.continueList(ctx)) }
     var sheetFor by remember { mutableStateOf<LibItem?>(null) }
     var cwSheet by remember { mutableStateOf<ProgressRec?>(null) }
+    // Up next answers arriving (ContinueNext) redraw the tab
+    LaunchedEffect(ContinueNext.version) { continueRows = Progress.continueList(ctx) }
 
     sheetFor?.let { li ->
         CardSheet(
@@ -109,26 +111,10 @@ internal fun LibraryScreen(
         )
     }
     cwSheet?.let { r ->
-        val parts = r.name.split(" · ")
-        val isEp = parts.size > 1 && Regex("""^S\d+E\d+${'$'}""", RegexOption.IGNORE_CASE).matches(parts[1].trim())
-        CardSheet(
-            title = if (isEp) parts[0] else r.name,
-            sub = listOfNotNull(parts.getOrNull(1)?.takeIf { isEp }?.trim()?.uppercase(), (r.dur - r.pos).takeIf { it > 0 }?.let { fmtLeft(it) })
-                .joinToString("  ·  ").ifEmpty { null },
-            poster = r.poster,
-            shape = "landscape",
-            actions = listOf(
-                SheetAction(Icons.Filled.PlayArrow, "Resume") { onSheetResume(r) },
-                SheetAction(Icons.Filled.Replay, "Start over") { onStartOver(r) },
-                SheetAction(Icons.Filled.Info, "View details") { onDetails(r) },
-                SheetAction(Icons.Filled.Delete, "Remove from Continue watching", destructive = true) {
-                    val at = continueRows.indexOfFirst { it.type == r.type && it.id == r.id }
-                    val nb = continueRows.getOrNull(at + 1) ?: continueRows.getOrNull(at - 1)
-                    Progress.clear(ctx, r.type, r.id)
-                    continueRows = Progress.continueList(ctx)
-                    if (nb != null) ReturnFocus.handTo(screenEntry, "cw/" + Progress.key(nb.type, nb.id))
-                },
-            ),
+        ContinueSheet(
+            r, continueRows, onSheetResume, onStartOver, onDetails,
+            onRows = { continueRows = it },
+            onGone = { nb -> if (nb != null) ReturnFocus.handTo(screenEntry, "cw/" + Progress.key(nb.type, nb.id)) },
             onDismiss = { cwSheet = null },
         )
     }

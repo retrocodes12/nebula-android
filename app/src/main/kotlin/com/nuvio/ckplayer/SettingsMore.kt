@@ -117,9 +117,17 @@ internal fun SettingsHomeScreen(onBack: () -> Unit, onRows: () -> Unit) {
                     listOf("recent" to "Most recent", "az" to "A to Z"), Prefs.cwSort,
                 ) { Prefs.setCwSort(ctx, it) }
                 SettingsToggle(
+                    "Up next in Continue Watching", "After you finish an episode, the next one waits in the row",
+                    Prefs.cwNext,
+                ) { Prefs.setCwNext(ctx, it); ContinueNext.reset() }
+                SettingsToggle(
+                    "Offer to resume at start", "Closed the app in the middle of something? It asks when you come back",
+                    Prefs.resumePrompt,
+                ) { Prefs.setResumePrompt(ctx, it) }
+                SettingsToggle(
                     "Show episodes not out yet", "Offer the next episode even before its release date",
                     Prefs.cwUnaired, divider = false,
-                ) { Prefs.setCwUnaired(ctx, it) }
+                ) { Prefs.setCwUnaired(ctx, it); ContinueNext.reset() }
             }
         }
         SettingsHeader("ROWS", "What the catalog rows show, and in what order")

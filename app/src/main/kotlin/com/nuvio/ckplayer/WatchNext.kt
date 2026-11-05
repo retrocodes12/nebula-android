@@ -146,7 +146,7 @@ object WatchNext {
         val p = prefs(ctx)
         val owner = (Cloud.accountId(ctx) ?: "") + "/" + Viewers.current
         val recs = if (Prefs.watchNext && !p.getBoolean("wn_hold", false))
-            runCatching { Progress.continueList(ctx) }.getOrDefault(emptyList()) else emptyList()
+            runCatching { Progress.continueList(ctx).filterNot { it.next } }.getOrDefault(emptyList()) else emptyList()   // resume points only
         worker.execute { runCatching { apply(ctx, owner, recs) } }
     }
 

@@ -30,6 +30,14 @@ data class ProgressRec(
         series cursor may move forwards on it but never backwards. */
     val hand: Boolean = false,
     val at: Long = 0L,
+    // ---- an Up next card in Continue watching (ContinueNext.kt) — built for the row, never stored ----
+    val next: Boolean = false,
+    val seriesId: String = "",
+    val seriesPoster: String? = null,
+    /** When it airs (ms), 0 when it is out. */
+    val airs: Long = 0L,
+    /** Out after the episode before it was finished: "New episode". */
+    val fresh: Boolean = false,
 )
 
 object Progress {
@@ -40,6 +48,17 @@ object Progress {
     private const val MAX = 400
     const val MIN_POS_MS = 15_000L         // below this it isn't worth resuming
     const val END_GAP_MS = 60_000L         // within this of the end counts as finished
+    // Nuvio's rule beside ours (11-05): 90 % in is finished too, so a film's long credits no longer keep it in Continue
+    // watching for ever. Not for anything under 121 s — a debrid add-on's "not ready" clip is not a finished episode.
+    private const val DONE_FRAC = 0.9
+    private const val REAL_MIN_MS = 121_000L
+
+    fun ended(pos: Long, dur: Long): Boolean =
+        dur > 0 && (pos > dur - END_GAP_MS || (dur >= REAL_MIN_MS && pos >= dur * DONE_FRAC))
+
+    /** A part-way record worth offering again: started, not finished, not taken off. */
+    fun resumable(r: ProgressRec?): Boolean =
+        r != null && !r.done && !r.dismissed && r.pos >= MIN_POS_MS && r.dur > 0 && !ended(r.pos, r.dur)
 
     private var cache: MutableMap<String, ProgressRec>? = null
 
@@ -138,9 +157,7 @@ object Progress {
     /** Where playback of (type,id) should start, in ms — 0 means the beginning. */
     fun resumeAt(ctx: Context, type: String, id: String): Long {
         val r = get(ctx, type, id) ?: return 0
-        if (r.done || r.dismissed || r.pos <= 0 || r.dur <= 0) return 0
-        if (r.pos < MIN_POS_MS || r.pos > r.dur - END_GAP_MS) return 0
-        return r.pos
+        return if (resumable(r)) r.pos else 0
     }
 
     fun note(ctx: Context, rec: ProgressRec) {
@@ -149,11 +166,13 @@ object Progress {
         val k = key(rec.type, rec.id)
         // the launcher's Watch Next row (TV): what is listed changes now, a position moving waits its minute
         val prev = m[k]
-        val ends = rec.done || (rec.dur > 0 && rec.pos > rec.dur - END_GAP_MS) || rec.pos < MIN_POS_MS
+        val ends = rec.done || ended(rec.pos, rec.dur) || rec.pos < MIN_POS_MS
         WatchNext.played(ctx)
         WatchNext.poke(ctx, soon = ends || prev == null || prev.done || prev.dismissed)
-        if (rec.done || (rec.dur > 0 && rec.pos > rec.dur - END_GAP_MS)) {
-            m[k] = ProgressRec(rec.type, rec.id, done = true, at = System.currentTimeMillis())
+        if (rec.done || ended(rec.pos, rec.dur)) {
+            // the title's name, art and add-on stay on the finished record: Up next in Continue watching is built from it
+            m[k] = ProgressRec(rec.type, rec.id, name = rec.name, poster = rec.poster, shape = rec.shape,
+                addonUrl = rec.addonUrl, done = true, at = System.currentTimeMillis())
             persist(ctx, m)
             return
         }
@@ -220,15 +239,19 @@ object Progress {
         WatchNext.poke(ctx, soon = true)
     }
 
-    /** The twenty most recent things worth resuming — newest first, or A to Z when Settings › Home says so. */
+    /** Continue watching: one card per show (its resume point, or Up next once its newest episode is finished) and
+        every film part-way through — newest first, or A to Z when Settings › Home says so; twenty at most. */
     fun continueList(ctx: Context): List<ProgressRec> {
         // what was opened from an add-on switched off in the list stays out — switched back on, it returns
         val off = loadAddons(ctx).filterNot { it.enabled }.map { it.manifestUrl }.toSet()
-        val recent = load(ctx).values
-            .filter { !it.done && !it.dismissed && it.pos >= MIN_POS_MS && it.dur > 0 && it.pos <= it.dur - END_GAP_MS }
-            .filter { it.addonUrl.isEmpty() || it.addonUrl !in off }
-            .sortedByDescending { it.at }
-            .take(20)
-        return if (Prefs.cwSort == "az") recent.sortedBy { it.name.lowercase() } else recent
+        return ContinueNext.list(ctx, load(ctx), off)
+    }
+
+    /** Take a show's Up next card off Continue watching (a `nextup:<show>` tombstone; ContinueNext). */
+    fun dismissNext(ctx: Context, seriesId: String) {
+        if (seriesId.isEmpty()) return
+        val m = load(ctx)
+        m[key(ContinueNext.NEXTUP, seriesId)] = ProgressRec(ContinueNext.NEXTUP, seriesId, dismissed = true, at = System.currentTimeMillis())
+        persist(ctx, m)
     }
 }

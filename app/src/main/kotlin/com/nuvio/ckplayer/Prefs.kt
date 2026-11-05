@@ -107,6 +107,8 @@ object Prefs {
     var cwStyle by mutableStateOf("art"); private set             // art (16:9) / poster
     var cwSort by mutableStateOf("recent"); private set           // recent / az
     var cwUnaired by mutableStateOf(false); private set           // offer an episode that is not out yet
+    var cwNext by mutableStateOf(true); private set               // Up next cards in Continue watching (ContinueNext.kt)
+    var resumePrompt by mutableStateOf(true); private set         // offer back what the app was closed in the middle of
     var rowSubline by mutableStateOf(true); private set           // the add-on eyebrow beside a row title
     var landscapeRows by mutableStateOf(false); private set       // every catalog row as 16:9 art
     var detailCast by mutableStateOf(true); private set
@@ -203,6 +205,8 @@ object Prefs {
         cwStyle = p.getString("pref_cwstyle", "art") ?: "art"
         cwSort = p.getString("pref_cwsort", "recent") ?: "recent"
         cwUnaired = p.getBoolean("pref_cwunaired", false)
+        cwNext = p.getBoolean("pref_cwnext", true)
+        resumePrompt = p.getBoolean("pref_resumeprompt", true)
         rowSubline = p.getBoolean("pref_rowsubline", true)
         landscapeRows = p.getBoolean("pref_landscape", false)
         detailCast = p.getBoolean("pref_detailcast", true)
@@ -297,6 +301,8 @@ object Prefs {
     fun setCwStyle(ctx: Context, v: String) { cwStyle = v; edit(ctx).putString("pref_cwstyle", v).apply() }
     fun setCwSort(ctx: Context, v: String) { cwSort = v; edit(ctx).putString("pref_cwsort", v).apply() }
     fun setCwUnaired(ctx: Context, v: Boolean) { cwUnaired = v; edit(ctx).putBoolean("pref_cwunaired", v).apply() }
+    fun setCwNext(ctx: Context, v: Boolean) { cwNext = v; edit(ctx).putBoolean("pref_cwnext", v).apply() }
+    fun setResumePrompt(ctx: Context, v: Boolean) { resumePrompt = v; edit(ctx).putBoolean("pref_resumeprompt", v).apply() }
     fun setRowSubline(ctx: Context, v: Boolean) { rowSubline = v; edit(ctx).putBoolean("pref_rowsubline", v).apply() }
     fun setLandscapeRows(ctx: Context, v: Boolean) { landscapeRows = v; edit(ctx).putBoolean("pref_landscape", v).apply() }
     fun setDetailCast(ctx: Context, v: Boolean) { detailCast = v; edit(ctx).putBoolean("pref_detailcast", v).apply() }

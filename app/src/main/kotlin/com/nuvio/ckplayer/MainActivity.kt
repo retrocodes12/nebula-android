@@ -1294,11 +1294,12 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
             /** Resume something from the Continue watching row (or start it over). `decided` = the
                 viewer picked Resume/Start over on a sheet, so the streams page does not ask again. */
             fun openProgress(r: ProgressRec, fresh: Boolean = false, decided: Boolean = false) {
+                if (r.next && r.airs > 0L) { openProgressDetails(r); return }     // an Up next not out yet: its title page
                 Downloads.saved(r.type, r.id)?.let { playSaved(it, fresh); return }
                 val addons = activeAddons(ctx)
                 val a = addons.firstOrNull { it.manifestUrl == r.addonUrl } ?: addons.firstOrNull() ?: return
                 seriesChain.clear()
-                push(Screen.Streams(a, MetaItem(r.id, r.type, r.name, r.poster, r.shape), startOver = fresh, decided = decided))
+                push(Screen.Streams(a, MetaItem(r.id, r.type, r.name, r.poster, r.shape), startOver = fresh, decided = decided || r.next))
                 if (r.type == "series") scope.launch { hydrateSeriesChain(ctx, a, r.type, r.id) }
             }
 
@@ -1308,7 +1309,33 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                 val addons = activeAddons(ctx)
                 val a = addons.firstOrNull { it.manifestUrl == r.addonUrl } ?: addons.firstOrNull() ?: return
                 val id = if (r.type == "series") seriesIdOf(r.id) else r.id
-                push(Screen.Detail(a, MetaItem(id, r.type, r.name.split(" · ").first(), r.poster, r.shape)))
+                push(Screen.Detail(a, MetaItem(id, r.type, r.name.split(" · ").first(), r.seriesPoster ?: r.poster, if (r.seriesPoster != null) "poster" else r.shape)))
+            }
+
+            // Nuvio's resume prompt (ContinueNext.kt): playing marks `last_play`, leaving the player clears it, so a start
+            // after the app was closed (or killed) in the middle of something offers it back once — read here, before this
+            // start's own first screen clears it. Not when a link or the launcher asked for something.
+            val lastPlay = remember { ContinueNext.takeLastPlay(ctx) }
+            var resumeOffer by remember { mutableStateOf<ProgressRec?>(null) }
+            val topScreen = stack.lastOrNull()
+            LaunchedEffect(topScreen) {
+                val p = topScreen as? Screen.Play
+                ContinueNext.markPlaying(ctx, p?.type, p?.id)
+            }
+            LaunchedEffect(Unit) {
+                val lp = lastPlay ?: return@LaunchedEffect
+                if (!Prefs.resumePrompt || playReq != null) return@LaunchedEffect
+                snapshotFlow { Viewers.asking }.first { !it }
+                delay(1200)
+                if (stack != listOf(Screen.Home) || lp.first != Viewers.current) return@LaunchedEffect
+                // a finished episode's Up next may still be on its way from the add-on: a few seconds for it
+                var r: ProgressRec? = null
+                for (i in 0 until 8) {
+                    r = ContinueNext.offerFor(ctx, lp.second, lp.third)
+                    if (r != null || Progress.get(ctx, lp.second, lp.third)?.done != true) break
+                    delay(700)
+                }
+                if (r != null && stack == listOf(Screen.Home)) resumeOffer = r
             }
 
             // The launcher's Watch Next row (WatchNext.kt) and a new-episode alert (NewEpisodes.kt): once who's watching
@@ -1850,6 +1877,25 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                 // outside the screen Box so it covers the nav bar too
                 // two profiles: who's watching? (over everything, once the app is up)
                 if (Viewers.asking && !booting) WhoPicker()
+                resumeOffer?.let { r ->
+                    if (Viewers.asking || booting) return@let
+                    val parts = r.name.split(" · ")
+                    val isEp = parts.size > 1 && Regex("""^S\d+E\d+${'$'}""", RegexOption.IGNORE_CASE).matches(parts[1].trim())
+                    val ep = parts.getOrNull(1)?.takeIf { isEp }?.trim()?.replace(Regex("""(?i)^s(\d+)e(\d+)${'$'}"""), "S$1 E$2")
+                    CardSheet(
+                        title = if (isEp) parts[0] else r.name,
+                        sub = if (r.next) listOfNotNull("Up next", ep, parts.drop(2).joinToString(" · ").ifEmpty { null }).joinToString("  ·  ")
+                            else listOfNotNull(ep, "You were " + fmtTime(r.pos) + " in").joinToString("  ·  "),
+                        poster = r.seriesPoster ?: r.poster, shape = if (r.seriesPoster != null) "poster" else "landscape",
+                        actions = listOf(
+                            SheetAction(Icons.Filled.PlayArrow, if (r.next) "Play " + (ep ?: "next episode") else "Resume from " + fmtTime(r.pos)) {
+                                openProgress(r, decided = true)
+                            },
+                            SheetAction(Icons.Filled.Close, "Not now") {},
+                        ),
+                        onDismiss = { resumeOffer = null },
+                    )
+                }
                 // Autoplay's launch card (AutoplayUi.kt): over the streams page, then the player, until the first picture
                 AutoplayCardHost()
                 AnimatedVisibility(visible = booting, enter = fadeIn(tween(0)), exit = fadeOut(tween(320))) {
@@ -2452,7 +2498,7 @@ internal fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick
     val left = r.dur - r.pos
     val shape = RoundedCornerShape((cardRadius() + 2).dp)
     if (Prefs.cwStyle == "poster") {
-        ContinuePosterCard(r, title, tag, left, modifier, onClick, onLongClick)
+        ContinuePosterCard(if (r.next) r.copy(poster = r.seriesPoster ?: r.poster) else r, title, tag, left, modifier, onClick, onLongClick)
         return
     }
     // the remote's white ring (android-tv-5, as MetaCard's): here the art IS the card, edge to edge, so a ring outside
@@ -2509,8 +2555,20 @@ internal fun ContinueCard(r: ProgressRec, modifier: Modifier = Modifier, onClick
             ) {
                 Box(Modifier.fillMaxWidth(pct.coerceIn(0.03f, 1f)).fillMaxHeight().clip(Pill).background(Color.White))
             }
+            // Up next (ContinueNext.kt, Nuvio's badge): a white tag in the corner; a day not yet come stays dark
+            if (r.next) NextTag(nextBadge(r), soon = r.airs > 0L, Modifier.align(Alignment.TopEnd).padding(10.dp))
         }
     }
+}
+
+@Composable
+private fun NextTag(text: String, soon: Boolean, modifier: Modifier = Modifier) {
+    Text(
+        text, color = if (soon) Color.White else Color.Black, fontSize = 11.sp, fontFamily = Sans, fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
+        modifier = modifier.background(if (soon) Color(0xD11C1C1E) else Color.White, RoundedCornerShape(5.dp))
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+    )
 }
 
 /** How far in, as a thin rounded track: the accent over a translucent white line, never shorter than a visible nub
@@ -2545,7 +2603,8 @@ private fun ContinuePosterCard(
                 if (r.poster != null) AsyncImage(
                     model = r.poster, contentDescription = r.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
                 )
-                if (left > 0) Text(
+                if (r.next) NextTag(nextBadge(r), soon = r.airs > 0L, Modifier.align(Alignment.TopEnd).padding(6.dp))
+                else if (left > 0) Text(
                     fmtLeft(left), color = Ink, fontSize = tinySp(10f), fontWeight = FontWeight.SemiBold, fontFamily = Sans, maxLines = 1,
                     modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
                         .background(BarGlass, Pill).border(1.dp, Hairline, Pill).padding(horizontal = 7.dp, vertical = 3.dp),
@@ -2562,6 +2621,75 @@ private fun ContinuePosterCard(
             )
         }
     }
+}
+
+/**
+ * The sheet a held Continue watching card opens (Home and Library). A resume card: Resume, Start over, View details,
+ * Mark as watched, Remove. An Up next card (ContinueNext.kt): Play S2 E1 (not before it airs), View details, Mark S2 E1
+ * as watched (the row moves on to the one after), Remove (until another episode of the show is finished). [onRows] gets
+ * the row as it stands after a change, [onGone] the card the focus should go to when this one left.
+ */
+@Composable
+internal fun ContinueSheet(
+    r: ProgressRec, rows: List<ProgressRec>,
+    onSheetResume: (ProgressRec) -> Unit, onStartOver: (ProgressRec) -> Unit, onDetails: (ProgressRec) -> Unit,
+    onRows: (List<ProgressRec>) -> Unit, onGone: (ProgressRec?) -> Unit, onDismiss: () -> Unit,
+) {
+    val ctx = LocalContext.current
+    val parts = r.name.split(" · ")
+    val isEp = parts.size > 1 && Regex("""^S\d+E\d+${'$'}""", RegexOption.IGNORE_CASE).matches(parts[1].trim())
+    val ep = parts.getOrNull(1)?.takeIf { isEp }?.trim()?.replace(Regex("""(?i)^s(\d+)e(\d+)${'$'}"""), "S$1 E$2")
+    fun after(gone: Boolean) {
+        val i = rows.indexOfFirst { it.type == r.type && it.id == r.id }
+        val nb = rows.getOrNull(i + 1) ?: rows.getOrNull(i - 1)
+        val now = Progress.continueList(ctx)
+        onRows(now)
+        if (gone || now.none { it.type == r.type && it.id == r.id }) onGone(nb)
+    }
+    if (r.next) {
+        CardSheet(
+            title = if (isEp) parts[0] else r.name,
+            sub = listOfNotNull(ep, parts.drop(2).joinToString(" · ").ifEmpty { null }, nextBadge(r)).joinToString("  ·  "),
+            poster = r.seriesPoster ?: r.poster, shape = if (r.seriesPoster != null) "poster" else "landscape",
+            actions = listOfNotNull(
+                if (r.airs == 0L) SheetAction(Icons.Filled.PlayArrow, "Play " + (ep ?: "next episode")) { onSheetResume(r) } else null,
+                SheetAction(Icons.Filled.Info, "View details") { onDetails(r) },
+                SheetAction(Icons.Filled.Check, "Mark " + (ep ?: "it") + " as watched") {
+                    Progress.markWatched(ctx, r.type, r.id); after(false)
+                },
+                SheetAction(Icons.Filled.Delete, "Remove from Continue watching", destructive = true) {
+                    ContinueNext.dismiss(ctx, r.seriesId); after(true)
+                },
+            ),
+            onDismiss = onDismiss,
+        )
+        return
+    }
+    CardSheet(
+        title = if (isEp) parts[0] else r.name,
+        sub = listOfNotNull(ep?.uppercase(), (r.dur - r.pos).takeIf { it > 0 }?.let { fmtLeft(it) })
+            .joinToString("  ·  ").ifEmpty { null },
+        poster = r.poster,
+        shape = "landscape",
+        actions = listOf(
+            SheetAction(Icons.Filled.PlayArrow, "Resume") { onSheetResume(r) },
+            SheetAction(Icons.Filled.Replay, "Start over") { onStartOver(r) },
+            SheetAction(Icons.Filled.Info, "View details") { onDetails(r) },
+            // finished by hand: an episode's show moves on to Up next, a film leaves the row
+            SheetAction(Icons.Filled.Check, "Mark as watched") { Progress.markWatched(ctx, r.type, r.id); after(false) },
+            SheetAction(Icons.Filled.Delete, "Remove from Continue watching", destructive = true) {
+                Progress.clear(ctx, r.type, r.id); after(true)
+            },
+        ),
+        onDismiss = onDismiss,
+    )
+}
+
+/** An Up next card's word in the corner: "Up next", "New episode" (out after the one before was finished), or the day it airs. */
+internal fun nextBadge(r: ProgressRec): String = when {
+    r.airs > 0L -> "Airs " + java.text.SimpleDateFormat("EEE d MMM", java.util.Locale.getDefault()).format(java.util.Date(r.airs))
+    r.fresh -> "New episode"
+    else -> "Up next"
 }
 
 /** How wide a Continue Watching card is in the Home row: 16:9 art, or a poster the width of the other rows. */
@@ -3613,35 +3741,18 @@ private fun HomeScreen(
     var sheetFor by remember { mutableStateOf<ProgressRec?>(null) }
 
     sheetFor?.let { r ->
-        val parts = r.name.split(" · ")
-        val isEp = parts.size > 1 && Regex("""^S\d+E\d+${'$'}""", RegexOption.IGNORE_CASE).matches(parts[1].trim())
-        val left = (r.dur - r.pos).takeIf { it > 0 }?.let { fmtTime(it) + " left" }
-        CardSheet(
-            title = if (isEp) parts[0] else r.name,
-            sub = listOfNotNull(parts.getOrNull(1)?.takeIf { isEp }?.trim()?.uppercase(), left)
-                .joinToString("  ·  ").ifEmpty { null },
-            poster = r.poster,
-            shape = "landscape",
-            actions = listOf(
-                SheetAction(Icons.Filled.PlayArrow, "Resume") { onSheetResume(r) },
-                SheetAction(Icons.Filled.Replay, "Start over") { onStartOver(r) },
-                SheetAction(Icons.Filled.Info, "View details") { onDetails(r) },
-                SheetAction(Icons.Filled.Delete, "Remove from Continue watching", destructive = true) {
-                    // the card takes focus with it when it goes: name the neighbour first (the hero if it was the last)
-                    val i = st.continueRows.indexOfFirst { it.type == r.type && it.id == r.id }
-                    val nb = st.continueRows.getOrNull(i + 1) ?: st.continueRows.getOrNull(i - 1)
-                    Progress.clear(ctx, r.type, r.id)
-                    st.continueRows = Progress.continueList(ctx)
-                    ReturnFocus.handTo(screenEntry, if (nb != null) "cw/" + Progress.key(nb.type, nb.id) else "hero")
-                },
-            ),
+        ContinueSheet(
+            r, st.continueRows, onSheetResume, onStartOver, onDetails,
+            onRows = { st.continueRows = it },
+            // the card takes focus with it when it goes: name the neighbour (the hero if it was the last)
+            onGone = { nb -> ReturnFocus.handTo(screenEntry, if (nb != null) "cw/" + Progress.key(nb.type, nb.id) else "hero") },
             onDismiss = { sheetFor = null },
         )
     }
 
     // Re-read on every entry (this screen leaves composition when one is pushed),
-    // so finishing an episode is reflected the moment you come back.
-    LaunchedEffect(st.continueKey) { st.continueRows = Progress.continueList(ctx) }
+    // so finishing an episode is reflected the moment you come back — and when Up next answers arrive (ContinueNext).
+    LaunchedEffect(st.continueKey, ContinueNext.version) { st.continueRows = Progress.continueList(ctx) }
 
     // Best-effort update check (the cloud's feed, GitHub as the fallback): its answer is kept for the process
     // (Updates.latestCached), so a Home entry no longer asks the network each time. Early builds are offered
