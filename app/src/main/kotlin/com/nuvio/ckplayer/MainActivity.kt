@@ -1294,10 +1294,13 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
             /** Resume something from the Continue watching row (or start it over). `decided` = the
                 viewer picked Resume/Start over on a sheet, so the streams page does not ask again. */
             fun openProgress(r: ProgressRec, fresh: Boolean = false, decided: Boolean = false) {
-                if (r.next && r.airs > 0L) { openProgressDetails(r); return }     // an Up next not out yet: its title page
-                Downloads.saved(r.type, r.id)?.let { playSaved(it, fresh); return }
                 val addons = activeAddons(ctx)
                 val a = addons.firstOrNull { it.manifestUrl == r.addonUrl } ?: addons.firstOrNull() ?: return
+                if (r.next && r.airs > 0L) {                                    // an Up next not out yet: its title page
+                    push(Screen.Detail(a, MetaItem(r.seriesId, r.type, r.name.split(" · ").first(), r.seriesPoster ?: r.poster, "poster")))
+                    return
+                }
+                Downloads.saved(r.type, r.id)?.let { playSaved(it, fresh); return }
                 seriesChain.clear()
                 push(Screen.Streams(a, MetaItem(r.id, r.type, r.name, r.poster, r.shape), startOver = fresh, decided = decided || r.next))
                 if (r.type == "series") scope.launch { hydrateSeriesChain(ctx, a, r.type, r.id) }
