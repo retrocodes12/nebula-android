@@ -7439,6 +7439,8 @@ private fun PlayerScreen(
         val t = partyUi.self[kind]
         if (t != null && now - t < 1500) { partyUi.self.remove(kind); return }
         if (now < partyUi.quietUntil || !partyOnKey()) return
+        // nothing is the viewer's until this stream has played a moment: its own start (a resume point, autoplay) is not
+        if (stallWatch.playedAt == 0L || now - stallWatch.playedAt < 800) return
         if (kind == "pause" && (exo.playerError != null || exo.playbackState == Player.STATE_ENDED)) return   // the end, or a failure, is not a choice
         val s = partyUi.lastState
         if (partyUi.mayControl()) {
