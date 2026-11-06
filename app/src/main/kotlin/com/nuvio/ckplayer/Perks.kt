@@ -2,6 +2,7 @@ package com.nuvio.ckplayer
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -11,14 +12,22 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.outlined.CreditCard
+import androidx.compose.material.icons.outlined.Update
+import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -29,11 +38,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
+private val WarnC = Color(0xFFFF453A)
 
 /**
  * The Plus-level perks on Settings › Support (2026-09-28, "so the monthly plan actually has something good to offer"):
@@ -46,110 +60,62 @@ object Perks {
     fun early(): Boolean = Support.rank() >= 2 && Prefs.earlyBuilds
 }
 
-private val WarnC = Color(0xFFFF453A)
-
 @Composable
 internal fun SupportPerks(rank: Int, tv: Boolean) {
-    val me = Cloud.profile
-    if (me != null && me.sup && (me.subStatus.isNotEmpty() || me.subManage.isNotEmpty())) {
-        Spacer(Modifier.height(12.dp))
-        PlanPanel(me)
-    }
+    Spacer(Modifier.height(14.dp))
     if (rank < 2) {
-        Spacer(Modifier.height(12.dp))
         PerkTeasers(tv)
         return
     }
-    Spacer(Modifier.height(12.dp))
     VotePanel()
-    Spacer(Modifier.height(12.dp))
-    EarlyBuildsPanel()
-    Spacer(Modifier.height(12.dp))
+    Spacer(Modifier.height(14.dp))
     RecapCard()
 }
 
 /** The monthly plan: its state in words, and the private page where it is managed (cancel, the card, a pause). */
 @Composable
-private fun PlanPanel(me: Profile) {
+internal fun PlanRow(me: Profile) {
     val ctx = LocalContext.current
     // the link is never stored: a fresh start has it again once /me has answered (boot asks; so does this page)
     LaunchedEffect(me.subManage.isEmpty()) { if (me.subManage.isEmpty()) Account.refreshProfile(ctx) }
     val words = Support.subStatusText(me.subStatus)
-    PerkRow(
+    SupportRow(
         title = "Manage subscription",
         sub = "Monthly plan" + (if (words.isNotEmpty()) " · $words" else ""),
         warn = me.subStatus == "past_due",
-        key = "perk/plan",
+        key = "perk/plan", icon = Icons.Outlined.CreditCard, chevron = true,
     ) {
         val u = me.subManage
-        if (u.isEmpty()) { Toasts.show("Getting your plan's page — try again in a moment."); return@PerkRow }
+        if (u.isEmpty()) { Toasts.show("Getting your plan's page — try again in a moment."); return@SupportRow }
         runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
             .onFailure { Toasts.show("No web browser on this device — manage it from Nebula on your phone.") }
     }
 }
 
 @Composable
-private fun EarlyBuildsPanel() {
+internal fun EarlyBuildsRow() {
     val ctx = LocalContext.current
-    PerkRow(
+    SupportRow(
         title = "Early builds",
         sub = "Get new versions a few days before everyone else. They are tested, but newer.",
-        key = "perk/early",
-        checked = Prefs.earlyBuilds,
+        key = "perk/early", icon = Icons.Outlined.Update, checked = Prefs.earlyBuilds,
     ) { Prefs.setEarlyBuilds(ctx, !Prefs.earlyBuilds) }
-}
-
-/** A perk as one row in the page's panel material: title, one line, and a switch when [checked] is given. */
-@Composable
-private fun PerkRow(title: String, sub: String, key: String, warn: Boolean = false, checked: Boolean? = null, onClick: () -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    val focused by interaction.collectIsFocusedAsState()
-    val shape = RoundedCornerShape(16.dp)
-    Row(
-        Modifier.fillMaxWidth()
-            .returnTo(key)
-            .clip(shape)
-            .background(SurfaceC, shape)
-            .border(1.dp, LineC, shape)
-            .clickable(interactionSource = interaction, indication = null) { onClick() }
-            .then(rowLit(focused))
-            .padding(horizontal = 18.dp, vertical = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-            Text(sub, color = if (warn) WarnC else MutedC, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 2.dp))
-        }
-        if (checked != null) Switch(
-            checked = checked, onCheckedChange = { onClick() },
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = OnAccent, checkedTrackColor = Red,
-                uncheckedThumbColor = Color(0xFF8E8E93), uncheckedTrackColor = Surface2,
-                uncheckedBorderColor = Color.Transparent,
-            ),
-        )
-    }
 }
 
 /** Below the Plus level: what the perks are and who gets them, one line each. */
 @Composable
 private fun PerkTeasers(tv: Boolean) {
     SupportPanel {
-        Text("Supporter Plus and Monthly supporters also", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        Text("With Supporter Plus or Monthly", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         val lines = listOfNotNull(
-            "vote on what gets built next",
-            "get new versions a few days before everyone else",
-            "see their month on Nebula — hours, days and top titles",
-            if (tv) null else "pick another app icon",
+            "Any accent colour, and your own mark",
+            "A vote on what gets built next",
+            "New versions a few days before everyone else",
+            "Your month on Nebula: hours, days and top titles",
+            if (tv) null else "Another app icon",
         )
-        Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            lines.forEach { l ->
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Box(Modifier.size(5.dp).clip(CircleShape).background(FaintC))
-                    Text(l, color = MutedC, fontSize = 14.sp, lineHeight = 20.sp)
-                }
-            }
+        Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            lines.forEach { SupportTick(it) }
         }
     }
 }
@@ -181,6 +147,79 @@ internal fun SupportersThanks() {
             if (founders.isNotEmpty()) Spacer(Modifier.height(12.dp))
             Eyebrow("Supporters")
             Text(Support.joinNames(others), color = TextC, fontSize = 15.sp, lineHeight = 23.sp, modifier = Modifier.padding(top = 6.dp))
+        }
+    }
+}
+
+/** The hairline card a block of text sits in. */
+@Composable
+internal fun SupportPanel(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().background(SurfaceC, RoundedCornerShape(16.dp))
+            .border(1.dp, LineC, RoundedCornerShape(16.dp)).padding(18.dp),
+        content = content,
+    )
+}
+
+/** The same card with no inset, for rows that run edge to edge with [GroupLine] between them. */
+@Composable
+internal fun SupportGroup(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    val shape = RoundedCornerShape(16.dp)
+    Column(modifier.fillMaxWidth().clip(shape).background(SurfaceC, shape).border(1.dp, LineC, shape), content = content)
+}
+
+/** The hairline between rows: it starts under the row's text, as a grouped list's does, unless [full]. */
+@Composable
+internal fun GroupLine(full: Boolean = false) {
+    Box(Modifier.padding(start = if (full) 0.dp else 60.dp).fillMaxWidth().height(1.dp).background(LineC))
+}
+
+/** One row of a [SupportGroup]: a tile, a title, one line, and a switch ([checked]), a chevron, or a fold ([open]). The
+    whole row is the control: a remote stops once, and the switch only shows the state. */
+@Composable
+internal fun SupportRow(
+    title: String,
+    sub: String,
+    key: String,
+    icon: ImageVector,
+    warn: Boolean = false,
+    checked: Boolean? = null,
+    chevron: Boolean = false,
+    open: Boolean? = null,
+    onClick: () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val action = if (checked != null) {
+        Modifier.toggleable(value = checked, interactionSource = interaction, indication = null, role = Role.Switch) { onClick() }
+    } else {
+        Modifier.clickable(interactionSource = interaction, indication = null, role = Role.Button) { onClick() }
+    }
+    Row(
+        Modifier.fillMaxWidth().returnTo(key).landingSlot().then(action).then(rowLit(focused))
+            .padding(horizontal = 16.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(Modifier.size(32.dp).background(Surface2, RoundedCornerShape(9.dp)), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, tint = TextC, modifier = Modifier.size(18.dp))
+        }
+        Column(Modifier.weight(1f)) {
+            Text(title, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Text(sub, color = if (warn) WarnC else MutedC, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 2.dp))
+        }
+        if (checked != null) Switch(
+            checked = checked, onCheckedChange = null,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = OnAccent, checkedTrackColor = Red,
+                uncheckedThumbColor = Color(0xFF8E8E93), uncheckedTrackColor = Surface2,
+                uncheckedBorderColor = Color.Transparent,
+            ),
+        )
+        if (chevron) Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = FaintC, modifier = Modifier.size(22.dp))
+        if (open != null) {
+            val turn by animateFloatAsState(if (open) 180f else 0f, label = "fold")
+            Icon(Icons.Filled.ExpandMore, contentDescription = null, tint = FaintC, modifier = Modifier.size(22.dp).rotate(turn))
         }
     }
 }
