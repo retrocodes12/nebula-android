@@ -271,7 +271,7 @@ private fun PlayerToolbar(
                 iconsOnly = iconsOnly,
                 onClick = onSleep,
             )
-            ToolItem(Icons.Outlined.Groups, if (partyActive) "Leave party" else "Party", iconsOnly = iconsOnly, onClick = onParty)
+            ToolItem(Icons.Outlined.Groups, "Party", on = partyActive, iconsOnly = iconsOnly, onClick = onParty)
             if (partyActive) {
                 if (canInvite) ToolItem(Icons.Outlined.PersonAdd, "Invite", iconsOnly = iconsOnly, onClick = onInvite)
                 // the reactions are the party's own vocabulary, sent on the wire as they are

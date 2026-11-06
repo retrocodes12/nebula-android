@@ -150,6 +150,8 @@ object Prefs {
     var addonMark by mutableStateOf("initial"); private set       // initial / name / hidden
     var landscapeStart by mutableStateOf(true); private set        // a phone turns sideways when a video starts
     var advisory by mutableStateOf(true); private set              // the content advisory as a title starts (Advisory.kt)
+    var partyShare by mutableStateOf(true); private set            // a party I host plays my link (off: each finds the file)
+    var partyOwn by mutableStateOf(false); private set             // a party I join: my own add-ons first
     var streamStyle by mutableStateOf("release"); private set     // StreamCards.DESIGNS id (classic = the plate-first row)
     var streamCustom by mutableStateOf(""); private set           // StreamCards.encode of the Custom design ("" = never made)
     var slowMark by mutableStateOf("move"); private set           // move / mark / off — rows this connection cannot carry
@@ -248,6 +250,8 @@ object Prefs {
         streamStyle = p.getString("pref_streamstyle", "release") ?: "release"
         landscapeStart = p.getBoolean("pref_landscapestart", true)
         advisory = p.getBoolean("pref_advisory", true)
+        partyShare = p.getBoolean("pref_party_share", true)
+        partyOwn = p.getBoolean("pref_party_own", false)
         streamCustom = p.getString("pref_streamcustom", "") ?: ""
         slowMark = p.getString("pref_slowmark", "move") ?: "move"
         bw = if (System.currentTimeMillis() - p.getLong("bw_at", 0L) < 30L * 86_400_000L) p.getLong("bw_bps", 0L) else 0L
@@ -346,6 +350,8 @@ object Prefs {
     fun setAddonMark(ctx: Context, v: String) { addonMark = v; edit(ctx).putString("pref_addonmark", v).apply() }
     fun setLandscapeStart(ctx: Context, v: Boolean) { landscapeStart = v; edit(ctx).putBoolean("pref_landscapestart", v).apply() }
     fun setAdvisory(ctx: Context, v: Boolean) { advisory = v; edit(ctx).putBoolean("pref_advisory", v).apply() }
+    fun setPartyShare(ctx: Context, v: Boolean) { partyShare = v; edit(ctx).putBoolean("pref_party_share", v).apply() }
+    fun setPartyOwn(ctx: Context, v: Boolean) { partyOwn = v; edit(ctx).putBoolean("pref_party_own", v).apply() }
     fun setStreamStyle(ctx: Context, v: String) { streamStyle = v; edit(ctx).putString("pref_streamstyle", v).apply() }
     fun setStreamCustom(ctx: Context, v: String) { streamCustom = v; edit(ctx).putString("pref_streamcustom", v).apply() }
     fun setSlowMark(ctx: Context, v: String) { slowMark = v; edit(ctx).putString("pref_slowmark", v).apply() }

@@ -304,7 +304,7 @@ internal fun phoneTools(
     add(PhoneTool(Icons.Outlined.Speed, "Speed", speedLabel.takeIf { it != "1.0×" }, onClick = onSpeedCycle))
     if (fitLabel != null) add(PhoneTool(Icons.Outlined.AspectRatio, "Picture: $fitLabel", onClick = onFitCycle))
     add(PhoneTool(Icons.Outlined.Bedtime, "Sleep timer", sleepLabel, on = sleepLabel != null, focus = sleepFocus, onClick = onSleep))
-    add(PhoneTool(Icons.Outlined.Groups, if (partyActive) "Leave party" else "Watch party", on = partyActive, onClick = onParty))
+    add(PhoneTool(Icons.Outlined.Groups, "Watch party", on = partyActive, onClick = onParty))
     if (partyActive && canInvite) add(PhoneTool(Icons.Outlined.PersonAdd, "Invite", onClick = onInvite))
     if (partyActive) listOf("\uD83D\uDC4D", "\uD83D\uDE02", "\u2764\uFE0F", "\uD83D\uDD25").forEach { e ->
         add(PhoneTool(null, e) { onReact(e) })

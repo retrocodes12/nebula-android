@@ -659,6 +659,8 @@ private sealed interface Screen {
         val sourceLine: String? = null,     // "1080p · Torrentio": the chrome's source line, from the picked stream
         val startAtMs: Long = -1L,          // a source swap mid-play: the exact second to start from, under the resume floor or not
         val auto: Boolean = false,          // started by Autoplay (a TV, Autoplay.kt): a failed start tries the next best row
+        val file: String? = null,           // the row's file name and torrent: a watch party's viewers look it up by them
+        val hash: String? = null,
     ) : Screen
 }
 
@@ -914,12 +916,47 @@ private class PartyUi {
         if (reactions.size > 8) reactions.removeAt(0)
     }
     var status by mutableStateOf<String?>(null)
+    /** the party's playback: the newest state anyone sent (PartySync's rules follow it) */
     @Volatile var lastState: PartyState? = null
     var lastSeekAt = 0L
+    // ---- v2 (brief party-2026-11-06.md) ----
+    var id by mutableStateOf("")
+    var v2 by mutableStateOf(false)
+    var hostOnly by mutableStateOf(false)
+    var members by mutableStateOf<List<PartyMember>>(emptyList())
+    val chat = androidx.compose.runtime.mutableStateListOf<PartyChatLine>()
+    val feed = androidx.compose.runtime.mutableStateListOf<Triple<Long, String, String>>()
+    var unread by mutableStateOf(0)
+    var panelOpen by mutableStateOf(false)
+    var stream: PartyStreamDesc? = null
+    var key by mutableStateOf("")
+    var ownPaused by mutableStateOf(false)      // host-only party: paused for this viewer alone
+    var ownBehind by mutableStateOf(false)      // …or watching behind the party
+    var ask by mutableStateOf<PartyStreamDesc?>(null)   // the host played another title: switch the party?
+    var away = false                            // the host watches something else for now
+    var choosing by mutableStateOf(false)       // a viewer picking a source for the party's title
+    var ending = false
+    var pill by mutableStateOf("")              // what the pill says (PlayerScreen keeps it)
+    @Volatile var mine: Pair<PartyState, Long>? = null   // our own last state, until the relay's receipt
+    val self = java.util.concurrent.ConcurrentHashMap<String, Long>()   // what this device did to its own player for the party
+    @Volatile var quietUntil = 0L
+    var nudge = false
+    val waitIgnore = HashSet<String>()
+    var waitAt = 0L
+    var resumedAt = 0L
+    var lastPub = 0L
+    var statusSig = ""
+    var bufSince = 0L
     fun active() = code != null
+    fun hostV2() = members.firstOrNull { it.host }?.let { it.v >= 2 } ?: isHost
+    /** May this device's own play / pause / seek / speed move the whole party? */
+    fun mayControl() = isHost || (v2 && !hostOnly && hostV2())
     fun reset() {
         session?.leave(); session = null
         code = null; isHost = false; count = 1; lastState = null; names = emptyList()
+        id = ""; v2 = false; hostOnly = false; members = emptyList(); chat.clear(); feed.clear(); unread = 0; panelOpen = false
+        stream = null; key = ""; ownPaused = false; ownBehind = false; ask = null; away = false; choosing = false; ending = false
+        pill = ""; mine = null; self.clear(); nudge = false; waitIgnore.clear(); waitAt = 0; resumedAt = 0; lastPub = 0; statusSig = ""; bufSince = 0
     }
 }
 private val partyUi = PartyUi()
@@ -1110,54 +1147,160 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                 onDispose { if (BrowseKeys.search === open) BrowseKeys.search = null }
             }
 
-            // ---- watch party wiring ----
+            // ---- watch party wiring (v2: brief party-2026-11-06.md) ----
+            fun playHost(st: PartyStreamDesc) {
+                // the host's stream, not a series of ours: no Next, no Up next, no autoplay into our last show
+                cancelHop(); seriesChain.clear()
+                stack = listOf(Screen.Home, Screen.Play(st.url, st.title, st.subs, st.type, st.id, st.name ?: st.title, st.poster, st.addonUrl))
+            }
+            /** What a viewer plays: the host's link, or the same file from its own add-ons (Settings › Watch party, or a
+                host that keeps its link to itself); none has it → that title's streams, to pick one. */
+            fun partyPlayFor(st: PartyStreamDesc) {
+                partyUi.stream = st; partyUi.key = st.key; partyUi.choosing = false
+                val type = st.type; val id = st.id
+                val own = (Prefs.partyOwn || st.url.isEmpty()) && !type.isNullOrEmpty() && !id.isNullOrEmpty()
+                if (!own) {
+                    if (st.url.isNotEmpty()) playHost(st)
+                    else partyUi.status = "The host keeps their stream to themselves and this title has nothing to look it up by."
+                    return
+                }
+                val ty = type!!; val ident = id!!
+                partyUi.choosing = true
+                partyUi.session?.sendStatus("choosing", "", null)
+                partyUi.status = "Looking for this file in your add-ons…"
+                scope.launch {
+                    val found = kotlinx.coroutines.withTimeoutOrNull(9_000) {
+                        kotlinx.coroutines.coroutineScope {
+                            activeAddons(ctx).map { a ->
+                                async {
+                                    runCatching {
+                                        if (!manifestFor(a.manifestUrl).canStream(ty, ident)) emptyList()
+                                        else Stremio.loadStreams(a.base, ty, ident).filter { !it.isTorrent }.map { it to a }
+                                    }.getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it; emptyList() }
+                                }
+                            }.flatMap { it.await() }
+                        }
+                    } ?: emptyList()
+                    if (partyUi.stream !== st) return@launch
+                    val hit = PartySync.matchOwn(found.map { it.first }, st.file, st.hash)
+                    val from = hit?.let { h -> found.first { it.first === h }.second }
+                    if (hit != null && from != null) {
+                        partyUi.choosing = false
+                        cancelHop(); seriesChain.clear()
+                        stack = listOf(Screen.Home, Screen.Play(hit.url, hit.name, hit.subtitles, ty, ident, st.name ?: st.title, st.poster, from.manifestUrl,
+                            file = StreamTwin.fileName(hit).ifEmpty { null }))
+                        partyUi.status = "Playing your own copy from ${from.name}"
+                    } else if (st.url.isNotEmpty()) {
+                        partyUi.choosing = false
+                        partyUi.status = "None of your add-ons has this file — playing the host's link"
+                        playHost(st)
+                    } else {
+                        val origin = activeAddons(ctx).firstOrNull()
+                        if (origin == null) { partyUi.status = "Add an add-on first — the host keeps their stream to themselves"; return@launch }
+                        cancelHop(); seriesChain.clear()
+                        stack = listOf(Screen.Home, Screen.Streams(origin, MetaItem(ident, ty, st.name ?: st.title, st.poster)))
+                        partyUi.status = "Pick a source — the party is watching ${st.file ?: st.name ?: st.title}"
+                    }
+                }
+            }
             fun partyEvent(ev: PartyEvent) {
                 when (ev) {
                     is PartyEvent.Created -> {
                         partyUi.code = ev.code; partyUi.isHost = true; partyUi.count = 1
-                        partyUi.status = "Party started — code ${ev.code}. Friends: Add-ons tab, Join party."
+                        partyUi.id = ev.id; partyUi.v2 = ev.v2; partyUi.hostOnly = ev.hostOnly
+                        partyUi.members = listOf(PartyMember(ev.id, partyDisplayName(ctx), true, "ready", partyUi.key, null, 2))
+                        partyUi.resumedAt = System.currentTimeMillis()
+                        partyUi.panelOpen = true
+                        partyUi.status = "Party started — code ${ev.code}. Friends: Settings › Watch party, or the invite link."
                     }
                     is PartyEvent.Joined -> {
-                        partyUi.code = ev.code; partyUi.isHost = false; partyUi.count = ev.count
+                        partyUi.code = ev.code; partyUi.isHost = ev.host; partyUi.count = ev.count
+                        partyUi.id = ev.id; partyUi.v2 = ev.v2; partyUi.hostOnly = ev.hostOnly
+                        partyUi.members = ev.members
+                        partyUi.chat.clear(); partyUi.chat.addAll(ev.chat)
                         partyUi.lastState = ev.state
                         partyUi.status = "Joined party ${ev.code}"
-                        ev.stream?.let { st ->
-                            // the host's stream, not a series of ours: no Next, no Up next, no autoplay into our last show
-                            cancelHop(); seriesChain.clear()
-                            stack = listOf(Screen.Home, Screen.Play(st.url, st.title, st.subs, st.type, st.id, st.name ?: st.title, st.poster, st.addonUrl))
-                        }
+                        ev.stream?.let { st -> if (!ev.host) partyPlayFor(st) else { partyUi.stream = st; partyUi.key = st.key } }
                     }
-                    is PartyEvent.State -> partyUi.lastState = ev.state
+                    is PartyEvent.State -> {
+                        val prev = partyUi.lastState
+                        val s = ev.state
+                        if (prev != null && s.seq > 0 && prev.seq > 0 && s.seq < prev.seq) return
+                        partyUi.lastState = s
+                        if (partyUi.v2 && s.by.isNotEmpty() && s.by != partyUi.id) PartySync.notice(prev, s)?.let { partyUi.status = it }
+                        if (prev != null && prev.waiting && !s.waiting) partyUi.resumedAt = System.currentTimeMillis()
+                    }
+                    is PartyEvent.Stated -> partyUi.mine?.let { (st, _) ->
+                        val stamped = st.copy(seq = ev.seq, at = if (ev.at > 0) ev.at else st.at)
+                        val cur = partyUi.lastState
+                        if (cur == null || stamped.seq >= cur.seq) partyUi.lastState = stamped
+                        partyUi.mine = null
+                    }
                     is PartyEvent.StreamSwitch -> {
                         if (!partyUi.isHost) {
-                            partyUi.lastState = null
-                            partyUi.status = "Host switched streams"
-                            cancelHop(); seriesChain.clear()
-                            stack = listOf(Screen.Home, Screen.Play(ev.stream.url, ev.stream.title, ev.stream.subs, ev.stream.type, ev.stream.id, ev.stream.name ?: ev.stream.title, ev.stream.poster, ev.stream.addonUrl))
+                            partyUi.lastState = PartyState(true, 0.0, false, at = partyUi.session?.nowMs() ?: System.currentTimeMillis(), seq = partyUi.lastState?.seq ?: 0)
+                            partyUi.ownPaused = false; partyUi.ownBehind = false
+                            partyUi.status = "The party is now watching ${ev.stream.name ?: ev.stream.title}"
+                            partyPlayFor(ev.stream)
                         }
                     }
                     is PartyEvent.Peers -> {
                         val old = partyUi.names
                         partyUi.count = ev.count
                         partyUi.names = ev.names
-                        if (old.isNotEmpty() && ev.names.isNotEmpty()) {
+                        val ms = ev.members
+                        if (ms != null) {
+                            val had = partyUi.members.associateBy { it.id }.toMutableMap()
+                            if (had.isNotEmpty()) {
+                                ms.forEach { m -> if (had.remove(m.id) == null && m.id != partyUi.id) partyUi.status = "${m.name} joined the watch party" }
+                                had.values.forEach { m -> if (m.id != partyUi.id) partyUi.status = "${m.name} left the watch party" }
+                            }
+                            ms.forEach { m -> if (m.s == "ready") partyUi.waitIgnore.remove(m.id) }
+                            partyUi.members = ms
+                            ms.firstOrNull { it.id == partyUi.id }?.let { if (it.host) partyUi.isHost = true }
+                        } else if (old.isNotEmpty() && ev.names.isNotEmpty()) {
                             val gone = old.toMutableList()
                             ev.names.forEach { n -> if (!gone.remove(n)) partyUi.status = "$n joined — ${ev.count} watching" }
                             gone.forEach { n -> partyUi.status = "$n left — ${ev.count} watching" }
                         }
                     }
                     is PartyEvent.React -> partyUi.react(ev.emoji, ev.name)
-                    PartyEvent.Promoted -> { partyUi.isHost = true; partyUi.status = "You are now the party host" }
-                    is PartyEvent.Ended -> { partyUi.reset(); partyUi.status = ev.reason }
-                    is PartyEvent.Error -> partyUi.status = ev.message
+                    is PartyEvent.Chat -> {
+                        val l = ev.line
+                        val i = partyUi.chat.indexOfFirst { it.cid != null && it.cid == l.cid && it.pend }
+                        if (i >= 0) partyUi.chat[i] = l.copy(pend = false)
+                        else {
+                            partyUi.chat.add(l)
+                            if (!partyUi.panelOpen && l.by != partyUi.id) {
+                                partyUi.unread++
+                                partyUi.feed.add(Triple(System.nanoTime(), l.name, l.text))
+                                if (partyUi.feed.size > 6) partyUi.feed.removeAt(0)
+                            }
+                        }
+                        while (partyUi.chat.size > 100) partyUi.chat.removeAt(0)
+                    }
+                    is PartyEvent.Room -> {
+                        partyUi.hostOnly = ev.hostOnly
+                        if (!partyUi.isHost) {
+                            partyUi.status = if (ev.hostOnly) "Only the host can control playback now" else "Everyone can control playback now"
+                            if (!ev.hostOnly) { partyUi.ownPaused = false; partyUi.ownBehind = false }
+                        }
+                    }
+                    PartyEvent.Promoted -> { partyUi.isHost = true; partyUi.ownPaused = false; partyUi.ownBehind = false; partyUi.status = "You are now the party host" }
+                    is PartyEvent.Ended -> { val mine = partyUi.ending; partyUi.reset(); partyUi.status = if (mine) "You ended the watch party" else ev.reason }
+                    is PartyEvent.Error -> {
+                        ev.chatCid?.let { c -> val i = partyUi.chat.indexOfFirst { it.cid == c }; if (i >= 0) partyUi.chat[i] = partyUi.chat[i].copy(pend = false, fail = true) }
+                        partyUi.status = ev.message
+                    }
                     PartyEvent.Disconnected -> { partyUi.reset(); partyUi.status = "Party connection lost" }
                 }
             }
             fun partyStart(stream: PartyStreamDesc) {
                 partyUi.reset()
                 partyUi.status = "Starting party…"
+                partyUi.stream = stream; partyUi.key = stream.key
                 partyUi.session = PartySession(scope) { partyEvent(it) }
-                    .also { it.displayName = partyDisplayName(ctx); it.create(stream) }
+                    .also { it.displayName = partyDisplayName(ctx); it.deviceId = PartyConfig.deviceId(ctx); it.create(stream) }
             }
             fun partyJoin(codeRaw: String) {
                 val code = codeRaw.trim().replace(" ", "").uppercase()
@@ -1165,7 +1308,7 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                 partyUi.reset()
                 partyUi.status = "Joining party…"
                 partyUi.session = PartySession(scope) { partyEvent(it) }
-                    .also { it.displayName = partyDisplayName(ctx); it.join(code) }
+                    .also { it.displayName = partyDisplayName(ctx); it.deviceId = PartyConfig.deviceId(ctx); it.join(code) }
             }
             fun partyLeave() { partyUi.reset(); partyUi.status = "Left the party" }
             LaunchedEffect(partyUi.status) {
@@ -1808,6 +1951,8 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                                                     sourceLine = StreamTwin.label(StreamTwin.sig(st, from)).ifEmpty { null },
                                                     // the row Autoplay chose (not one picked by hand)
                                                     auto = !byHand && AutoplayRun.playing == st.url,
+                                                    file = StreamTwin.fileName(st).ifEmpty { null },
+                                                    hash = st.infoHash.ifEmpty { null },
                                                 )
                                             )
                                         }
@@ -1821,6 +1966,7 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                                     startOver = s.startOver,
                                     sourceLine = s.sourceLine,
                                     startAtMs = s.startAtMs,
+                                    partyFile = s.file, partyHash = s.hash,
                                     currentEpisode = seriesChain.episodes.getOrNull(seriesChain.index),
                                     nextEpisode = seriesChain.next(),
                                     onPlayNext = { ep -> playEpisode(ep) },
@@ -5194,6 +5340,9 @@ private fun SettingsPartyScreen(onBack: () -> Unit, onJoin: (String) -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
         BackBar("Watch party", null, onBack)
         PartyPanel(onJoin)
+        val c = LocalContext.current
+        PartyPrefRow("Share my stream", "When you host, friends play your link. Off: each plays the same file from their own add-ons, and your link (with any debrid key in it) stays here.", Prefs.partyShare) { Prefs.setPartyShare(c, it) }
+        PartyPrefRow("Use my own add-ons", "When you join, look for the host's file in your add-ons first — the host's link if none has it.", Prefs.partyOwn) { Prefs.setPartyOwn(c, it) }
     }
 }
 
@@ -7011,6 +7160,8 @@ private fun PlayerScreen(
     startOver: Boolean = false,          // ignore the resume point this once
     sourceLine: String? = null,          // "1080p · Torrentio" under the title
     startAtMs: Long = -1L,               // a source swap: start from this second, whatever the resume point says
+    partyFile: String? = null,           // the row's file name / torrent, sent to a watch party
+    partyHash: String? = null,
     currentEpisode: Episode? = null,
     nextEpisode: Episode? = null,
     onPlayNext: (Episode) -> Unit = {},
@@ -7027,7 +7178,6 @@ private fun PlayerScreen(
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
-    var hostDirty by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var videoQualityCount by remember { mutableStateOf(0) }
     var audioTrackCount by remember { mutableStateOf(0) }
@@ -7250,6 +7400,82 @@ private fun PlayerScreen(
                 .build()
         }.getOrNull()
     }
+
+    // ---- the watch party, this device's side (v2: brief party-2026-11-06.md — the shared player's rules) ----
+    // the loop below outlives a next-episode hop in this composition: it reads what plays NOW
+    val partyMyKey by rememberUpdatedState(PartySync.keyOf(contentType, contentId, url))
+    val partyUrl by rememberUpdatedState(url)
+    fun partyNow(): Long = partyUi.session?.nowMs() ?: System.currentTimeMillis()
+    fun partyOnKey() = partyUi.key.isEmpty() || partyUi.key == partyMyKey
+    /** Seconds this device is behind the party (negative = ahead). */
+    fun partyGap(s: PartyState): Double =
+        if (s.live) exo.currentLiveOffset.coerceAtLeast(0L) / 1000.0 - s.pos
+        else PartySync.expect(s, partyNow()) - exo.currentPosition / 1000.0
+    // what this device does to its own player for the party: the one event it causes is not the viewer's
+    fun partyMark(kind: String) { partyUi.self[kind] = System.currentTimeMillis() }
+    fun partyPause() { if (exo.playWhenReady) { partyMark("pause"); exo.pause() } }
+    fun partyPlay() { if (!exo.playWhenReady) { partyMark("play"); exo.play() } }
+    fun partySeek(ms: Long) { partyMark("seek"); exo.seekTo(ms.coerceAtLeast(0L)) }
+    fun partyRate(r: Double) { if (abs(exo.playbackParameters.speed - r) > 0.001) { partyMark("rate"); exo.setPlaybackSpeed(r.toFloat()) } }
+    fun partyUserRate(): Double { val s = partyUi.lastState; return if (partyUi.nudge && s != null) s.rate else exo.playbackParameters.speed.toDouble() }
+    fun partyPublish(hb: Boolean, waiting: Boolean) {
+        val sess = partyUi.session ?: return
+        if (!partyUi.active() || partyUi.away || !partyOnKey() || P2p.isLocal(partyUrl)) return
+        val live = exo.isCurrentMediaItemLive
+        val pos = if (live) exo.currentLiveOffset.coerceAtLeast(0L) / 1000.0 else exo.currentPosition.coerceAtLeast(0L) / 1000.0
+        val rate = if (live) 1.0 else partyUserRate()
+        val playing = !waiting && exo.playWhenReady
+        val cur = partyUi.lastState
+        sess.sendState(playing, pos, live, rate, waiting, hb, cur?.seq ?: 0)
+        val mine = PartyState(playing, pos, live, rate, waiting, partyNow(), cur?.seq ?: 0, partyUi.id.ifEmpty { "me" }, "")
+        if (!hb || cur == null || cur.by == mine.by || cur.by.isEmpty()) partyUi.lastState = mine
+        partyUi.mine = if (partyUi.v2) mine to System.currentTimeMillis() else null
+        partyUi.lastPub = System.currentTimeMillis()
+    }
+    /** The viewer's own hand on the player (the player's event, not one partyMark announced). */
+    fun partyUser(kind: String) {
+        if (!partyUi.active()) return
+        val now = System.currentTimeMillis()
+        val t = partyUi.self[kind]
+        if (t != null && now - t < 1500) { partyUi.self.remove(kind); return }
+        if (now < partyUi.quietUntil || !partyOnKey()) return
+        if (kind == "pause" && (exo.playerError != null || exo.playbackState == Player.STATE_ENDED)) return   // the end, or a failure, is not a choice
+        val s = partyUi.lastState
+        if (partyUi.mayControl()) {
+            if (kind == "rate") partyUi.nudge = false
+            if (kind == "seek" && s != null && !s.live && abs(partyGap(s)) < PartySync.SEEK) return
+            partyUi.ownPaused = false; partyUi.ownBehind = false
+            if (partyUi.isHost && kind == "play") partyUi.resumedAt = now
+            partyPublish(false, false)
+            return
+        }
+        // the host keeps the controls: what this viewer does stays on this screen
+        when (kind) {
+            "pause" -> partyUi.ownPaused = true
+            "play" -> { partyUi.ownPaused = false; partyUi.ownBehind = s != null && partyGap(s) > PartySync.REJOIN }
+            "seek" -> if (s != null) {
+                val gap = partyGap(s)
+                when {
+                    gap > PartySync.REJOIN -> partyUi.ownBehind = true
+                    partyUi.ownBehind && gap >= -PartySync.REJOIN -> { partyUi.ownBehind = false; Toasts.show("Back in sync with the party") }
+                    gap < -PartySync.REJOIN -> {
+                        partyUi.ownBehind = false
+                        partySeek(exo.currentPosition + (gap * 1000).toLong())
+                        Toasts.show("Only the host can control playback")
+                    }
+                }
+            }
+            "rate" -> {
+                val want = s?.rate ?: 1.0
+                val r = exo.playbackParameters.speed.toDouble()
+                if (abs(r - want) > 0.001 && !PartySync.isNudge(r, want)) { partyRate(want); Toasts.show("Only the host can control playback") }
+            }
+        }
+    }
+    fun partyDesc() = PartyStreamDesc(
+        url, title, subs, contentType, contentId, contentName, poster, addonUrl,
+        file = partyFile, hash = partyHash, share = Prefs.partyShare || contentType.isNullOrEmpty() || contentId.isNullOrEmpty(),
+    )
 
     fun seekBy(deltaMs: Long) {
         var t = exo.currentPosition + deltaMs
@@ -7647,12 +7873,10 @@ private fun PlayerScreen(
                 runCatching { WatchLog.flush(context) }
                 runCatching { Prefs.saveBandwidth(context) }
                 upnextCounting = false
+                partyMark("pause")                     // a viewer leaving the app does not pause the party…
                 exo.pause()
-                // a host's room hears the pause now: the loop that tells it stops with the app (below)
-                if (partyUi.active() && partyUi.isHost) runCatching {
-                    val live = exo.isCurrentMediaItemLive
-                    partyUi.session?.sendState(false, (if (live) exo.currentLiveOffset.coerceAtLeast(0L) else exo.currentPosition.coerceAtLeast(0L)) / 1000.0, live)
-                }
+                // …a host does: its room hears the pause now (the loop that tells it stops with the app, below)
+                if (partyUi.active() && partyUi.isHost) runCatching { partyPublish(false, false) }
             }
         }
         lifecycleOwner.lifecycle.addObserver(obs)
@@ -7665,6 +7889,12 @@ private fun PlayerScreen(
     val started = lifeState.isAtLeast(Lifecycle.State.STARTED)
     DisposableEffect(Unit) {
         val l = object : Player.Listener {
+            // the viewer's play / pause / speed reach the party (partyUser tells them from the party's own moves)
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST || reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_BECOMING_NOISY)
+                    partyUser(if (playWhenReady) "play" else "pause")
+            }
+            override fun onPlaybackParametersChanged(playbackParameters: androidx.media3.common.PlaybackParameters) { partyUser("rate") }
             override fun onPlayerError(e: PlaybackException) {
                 // Autoplay: a start that failed before its first picture gives way to the next best row (Autoplay.kt);
                 // once a picture has shown, or none is left, the usual handling below
@@ -7873,7 +8103,6 @@ private fun PlayerScreen(
                 playerViewRef?.keepScreenOn = isPlaying
                 if (isPlaying) error = null        // whatever went wrong before, this plays now
                 (activity as? MainActivity)?.refreshPipParams()
-                if (partyUi.active() && partyUi.isHost) hostDirty = true
             }
             override fun onVideoSizeChanged(videoSize: VideoSize) {
                 (activity as? MainActivity)?.refreshPipParams()
@@ -7881,7 +8110,7 @@ private fun PlayerScreen(
             }
             override fun onPositionDiscontinuity(old: Player.PositionInfo, new: Player.PositionInfo, reason: Int) {
                 if (reason == Player.DISCONTINUITY_REASON_SEEK) stallWatch.seekAt = System.currentTimeMillis()
-                if (reason == Player.DISCONTINUITY_REASON_SEEK && partyUi.active() && partyUi.isHost) hostDirty = true
+                if (reason == Player.DISCONTINUITY_REASON_SEEK) partyUser("seek")
             }
             override fun onPlaybackStateChanged(state: Int) {
                 scrubPreview?.busy(state == Player.STATE_BUFFERING)   // the frame sweep stands aside while the film buffers
@@ -8226,60 +8455,97 @@ private fun PlayerScreen(
     val pip = inPipMode.value
     LaunchedEffect(pip) { if (pip) chromeVisible = false }
 
-    // A party host arriving on a new stream takes the whole room along (mirrors the web player).
-    // Keyed to the address: the next-episode hop and a source swap replace the stream in THIS composition,
-    // and they must reach the room too. The whole description goes, so viewers get subtitles and progress.
-    // Not a P2P stream: its address is this phone's own loopback engine and means nothing anywhere else.
+    // A party host arriving on a new stream: another source of the same title, or the same show's next episode, takes
+    // the whole room along by itself; another title asks first ("Switch the party to X?"), the host away meanwhile.
+    // Keyed to the address: the next-episode hop and a source swap replace the stream in THIS composition. Not a P2P
+    // stream: its address is this phone's own loopback engine and means nothing anywhere else.
+    fun partySwitch(d: PartyStreamDesc) {
+        partyUi.ask = null; partyUi.away = false
+        partyUi.stream = d; partyUi.key = d.key
+        partyUi.lastState = PartyState(true, 0.0, false, at = partyNow(), seq = partyUi.lastState?.seq ?: 0, by = partyUi.id)
+        partyUi.session?.sendStream(d)
+    }
     LaunchedEffect(url) {
+        partyUi.quietUntil = System.currentTimeMillis() + 2000      // a new source's start is not the viewer's hand
         if (partyUi.active() && partyUi.isHost && !P2p.isLocal(url)) {
-            partyUi.session?.sendStream(PartyStreamDesc(url, title, subs, contentType, contentId, contentName, poster, addonUrl))
+            val d = partyDesc()
+            val cur = partyUi.stream
+            if (!partyUi.v2 || partyUi.key.isEmpty() || d.key == partyUi.key || PartySync.sameShow(d.type, d.id, cur?.type, cur?.id)) partySwitch(d)
+            else { partyUi.ask = d; partyUi.away = true; partyUi.panelOpen = true }
         }
     }
-    // Watch-party sync loop: hosts broadcast state, viewers glide to the host's position — only during a party, and only
-    // while the app is on screen (`started`)
+    // The party's loop, twice a second while the app is on screen (`started`): the host's word every 4 s, the wait for
+    // whoever buffers (host), everyone gliding to the party, and this device's status.
     val partyOn = partyUi.code != null
     LaunchedEffect(started, partyOn) {
         if (!started || !partyOn) return@LaunchedEffect
-        var n = 0
         while (true) {
-            delay(1000)
-            n++
+            delay(500)
             if (!partyUi.active()) continue
-            if (partyUi.isHost) {
-                if (hostDirty || n % 4 == 0) {
-                    hostDirty = false
-                    val live = exo.isCurrentMediaItemLive
-                    val pos = if (live) exo.currentLiveOffset.coerceAtLeast(0L) / 1000.0
-                              else exo.currentPosition.coerceAtLeast(0L) / 1000.0
-                    partyUi.session?.sendState(exo.isPlaying, pos, live)
+            val sess = partyUi.session ?: continue
+            val now = System.currentTimeMillis()
+            if (partyUi.mine?.let { now - it.second > 3000 } == true) partyUi.mine = null
+            if (partyUi.choosing && partyOnKey() && partyUi.key.isNotEmpty()) partyUi.choosing = false
+            if (partyUi.isHost && partyUi.away && partyUi.ask == null && partyOnKey()) partyUi.away = false
+            val s0 = partyUi.lastState
+            if (partyUi.isHost && !partyUi.away && partyOnKey() && now - partyUi.lastPub >= PartySync.HEARTBEAT) partyPublish(true, s0?.waiting == true)
+            // the host waits for someone buffering: everyone paused (after a beat), 15 s at most
+            if (partyUi.isHost && partyUi.v2 && !partyUi.away && partyOnKey() && s0 != null && !s0.live) {
+                val w = PartySync.waiters(partyUi.members, partyUi.id, partyUi.key, partyUi.waitIgnore)
+                if (s0.playing && !s0.waiting && w.isNotEmpty() && now - partyUi.resumedAt > PartySync.RESUME_GRACE) {
+                    partyPause(); partyPublish(false, true); partyUi.waitAt = now
+                } else if (s0.waiting && (w.isEmpty() || now - partyUi.waitAt > PartySync.WAIT_MAX)) {
+                    w.forEach { partyUi.waitIgnore.add(it.id) }
+                    partyPlay(); partyUi.resumedAt = now; partyPublish(false, false)
                 }
-                continue
             }
-            val s = partyUi.lastState ?: continue
-            if (!s.playing) {
-                if (exo.isPlaying) exo.pause()
-                exo.setPlaybackSpeed(1f)
-                if (!s.live && abs(exo.currentPosition / 1000.0 - s.pos) > 1) exo.seekTo((s.pos * 1000).toLong())
-                continue
-            }
-            if (!exo.isPlaying && exo.playbackState == Player.STATE_READY) exo.play()
-            val err: Double = if (s.live) {
-                if (!exo.isCurrentMediaItemLive) continue
-                exo.currentLiveOffset.coerceAtLeast(0L) / 1000.0 - s.pos
-            } else {
-                s.pos + (System.currentTimeMillis() - s.atLocal) / 1000.0 - exo.currentPosition / 1000.0
-            }
-            when {
-                abs(err) > 1.25 -> {
-                    if (System.currentTimeMillis() - partyUi.lastSeekAt > 4000) {
-                        partyUi.lastSeekAt = System.currentTimeMillis()
-                        exo.seekTo((exo.currentPosition + err * 1000).toLong().coerceAtLeast(0L))
+            // follow the party (never towards our own word; a v1 host is the clock)
+            val s = partyUi.lastState
+            if (s != null && partyOnKey() && !(partyUi.isHost && !partyUi.v2) && !(s.by.isNotEmpty() && s.by == partyUi.id) && !partyUi.ownPaused) {
+                val base = if (s.live) 1.0 else s.rate
+                val err = partyGap(s)
+                if (partyUi.ownBehind) {
+                    if (exo.playWhenReady) partyRate(base)
+                    if (abs(err) <= PartySync.REJOIN && exo.playWhenReady) { partyUi.ownBehind = false; Toasts.show("Back in sync with the party") }
+                } else if (!s.playing) {
+                    partyPause(); partyUi.nudge = false; partyRate(base)
+                    if (!s.live && abs(exo.currentPosition / 1000.0 - s.pos) > PartySync.PAUSED_TOL) partySeek((s.pos * 1000).toLong())
+                } else if (!s.live || exo.isCurrentMediaItemLive) {
+                    if (exo.playerError == null) partyPlay()
+                    when (val mv = PartySync.move(err, base, partyUi.nudge)) {
+                        is PartySync.Move.Seek -> {
+                            if (now - partyUi.lastSeekAt > 4000) { partyUi.lastSeekAt = now; partySeek(exo.currentPosition + (mv.byS * 1000).toLong()) }
+                            partyUi.nudge = false; partyRate(base)
+                        }
+                        is PartySync.Move.Nudge -> { partyUi.nudge = true; partyRate(mv.rate) }
+                        is PartySync.Move.Hold -> { partyUi.nudge = false; partyRate(mv.rate) }
                     }
-                    exo.setPlaybackSpeed(1f)
                 }
-                err > 0.4 -> exo.setPlaybackSpeed(1.06f)
-                err < -0.4 -> exo.setPlaybackSpeed(0.94f)
-                abs(err) < 0.15 -> exo.setPlaybackSpeed(1f)
+            }
+            // this device's status (the relay sends it on in everyone's member list)
+            if (partyUi.v2) {
+                val buffering = exo.playbackState == Player.STATE_BUFFERING
+                if (!buffering) partyUi.bufSince = 0L else if (partyUi.bufSince == 0L) partyUi.bufSince = now
+                val st: Pair<String, Int?> = when {
+                    partyUi.choosing -> "choosing" to null
+                    !partyOnKey() -> "away" to null
+                    stallWatch.playedAt == 0L && exo.playbackState != Player.STATE_READY -> "loading" to null
+                    buffering && now - partyUi.bufSince > 1000 -> "buffering" to null
+                    (partyUi.ownPaused || partyUi.ownBehind) && s != null -> "behind" to PartySync.behindReported(partyGap(s))
+                    else -> "ready" to null
+                }
+                val k = if (st.first == "choosing") "" else partyMyKey
+                val sig = st.first + "|" + k + "|" + (st.second ?: "")
+                if (sig != partyUi.statusSig) { partyUi.statusSig = sig; sess.sendStatus(st.first, k, st.second) }
+            }
+            // the pill: waiting for someone · paused for you · behind · Catch up
+            partyUi.pill = when {
+                s == null || !partyOnKey() -> ""
+                s.waiting -> PartySync.waiters(partyUi.members, partyUi.id, partyUi.key, emptySet()).map { it.name }.take(3)
+                    .let { if (it.isEmpty()) "Waiting for everyone" else "Waiting for " + it.joinToString(", ") }
+                partyUi.ownPaused -> "Paused for you"
+                partyUi.ownBehind -> PartySync.gapLabel(partyGap(s)) + " behind · Catch up"
+                else -> ""
             }
         }
     }
@@ -8644,7 +8910,7 @@ private fun PlayerScreen(
                 chromeTouchedAt = System.currentTimeMillis()
             },
             partyActive = partyUi.active(),
-            partyBadge = partyUi.code?.let { c -> c + " · " + partyUi.count },
+            partyBadge = partyUi.code?.let { c -> c + " · " + (if (partyUi.v2) partyUi.members.size.coerceAtLeast(1) else partyUi.count) + (if (partyUi.unread > 0) " · ${partyUi.unread} new" else "") },
             hasNext = nextEpisode != null,
             canPip = (activity as? MainActivity)?.pipSupported() == true,
             // the panel explains itself when there is nothing to show; one audio track is still worth naming
@@ -8675,9 +8941,9 @@ private fun PlayerScreen(
             },
             onNext = { nextEpisode?.let { upnextCounting = false; autoRun = 0; onPlayNext(it) } },
             onParty = {
-                if (partyUi.active()) onPartyLeave()
+                if (partyUi.active()) { partyUi.panelOpen = !partyUi.panelOpen; if (partyUi.panelOpen) { partyUi.unread = 0; partyUi.feed.clear() } }
                 else if (P2p.isLocal(url)) Toasts.show("A P2P stream plays only on this device — a party cannot follow it.")
-                else onPartyStart(PartyStreamDesc(url, title, subs, contentType, contentId, contentName, poster, addonUrl))
+                else onPartyStart(partyDesc())
                 chromeTouchedAt = System.currentTimeMillis()
             },
             onInvite = {
@@ -8738,6 +9004,54 @@ private fun PlayerScreen(
         // Party reactions float up from the bottom
         partyUi.reactions.forEach { r ->
             key(r.first) { ReactionFloat(r.second, r.third) }
+        }
+        // the watch party: its pill and incoming chat lines bottom left, its card on the right (partyUi.panelOpen)
+        if (partyUi.active() && !pip) {
+            val pillText = partyUi.pill
+            Column(Modifier.align(Alignment.BottomStart).padding(start = 20.dp, bottom = if (chromeVisible) 150.dp else 40.dp)) {
+                if (!partyUi.panelOpen) PartyFeed(partyUi.feed.toList())
+                if (pillText.isNotEmpty()) PartyPillText(pillText, modifier = Modifier.padding(top = 8.dp), onClick = when {
+                    partyUi.ownPaused -> ({ exo.play() })
+                    partyUi.ownBehind -> ({ partyUi.ownBehind = false; partyUi.ownPaused = false; partyUi.lastSeekAt = 0L; Toasts.show("Caught up with the party") })
+                    else -> null
+                })
+            }
+            if (partyUi.panelOpen) {
+                BackHandler(enabled = onTop) { partyUi.panelOpen = false }
+                val me = partyUi.id
+                val myStatus = when {
+                    partyUi.ownPaused || partyUi.ownBehind -> partyUi.lastState?.let { PartySync.gapLabel(partyGap(it)) + " behind" } ?: ""
+                    partyOnKey() -> "Watching"
+                    else -> "Watching something else"
+                }
+                PartyRoom(
+                    code = partyUi.code ?: "", isHost = partyUi.isHost, v2 = partyUi.v2, hostOnly = partyUi.hostOnly, hostV2 = partyUi.hostV2(),
+                    members = partyUi.members, me = me, myStatus = myStatus, chat = partyUi.chat.toList(), ask = partyUi.ask,
+                    onClose = { partyUi.panelOpen = false },
+                    onInvite = {
+                        partyUi.code?.let { c ->
+                            val send = Intent(Intent.ACTION_SEND).apply {
+                                setType("text/plain")
+                                putExtra(Intent.EXTRA_TEXT, "Watch with me on Nebula — join party $c: https://play.rifflehq.in/?party=$c")
+                            }
+                            runCatching { context.startActivity(Intent.createChooser(send, "Invite to watch party")) }
+                        }
+                    },
+                    onSend = { t ->
+                        val cid = "a" + System.currentTimeMillis().toString(36) + (0..9999).random()
+                        partyUi.chat.add(PartyChatLine(0, me, "", t, cid, pend = true))
+                        partyUi.session?.sendChat(t, cid)
+                    },
+                    onKick = { id -> partyUi.session?.kick(id) },
+                    onHostOnly = { on -> partyUi.session?.setHostOnly(on) },
+                    onLeave = { onPartyLeave() },
+                    onEnd = { partyUi.ending = true; partyUi.session?.endAll() },
+                    onAskYes = { partyUi.ask?.let { partySwitch(it); Toasts.show("The party is watching this with you now") } },
+                    onAskNo = { partyUi.ask = null; Toasts.show("The party keeps watching its title — play it again to rejoin them") },
+                    onReact = { e -> partyUi.session?.sendReact(e); partyUi.react(e, "") },
+                    modifier = Modifier.align(Alignment.CenterEnd).padding(end = 20.dp, top = 70.dp, bottom = 20.dp),
+                )
+            }
         }
         // Sleep timer menu (the Sleep pill toggles it): by minutes, or at the end of this episode
         if (sleepMenuOpen && !pip) {
