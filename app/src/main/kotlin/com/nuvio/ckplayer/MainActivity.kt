@@ -1637,6 +1637,9 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
             // This holds it back until a catalogue has actually landed.
             var booting by remember { mutableStateOf(true) }
             if (booting) LaunchedEffect(Unit) {
+                // who's watching comes first (11-07, his "the loading animation should come after the profile is
+                // selected"): with the picker up at launch the boot screen waits, hidden, and its clock starts at the pick
+                while (Viewers.asking) delay(50)
                 val started = System.currentTimeMillis()
                 // whichever comes first: real rows, a verdict, or the cap
                 while (System.currentTimeMillis() - started < BOOT_MAX_MS) {
@@ -2031,8 +2034,8 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                     }
                 }
                 // outside the screen Box so it covers the nav bar too
-                // two profiles: who's watching? (over everything, once the app is up)
-                if (Viewers.asking && !booting) WhoPicker()
+                // two profiles: who's watching? — first thing at launch, before the boot screen (which waits for it)
+                if (Viewers.asking) WhoPicker()
                 resumeOffer?.let { r ->
                     if (Viewers.asking || booting) return@let
                     val parts = r.name.split(" · ")
@@ -2054,7 +2057,7 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                 }
                 // Autoplay's launch card (AutoplayUi.kt): over the streams page, then the player, until the first picture
                 AutoplayCardHost()
-                AnimatedVisibility(visible = booting, enter = fadeIn(tween(0)), exit = fadeOut(tween(320))) {
+                AnimatedVisibility(visible = booting && !Viewers.asking, enter = fadeIn(tween(0)), exit = fadeOut(tween(320))) {
                     BootScreen()
                 }
                 // finding a torrent in the swarm: held up until it answers, or the viewer stops it
