@@ -182,12 +182,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.107.0.apk
+          cp "$APK" Nebula-1.108.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.107.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.107.0 Nebula-1.107.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.107.0" \
-            --notes "Watch party, rebuilt: everyone can pause, skip and change the speed (or only the host), the party waits for whoever is buffering, you can pause or rewind for yourself and catch up, chat, who is watching and what each is doing, Remove and End for everyone, and friends can play the same file from their own add-ons (Settings, Watch party). Also: a new look for Settings, Support Nebula."
+          gh release delete v1.108.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.108.0 Nebula-1.108.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.108.0" \
+            --notes "A once-a-day usage counter with no identifier in it: the app tells our server how many days ago it was installed and whether it is a phone or a TV, nothing else, so we can see how many new people come back. The privacy page (play.rifflehq.in/privacy.html) says exactly what it sends."
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)

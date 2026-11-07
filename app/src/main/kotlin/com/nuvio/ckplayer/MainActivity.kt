@@ -453,6 +453,12 @@ class MainActivity : ComponentActivity() {
         window.setBackgroundDrawable(null)
     }
 
+    // the once-a-day usage counter (Hello.kt): on every start, so a TV that never closes the app still counts each day
+    override fun onStart() {
+        super.onStart()
+        Hello.daily(this)
+    }
+
     // Nebula has left the screen: an app icon chosen in Appearance takes over now (AppIcons.settle — turning off the
     // entry a task was opened from finishes that task, so never while a player is up: a screen switched off mid-film)
     override fun onStop() {
