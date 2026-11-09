@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -20,6 +21,7 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.IntOffset
 import coil.Coil
 import coil.ImageLoader
 
@@ -31,6 +33,10 @@ import coil.ImageLoader
  * slides in from the side it came from and Back slides it away the other way, a tab change fades through, a pressed
  * card gives under the finger, pictures fade in, and rows ease into place as add-ons answer.
  *
+ * 11-10: what moves across the screen (a page, the nav pill, a sheet) moves on a spring, not a timed curve. It looks the
+ * same when left alone; the difference is a move cut short — Back pressed while a page is still arriving — which now
+ * turns round from where it is, at the speed it had, instead of starting a new curve from a standstill.
+ *
  * A TV keeps its cuts: drawing two full screens for a transition's length is what a TV box cannot afford (1.87.0), and
  * the remote's moves already have the focus zoom. Motion: Reduced (Settings › Appearance) turns all of it off.
  */
@@ -38,6 +44,11 @@ internal object Motion {
     /** Material's emphasised deceleration: quick off the mark, a long soft landing. */
     val Decelerate = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
     private val Accelerate = CubicBezierEasing(0.3f, 0f, 0.8f, 0.15f)
+
+    /** The smooth spring for anything that travels: no overshoot, at rest in about half a second. */
+    val Slide = spring(
+        dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 380f, visibilityThreshold = IntOffset.VisibilityThreshold,
+    )
 
     /** Whether this device moves at all: a phone (or tablet) whose viewer has not asked for reduced motion. */
     fun on(ctx: Context): Boolean = !Account.isTv(ctx) && !Prefs.reducedMotion
@@ -85,11 +96,11 @@ internal object Motion {
         }
         // forward and Back along one axis: the page that arrives comes from the side it lives on and the page that
         // leaves goes a little the other way, so the viewer can feel where they are in the stack
-        val enterFrom: (Int) -> Int = { w -> (w * 0.12f).toInt() * dir }
+        val enterFrom: (Int) -> Int = { w -> (w * 0.16f).toInt() * dir }
         val leaveTo: (Int) -> Int = { w -> -(w * 0.06f).toInt() * dir }
-        return (slideInHorizontally(tween(360, easing = Decelerate), enterFrom) +
-            fadeIn(tween(250, delayMillis = 60, easing = Decelerate))) togetherWith
-            (slideOutHorizontally(tween(360, easing = Decelerate), leaveTo) + fadeOut(tween(110, easing = Accelerate)))
+        return (slideInHorizontally(Slide, enterFrom) +
+            fadeIn(tween(220, delayMillis = 40, easing = Decelerate))) togetherWith
+            (slideOutHorizontally(Slide, leaveTo) + fadeOut(tween(110, easing = Accelerate)))
     }
 }
 

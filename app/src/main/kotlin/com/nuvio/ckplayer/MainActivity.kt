@@ -2006,7 +2006,7 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                         androidx.compose.animation.AnimatedVisibility(
                             visible = onNav && !rail,
                             modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
-                            enter = if (pillMoves) slideInVertically(tween(380, easing = Motion.Decelerate)) { it / 2 } +
+                            enter = if (pillMoves) slideInVertically(Motion.Slide) { it / 2 } +
                                 fadeIn(tween(220, delayMillis = 80)) else fadeIn(tween(0)),
                             exit = if (pillMoves) slideOutVertically(tween(220)) { it / 2 } + fadeOut(tween(140))
                                 else fadeOut(tween(0)),
@@ -2360,7 +2360,7 @@ internal fun CardSheet(
             AnimatedVisibility(
                 shown,
                 modifier = Modifier.align(Alignment.BottomCenter),
-                enter = slideInVertically(tween(300)) { it } + fadeIn(tween(180)),
+                enter = slideInVertically(Motion.Slide) { it } + fadeIn(tween(180)),
                 exit = slideOutVertically(tween(190)) { it } + fadeOut(tween(150)),
             ) {
                 Column(
