@@ -50,6 +50,12 @@ internal object Motion {
         dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 380f, visibilityThreshold = IntOffset.VisibilityThreshold,
     )
 
+    /**
+     * The nav pill folding to its icons and opening again (BottomBar): quicker than a page and with a little give at
+     * the end, so the tabs press together and settle rather than stop dead.
+     */
+    val Fold = spring<Float>(dampingRatio = 0.78f, stiffness = 420f)
+
     /** Whether this device moves at all: a phone (or tablet) whose viewer has not asked for reduced motion. */
     fun on(ctx: Context): Boolean = !Account.isTv(ctx) && !Prefs.reducedMotion
 

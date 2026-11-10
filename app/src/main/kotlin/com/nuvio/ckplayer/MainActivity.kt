@@ -186,6 +186,7 @@ import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -202,8 +203,10 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -232,6 +235,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.constrainHeight
+import androidx.compose.ui.unit.constrainWidth
+import androidx.compose.ui.unit.offset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
@@ -1681,9 +1687,14 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                 // which way the stack just moved, for the screen change below (Motion.kt)
                 val navDir = remember { Motion.Direction() }
                 navDir.note(stack)
+                // A phone's pill folds down to its icons while the page is read and opens on the way back up
+                // (NavFold.kt): every vertical scroll under the nav passes through this on its way out.
+                val navFold = rememberNavFold()
+                // another tab, or a screen come back to, starts with the pill whole
+                LaunchedEffect(current) { navFold.open() }
                 Row(Modifier.fillMaxSize()) {
                     if (rail) SideRail(current, onTab = { setTab(it) })
-                    Box(Modifier.weight(1f).fillMaxHeight()) {
+                    Box(Modifier.weight(1f).fillMaxHeight().then(if (isTv) Modifier else Modifier.nestedScroll(navFold.connection))) {
                         AnimatedContent(
                             targetState = current,
                             modifier = Modifier.fillMaxSize(),
@@ -2018,19 +2029,32 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                             // only — no pointer input, so a touch in the fade still reaches the row under it.
                             // sized from the nav as measured (text size and the gesture area move it): a fixed 116 dp
                             // ended below a large-text pill and the titles still showed through it (Screens 09-23)
+                            // the height is read while laying out and drawing, never in composition: the pill folding
+                            // (below) changes it on every frame of the fold, under a page that is scrolling
                             var navH by remember { mutableIntStateOf(0) }
-                            val navDp = with(LocalDensity.current) { navH.toDp() }
-                            val fade = 56.dp
-                            if (navH > 0) Box(
-                                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(navDp + fade)
-                                    .background(Brush.verticalGradient(
-                                        0f to Color.Transparent,
-                                        fade / (navDp + fade) to Bg.copy(alpha = 0.86f),
-                                        1f to Bg,
-                                    ))
+                            val fadePx = with(LocalDensity.current) { 56.dp.roundToPx() }
+                            Box(
+                                Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                                    .layout { measurable, constraints ->
+                                        val h = if (navH > 0) navH + fadePx else 0
+                                        val p = measurable.measure(constraints.copy(minHeight = h, maxHeight = h))
+                                        layout(p.width, h) { p.place(0, 0) }
+                                    }
+                                    .drawBehind {
+                                        if (size.height <= 0f) return@drawBehind
+                                        drawRect(Brush.verticalGradient(
+                                            0f to Color.Transparent,
+                                            fadePx / size.height to Bg.copy(alpha = 0.86f),
+                                            1f to Bg,
+                                        ))
+                                    }
                             )
+                            // Motion: Reduced keeps the pill whole (a bar changing size under a scroll is motion)
                             BottomBar(navTab, onTab = { setTab(it) },
-                                modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged { navH = it.height })
+                                modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged { navH = it.height },
+                                folded = navFold.folded && pillMoves,
+                                // focus walked into a folded pill (a keyboard, a switch): the names come back
+                                onFocus = { navFold.open() })
                         } }
                     }
                 }
@@ -3403,25 +3427,77 @@ internal fun RowHeader(title: String, sub: String?, seeAll: (() -> Unit)?) {
     }
 }
 
-/** Floating pill tab bar: Home / Search / Library / Settings, and who is signed in as the last item. */
+/**
+ * Floating pill tab bar: Home / Search / Library / Settings, and who is signed in as the last item.
+ *
+ * [folded] (AppRoot, from the page's scroll — NavFold.kt): the names draw in under their icons and the tabs close
+ * up, so the pill is a short row of icons while the page is read, and opens out again on the way back up. One
+ * spring carries all of it; it is read while measuring and drawing, so a fold recomposes nothing. The names stay
+ * in the tree at no size — they are what a screen reader says for a tab.
+ */
 @Composable
-private fun BottomBar(current: Screen, onTab: (Screen) -> Unit, modifier: Modifier = Modifier) {
+private fun BottomBar(
+    current: Screen, onTab: (Screen) -> Unit, modifier: Modifier = Modifier,
+    folded: Boolean = false, onFocus: () -> Unit = {},
+) {
+    val fold = animateFloatAsState(if (folded) 1f else 0f, Motion.Fold, label = "navFold")
+    val at = remember(fold) { { fold.value } }
     Row(
         modifier
             .padding(bottom = 14.dp)
             .clip(RoundedCornerShape(34.dp))
             .background(Color(0xF0141419))
             .border(1.dp, Color(0x1FFFFFFF), RoundedCornerShape(34.dp))
+            .onFocusChanged { if (it.hasFocus) onFocus() }
             .padding(horizontal = 8.dp, vertical = 7.dp),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        TabItem("Home", Icons.Filled.Home, current == Screen.Home) { onTab(Screen.Home) }
-        TabItem("Search", Icons.Filled.Search, current == Screen.Search) { onTab(Screen.Search) }
-        TabItem("Library", Icons.Filled.Bookmark, current == Screen.Library) { onTab(Screen.Library) }
-        TabItem("Settings", Icons.Filled.Settings, current == Screen.Settings) { onTab(Screen.Settings) }
-        ProfileTab(current == Screen.Profile) { onTab(Screen.Profile) }
+        TabItem("Home", Icons.Filled.Home, current == Screen.Home, fold = at) { onTab(Screen.Home) }
+        TabItem("Search", Icons.Filled.Search, current == Screen.Search, fold = at) { onTab(Screen.Search) }
+        TabItem("Library", Icons.Filled.Bookmark, current == Screen.Library, fold = at) { onTab(Screen.Library) }
+        TabItem("Settings", Icons.Filled.Settings, current == Screen.Settings, fold = at) { onTab(Screen.Settings) }
+        ProfileTab(current == Screen.Profile, fold = at) { onTab(Screen.Profile) }
     }
 }
+
+/** The pill as a test stages it (NavFoldDeviceTest): Home lit, nothing behind a tap. */
+@Composable
+internal fun NavPillForTest(folded: Boolean, modifier: Modifier = Modifier) =
+    BottomBar(Screen.Home, onTab = {}, modifier = modifier, folded = folded)
+
+/** The fold at rest: the pill as it always was, and what the TV's rail keeps. */
+private val Unfolded: () -> Float = { 0f }
+
+/**
+ * A tab's own padding, closing up as the pill folds. The spring's overshoot is let through here (the tabs press
+ * together a touch past their rest and settle), which is where the fold gets its give.
+ */
+private fun Modifier.foldPad(fold: () -> Float): Modifier = layout { measurable, constraints ->
+    val f = fold()
+    val h = (12.dp.toPx() - 3.dp.toPx() * f).roundToInt().coerceAtLeast(0)
+    val v = (5.dp.toPx() - 2.dp.toPx() * f).roundToInt().coerceAtLeast(0)
+    val p = measurable.measure(constraints.offset(-2 * h, -2 * v))
+    layout(constraints.constrainWidth(p.width + 2 * h), constraints.constrainHeight(p.height + 2 * v)) { p.place(h, v) }
+}
+
+/**
+ * A tab's name drawing in under its icon: the room it takes shrinks to nothing both ways (so the tab narrows to
+ * its icon and the pill gets shorter) while the letters themselves shrink towards the icon and fade out early.
+ */
+private fun Modifier.foldLabel(fold: () -> Float): Modifier = this
+    .layout { measurable, constraints ->
+        val p = measurable.measure(constraints)
+        val k = (1f - fold()).coerceIn(0f, 1f)
+        val w = (p.width * k).roundToInt()
+        val h = (p.height * k).roundToInt()
+        layout(w, h) { p.place((w - p.width) / 2, h - p.height) }
+    }
+    .graphicsLayer {
+        val k = (1f - fold()).coerceIn(0f, 1f)
+        scaleX = k; scaleY = k
+        transformOrigin = TransformOrigin(0.5f, 1f)
+        alpha = ((k - 0.4f) / 0.6f).coerceIn(0f, 1f)
+    }
 
 /**
  * The television's nav.
@@ -3486,7 +3562,7 @@ private fun SideRail(current: Screen, onTab: (Screen) -> Unit) {
 
 /** The nav's last item: the signed-in profile's initial on the accent, a person glyph when nobody is. */
 @Composable
-private fun ProfileTab(on: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun ProfileTab(on: Boolean, modifier: Modifier = Modifier, fold: () -> Float = Unfolded, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val p = Cloud.profile
@@ -3496,7 +3572,7 @@ private fun ProfileTab(on: Boolean, modifier: Modifier = Modifier, onClick: () -
             .clip(RoundedCornerShape(26.dp))
             .border(1.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(26.dp))
             .clickable(interactionSource = interaction, indication = null) { onClick() }
-            .padding(horizontal = 12.dp, vertical = 5.dp),
+            .foldPad(fold),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
@@ -3514,12 +3590,15 @@ private fun ProfileTab(on: Boolean, modifier: Modifier = Modifier, onClick: () -
             )
         }
         // one line whatever the font scale: squeezed, a label wrapped a letter at a time down the pill
-        Text("Profile", color = tint, fontSize = tinySp(10.5f), fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false, modifier = Modifier.padding(top = 2.dp))
+        Text("Profile", color = tint, fontSize = tinySp(10.5f), fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false, modifier = Modifier.foldLabel(fold).padding(top = 2.dp))
     }
 }
 
 @Composable
-private fun TabItem(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, on: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun TabItem(
+    label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, on: Boolean, modifier: Modifier = Modifier,
+    fold: () -> Float = Unfolded, onClick: () -> Unit,
+) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val tint = if (on || focused) Color.White else MutedC
@@ -3528,7 +3607,7 @@ private fun TabItem(label: String, icon: androidx.compose.ui.graphics.vector.Ima
             .clip(RoundedCornerShape(26.dp))
             .border(1.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(26.dp))
             .clickable(interactionSource = interaction, indication = null) { onClick() }
-            .padding(horizontal = 12.dp, vertical = 5.dp),
+            .foldPad(fold),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         // the lit tab's disc grows into place and the last one's shrinks away (a cut on a TV / Motion: Reduced)
@@ -3544,7 +3623,7 @@ private fun TabItem(label: String, icon: androidx.compose.ui.graphics.vector.Ima
             Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp))
         }
         // one line whatever the font scale (the pill and the TV rail both use this): squeezed, it wrapped a letter at a time
-        Text(label, color = tint, fontSize = tinySp(10.5f), fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false, modifier = Modifier.padding(top = 2.dp))
+        Text(label, color = tint, fontSize = tinySp(10.5f), fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false, modifier = Modifier.foldLabel(fold).padding(top = 2.dp))
     }
 }
 
