@@ -45,7 +45,7 @@ object Cloud {
     private const val PREFS = "ckplayer"
     // the list of profiles first: a second profile removed elsewhere moves this device to the first before the per-profile
     // names of the pull are worked out (else the first's docs waited for the next pull)
-    private val SYNC_KEYS = listOf("viewers", "addons", "progress", "library", "sub_style", "ratings", "seekr")
+    private val SYNC_KEYS = listOf("viewers", "addons", "progress", "library", "sub_style", "ratings", "seekr", "track")
     private val JSON_MT = "application/json".toMediaType()
 
     private val http = OkHttpClient.Builder()
@@ -368,6 +368,7 @@ object Cloud {
         "ratings" -> Ratings.all(ctx).length() > 0
         "sub_style" -> SubStyle.at(ctx) > 0
         "seekr" -> Seekr.at(ctx) > 0          // a disconnect ("" key) is content too: it must reach the others
+        "track" -> Track.stamped(ctx)         // (the same: a disconnected service is a record)
         "viewers" -> Viewers.doc(ctx).optLong("at") > 0
         else -> false
     }
@@ -438,6 +439,7 @@ object Cloud {
         "ratings" -> mergeRatings(ctx, remote)
         "sub_style" -> mergeSubStyle(ctx, remote)
         "seekr" -> Seekr.merge(ctx, remote)
+        "track" -> Track.merge(ctx, remote)
         "viewers" -> Viewers.merge(ctx, remote)
         else -> false to false
     }
@@ -490,6 +492,7 @@ object Cloud {
             JSONObject().put("style", style).put("at", SubStyle.at(ctx)).toString()
         }
         "seekr" -> Seekr.doc(ctx)
+        "track" -> Track.docJson(ctx)
         "viewers" -> Viewers.doc(ctx).toString()
         else -> null
     }

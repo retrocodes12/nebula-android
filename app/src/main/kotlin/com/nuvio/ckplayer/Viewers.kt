@@ -71,7 +71,7 @@ import org.json.JSONObject
  */
 object Viewers {
     private const val PREFS = "ckplayer"
-    private val PER_PROFILE = setOf("progress", "library", "addons", "addons_sync")
+    private val PER_PROFILE = setOf("progress", "library", "addons", "addons_sync", "track")   // (tracking accounts since 11-10)
 
     data class Viewer(val id: String, val name: String, val av: String, val lock: ProfilePin.Lock? = null)
 
@@ -143,7 +143,8 @@ object Viewers {
         PIN, history and add-ons — was the old account's and must not go up into the new one. Back on the first; the list
         empty until the new account's arrives. The first profile's own data merges as it always has. */
     fun resetForAccount(ctx: Context) {
-        if (current == "b") { setCurrent(ctx, "a"); Progress.reset(); Library.reset() }
+        if (current == "b") { setCurrent(ctx, "a"); Progress.reset(); Library.reset(); Track.reset() }
+        Track.forgetSecond(ctx)
         val e = prefs(ctx).edit()
         listOf("progress_b", "library_b", "addons_b", "addons_sync_b", SEED, "viewers_v1").forEach { e.remove(it) }
         e.apply()
@@ -247,6 +248,7 @@ object Viewers {
         setCurrent(ctx, to)
         Progress.reset()
         Library.reset()
+        Track.reset()
         // this device's copy at once (Home, Search, the Guide, the add-ons screen re-read the list); the pull's own
         // changes redraw again when they land
         Cloud.onApplied?.invoke(setOf("progress", "library", "addons"))
@@ -267,7 +269,7 @@ object Viewers {
             saveDoc(ctx, JSONObject().put("at", ra).put("list", remote.getJSONArray("list")))
             if (list(ctx).size < 2) {
                 val moved = current == "b"
-                if (moved) { setCurrent(ctx, "a"); Progress.reset(); Library.reset() }
+                if (moved) { setCurrent(ctx, "a"); Progress.reset(); Library.reset(); Track.reset() }
                 // a lock that came from elsewhere throws no one out; only a device sent to a locked first profile,
                 // or still at the launch picker for it, is asked its PIN
                 val hold = (moved || launchGate) && needsPin(ctx, "a")

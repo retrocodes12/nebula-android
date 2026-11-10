@@ -160,6 +160,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -5274,6 +5275,8 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
         PlaybackExtrasGroup()
         // the viewer's own Seekr key: ready-made pictures for the scrub preview above (Seekr.kt)
         SeekrSettings()
+        // the viewer's own Trakt / Simkl / MDBList account: what plays is added to its history (Track.kt)
+        TrackSettings()
         SettingsHeader("NEXT EPISODE", "Rolling on, skipping ahead and coming back")
         SettingsGroup {
             SettingsToggle(
@@ -7587,7 +7590,34 @@ private fun PlayerScreen(
         return d != C.TIME_UNSET && Autoplay.briefClip(titleNow, urlNow, contentType, d)
     }
     /** Write the current position into the store. Live streams have nothing to resume. */
+    // Tracking (Track.kt): what plays is reported to the viewer's own Trakt / Simkl / MDBList account — started, paused,
+    // stopped, nothing on a timer. The ids are re-read after every composition: an episode hop reuses this player, and
+    // the listener below outlives the parameters it was built with.
+    val trk = remember { TrackSession() }
+    val trkVersion = remember { trackAppVersion(context) }
+    fun trkPct(): Double? {
+        val d = exo.duration
+        if (exo.isCurrentMediaItemLive || d == C.TIME_UNSET || d <= 0) return null
+        return exo.currentPosition.coerceAtLeast(0L) * 100.0 / d
+    }
+    fun trkSend(event: String, given: Double? = null) {
+        val item = trk.item ?: return
+        if (!Track.on(context) || clipNow()) return          // (a debrid "not ready" clip is not the film)
+        val pct = given ?: trkPct() ?: return
+        trk.lastPct = pct
+        Track.report(context, event, item, pct, trkVersion)
+    }
+    SideEffect {
+        if (trk.id != contentId || trk.type != contentType) {
+            // the player moved on to another item in place: the old one's last word first
+            val old = trk.item
+            if (old != null && trk.sent.isNotEmpty() && !trk.done && trk.lastPct > 0 && Track.on(context)) Track.report(context, "stop", old, trk.lastPct, trkVersion)
+            trk.type = contentType; trk.id = contentId; trk.item = TrackWire.item(contentType, contentId)
+            trk.sent = ""; trk.done = false; trk.lastPct = -1.0
+        }
+    }
     fun snapshotProgress(done: Boolean = false) {
+        if (trk.sent.isNotEmpty() && !trk.done) trkPct()?.let { trk.lastPct = it }      // where tracking last saw it
         val id = contentId ?: return
         val type = contentType ?: return
         if (exo.isCurrentMediaItemLive) return
@@ -8112,6 +8142,9 @@ private fun PlayerScreen(
                 // came down over a long film and a phone went dark mid-scene); a paused film lets it rest.
                 playerViewRef?.keepScreenOn = isPlaying
                 if (isPlaying) error = null        // whatever went wrong before, this plays now
+                // tracking: playing → start; a real pause (not a buffering blip, not the end) → pause
+                if (isPlaying && trk.sent != "start" && !trk.done) { trk.sent = "start"; trkSend("start") }
+                else if (!isPlaying && trk.sent == "start" && !trk.done && !exo.playWhenReady && exo.playbackState != Player.STATE_ENDED) { trk.sent = "pause"; trkSend("pause") }
                 (activity as? MainActivity)?.refreshPipParams()
             }
             override fun onVideoSizeChanged(videoSize: VideoSize) {
@@ -8129,6 +8162,7 @@ private fun PlayerScreen(
                 if (state == Player.STATE_READY) briefCheck()
                 if (state == Player.STATE_BUFFERING && exo.playWhenReady && stallWatch.note()) offerSwap()
                 if (state != Player.STATE_ENDED) return
+                if (trk.sent.isNotEmpty() && !trk.done) { trk.done = true; trkSend("stop", 100.0) }     // tracking: it ended
                 reachedEnd()
             }
             /** The film or episode is over: what a real end does — ticked off, then the sleep timer or Up next. */
@@ -8182,6 +8216,7 @@ private fun PlayerScreen(
         onDispose {
             // last word on the resume point before the player goes away
             runCatching { snapshotProgress() }
+            runCatching { if (trk.sent.isNotEmpty() && !trk.done) trkPct()?.let { trk.done = true; trkSend("stop", it) } }   // tracking hears where it was left
             if (autoNow) AutoplayRun.endFor(contentType, contentId)   // its card and the requests still answering go with it
             runCatching { WatchLog.flush(context) }
             runCatching { Prefs.saveBandwidth(context) }     // the connection this play measured, written once
