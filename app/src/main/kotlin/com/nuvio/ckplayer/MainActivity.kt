@@ -2057,9 +2057,8 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                 }
                 // Autoplay's launch card (AutoplayUi.kt): over the streams page, then the player, until the first picture
                 AutoplayCardHost()
-                AnimatedVisibility(visible = booting && !Viewers.asking, enter = fadeIn(tween(0)), exit = fadeOut(tween(320))) {
-                    BootScreen()
-                }
+                // up on the very frame the picker leaves (BootCover.kt: a plain AnimatedVisibility let Home through for one)
+                BootCover(booting, Viewers.asking) { BootScreen() }
                 // finding a torrent in the swarm: held up until it answers, or the viewer stops it
                 p2pFor?.let { name ->
                     P2pSheet(name) { p2pJob?.cancel(); p2pJob = null; p2pFor = null }

@@ -69,7 +69,7 @@ jobs:
           ram-size: 3072M
           heap-size: 512M
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim
-          script: gradle connectedDebugAndroidTest --no-daemon -PemulatorAbis --stacktrace || touch /tmp/gradle-failed; adb logcat -d | grep -E "AV1-DEVICE|SEEKR-DEVICE|BARS-DEVICE|AndroidRuntime|TestRunner|ExoPlayerImplInternal|MediaCodec|nextlib|Ffmpeg|DOWNLOADS-DEVICE|START-DEVICE" | tail -120; adb pull /data/local/tmp/barshots barshots || true; test -z "$(find app/build/outputs/androidTest-results -name '*.xml' -exec grep -l '<failure' {} +)" && test ! -e /tmp/gradle-failed
+          script: gradle connectedDebugAndroidTest --no-daemon -PemulatorAbis --stacktrace || touch /tmp/gradle-failed; adb logcat -d | grep -E "AV1-DEVICE|SEEKR-DEVICE|BARS-DEVICE|BOOT-DEVICE|AndroidRuntime|TestRunner|ExoPlayerImplInternal|MediaCodec|nextlib|Ffmpeg|DOWNLOADS-DEVICE|START-DEVICE" | tail -120; adb pull /data/local/tmp/barshots barshots || true; test -z "$(find app/build/outputs/androidTest-results -name '*.xml' -exec grep -l '<failure' {} +)" && test ! -e /tmp/gradle-failed
 
       - name: Keep the black-bars pictures
         if: always()
