@@ -182,12 +182,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.111.0.apk
+          cp "$APK" Nebula-1.112.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.111.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.111.0 Nebula-1.111.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.111.0" \
-            --notes "New: tracking. Settings › Playback › Tracking adds the films and episodes you watch to your own MDBList history: paste your API key once, and with a profile every device reports. Nothing is sent until you connect an account."
+          gh release delete v1.112.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.112.0 Nebula-1.112.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.112.0" \
+            --notes "New: the nav bar gets out of the way. On a phone, scroll down a page and the bar at the bottom folds to its icons; a small scroll back up brings the names back. Motion: Reduced keeps it as it was."
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
