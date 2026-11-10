@@ -182,12 +182,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.109.0.apk
+          cp "$APK" Nebula-1.110.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.109.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.109.0 Nebula-1.109.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.109.0" \
-            --notes "With two profiles, Who's watching now comes up first when Nebula opens, and the loading screen follows once you pick a profile."
+          gh release delete v1.110.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.110.0 Nebula-1.110.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.110.0" \
+            --notes "Smoother: pages, the bottom bar and sheets now glide into place on springs, and going back half way through a move carries on from where it is instead of starting over."
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
