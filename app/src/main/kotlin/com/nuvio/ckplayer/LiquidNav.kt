@@ -322,6 +322,7 @@ private fun frost(radiusPx: Float): androidx.compose.ui.graphics.RenderEffect {
  * since — the bar went on glowing with Home's posters over Library and Profile: so each drawing hands the layer the
  * other of two identical blurs.
  */
+@RequiresApi(Build.VERSION_CODES.S)
 private class FrostElement(val backdrop: PageBackdrop, val blurPx: Float, val at: () -> Offset) : ModifierNodeElement<FrostNode>() {
     override fun create() = FrostNode(backdrop, blurPx, at)
     override fun update(node: FrostNode) { node.backdrop = backdrop; node.at = at; node.blur(blurPx); node.invalidateDraw() }

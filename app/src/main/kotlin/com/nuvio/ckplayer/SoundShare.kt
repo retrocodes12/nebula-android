@@ -111,7 +111,7 @@ object SoundShare {
         on = want
         val i = Intent(c, SoundShareService::class.java)
         if (want) {
-            if (Build.VERSION.SDK_INT >= 26) c.startForegroundService(i) else c.startService(i)
+            c.startForegroundService(i)
         } else {
             c.stopService(i)
             stop(c)
@@ -387,12 +387,12 @@ class SoundShareService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) { SoundShare.set(this, false); stopSelf(); return START_NOT_STICKY }
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel(CHANNEL) == null)
+        if (nm.getNotificationChannel(CHANNEL) == null)
             nm.createNotificationChannel(NotificationChannel(CHANNEL, "Convert sound for your TV", NotificationManager.IMPORTANCE_LOW))
         val stop = PendingIntent.getService(this, 1, Intent(this, SoundShareService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val open = packageManager.getLaunchIntentForPackage(packageName)?.let { PendingIntent.getActivity(this, 2, it, PendingIntent.FLAG_IMMUTABLE) }
-        val n = (if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, CHANNEL) else @Suppress("DEPRECATION") Notification.Builder(this))
+        val n = Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_sound)
             .setContentTitle("Converting sound for your TV")
             .setContentText("Your TV can play DTS films with sound while this is on")

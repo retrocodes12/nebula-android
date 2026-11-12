@@ -7228,8 +7228,10 @@ private fun BoxScope.ReactionFloat(emoji: String, name: String) {
         Modifier.align(Alignment.BottomStart)
             .fillMaxWidth(x)
             .padding(bottom = 140.dp)
-            .offset(y = (-(t * 280)).dp)
-            .alpha(if (t < 0.12f) t / 0.12f else if (t > 0.78f) (1f - t) / 0.22f else 1f),
+            .graphicsLayer {
+                translationY = -(t * 280).dp.toPx()
+                alpha = if (t < 0.12f) t / 0.12f else if (t > 0.78f) (1f - t) / 0.22f else 1f
+            },
         horizontalAlignment = Alignment.End,
     ) {
         Text(emoji, fontSize = 40.sp)

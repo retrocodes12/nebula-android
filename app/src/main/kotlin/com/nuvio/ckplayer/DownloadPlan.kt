@@ -52,7 +52,7 @@ internal object DownloadPlan {
     fun sniff(code: Int, contentType: String?, head: String, total: Long): Source {
         if (code !in 200..299) return Source.Refused(NO_REACH)
         val type = contentType.orEmpty().lowercase(Locale.US)
-        val text = head.removePrefix("﻿").trimStart()
+        val text = head.removePrefix("\uFEFF").trimStart()
         val low = text.take(256).lowercase(Locale.US)
         return when {
             text.startsWith("#EXTM3U") || "mpegurl" in type -> Source.Hls

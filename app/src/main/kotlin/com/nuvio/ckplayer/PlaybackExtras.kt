@@ -75,9 +75,7 @@ internal fun PlaybackExtrasGroup() {
         }
         if (blocked) Box(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
             TextAction("Allow notifications") {
-                val open = if (Build.VERSION.SDK_INT >= 26)
-                    Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName)
-                else Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:" + ctx.packageName))
+                val open = Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName)
                 runCatching { ctx.startActivity(open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
             }
         }

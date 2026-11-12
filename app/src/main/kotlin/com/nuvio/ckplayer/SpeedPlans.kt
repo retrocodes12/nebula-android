@@ -16,7 +16,7 @@ internal object SpeedPlans {
         proxy their playlists under no extension at all): "hls" for "#EXTM3U" after an optional byte-order mark or white
         space, "dash" for a manifest ("<MPD" in its head), null for anything else — a file to read. */
     fun sniffKind(head: String): String? {
-        val t = head.trimStart('﻿', ' ', '\t', '\r', '\n')
+        val t = head.trimStart('\uFEFF', ' ', '\t', '\r', '\n')
         return when {
             t.startsWith("#EXTM3U") -> "hls"
             head.contains("<MPD") -> "dash"

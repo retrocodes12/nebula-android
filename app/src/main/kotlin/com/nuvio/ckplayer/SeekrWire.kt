@@ -67,7 +67,7 @@ internal object SeekrWire {
      */
     fun parseVtt(text: String): List<SeekrCue> {
         val lines = text.replace("\r\n", "\n").replace('\r', '\n').split('\n')
-        if (lines.isEmpty() || !lines[0].trimStart('﻿').trimStart().startsWith("WEBVTT")) return emptyList()
+        if (lines.isEmpty() || !lines[0].trimStart('\uFEFF').trimStart().startsWith("WEBVTT")) return emptyList()
         val out = ArrayList<SeekrCue>()
         var i = 1
         while (i < lines.size && out.size < MAX_CUES) {

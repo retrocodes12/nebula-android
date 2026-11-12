@@ -227,6 +227,16 @@ NebulaBridge.ready();
                 override fun onPageFinished(view: WebView, url: String?) {
                     if (!earlyMute && !parking) view.evaluateJavascript(MUTE_JS, null)
                 }
+
+                // The page's renderer was killed (out of memory) or crashed. Unanswered, Android ends the whole app
+                // with it. The session is over instead: whoever waits on the page is told, the dead view is taken
+                // away, and the play fails the way any stream that stops answering does.
+                override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
+                    found.completeExceptionally(IOException("the stream's page stopped"))
+                    parked.completeExceptionally(IOException("the stream's page stopped"))
+                    close()
+                    return true
+                }
             }
             // laid out behind the app's own screen: a page that thinks it is shown starts its player
             activity.findViewById<ViewGroup>(android.R.id.content)?.addView(wv, 0, FrameLayout.LayoutParams(640, 360))

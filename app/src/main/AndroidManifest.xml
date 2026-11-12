@@ -23,6 +23,8 @@
     <!-- Run on both phones and Android TV -->
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.software.leanback" android:required="false" />
+    <!-- the Wi-Fi state is read when there is Wi-Fi; a TV on a cable alone runs the app as well -->
+    <uses-feature android:name="android.hardware.wifi" android:required="false" />
 
     <!-- Backups keep settings, add-ons and progress but never the sign-in: see res/xml/backup_rules.xml (Android 11-)
          and data_extraction_rules.xml (12+). -->

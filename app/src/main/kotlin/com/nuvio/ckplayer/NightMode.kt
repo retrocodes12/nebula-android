@@ -51,6 +51,7 @@ class NightMode {
 
         val available: Boolean get() = Build.VERSION.SDK_INT >= 28
 
+        @androidx.annotation.RequiresApi(28)
         private fun config(): DynamicsProcessing.Config {
             // two channels described; Android repeats the description for every channel the session really carries
             val cfg = DynamicsProcessing.Config.Builder(
