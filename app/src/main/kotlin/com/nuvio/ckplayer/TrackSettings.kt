@@ -83,7 +83,7 @@ private fun TrackCodeRow(svc: String, name: String, auth: TrackAuth, offered: Bo
             when (Track.poll(ctx, c, version)) {
                 Track.Poll.PENDING -> {}
                 Track.Poll.DONE -> { code = null; note = null; Toasts.show("$name connected"); break }
-                Track.Poll.EXPIRED -> { code = null; note = "That code ran out — connect again for a new one"; break }
+                Track.Poll.EXPIRED -> { code = null; note = "That code ran out. Connect again for a new one"; break }
                 Track.Poll.DENIED -> { code = null; note = "The sign-in was declined"; break }
                 Track.Poll.SETUP -> { code = null; note = "$name sign-in is not available right now"; break }
             }
@@ -98,7 +98,7 @@ private fun TrackCodeRow(svc: String, name: String, auth: TrackAuth, offered: Bo
                     when {
                         on -> "Connected" + (if (auth.user.isNotEmpty()) " as ${auth.user}" else "") + (if (Cloud.linked(ctx)) " · Every device on this profile reports" else "")
                         c != null -> "On a phone or computer, open " + c.url.removePrefix("https://") + " and type this code"
-                        else -> "Sign in with a code — nothing is typed here"
+                        else -> "Sign in with a code, nothing is typed here"
                     },
                     color = MutedC, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 2.dp),
                 )
@@ -111,7 +111,7 @@ private fun TrackCodeRow(svc: String, name: String, auth: TrackAuth, offered: Bo
                     scope.launch {
                         val c = Track.askCode(svc, version)
                         busy = false
-                        if (c == null) note = "$name did not answer — try again in a moment" else code = c
+                        if (c == null) note = "$name did not answer. Try again in a moment" else code = c
                     }
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = OnAccent),

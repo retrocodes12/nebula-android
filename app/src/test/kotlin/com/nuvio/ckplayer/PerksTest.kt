@@ -23,7 +23,7 @@ class PerksTest {
     @Test fun plan_statusInWords() {
         assertEquals("Free week", Support.subStatusText("trialing"))
         assertEquals("Active", Support.subStatusText("active"))
-        assertEquals("Payment failed — update your card", Support.subStatusText("past_due"))
+        assertEquals("Payment failed. Update your card", Support.subStatusText("past_due"))
         assertEquals("Paused", Support.subStatusText("paused"))
         assertEquals("", Support.subStatusText("incomplete_expired"))
     }

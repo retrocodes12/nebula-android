@@ -73,7 +73,7 @@ class PinTest {
 
     @Test fun forgotPin_wording() {
         assertEquals("Wrong password.", ProfilePin.forgotError(403))
-        assertEquals("Too many tries — wait a minute.", ProfilePin.forgotError(429))
+        assertEquals("Too many tries. Wait a minute.", ProfilePin.forgotError(429))
         assertEquals("Could not reach Nebula. Try again.", ProfilePin.forgotError(500))
         assertEquals("Could not reach Nebula. Try again.", ProfilePin.forgotError(null))
     }

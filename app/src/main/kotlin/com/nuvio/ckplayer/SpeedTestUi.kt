@@ -124,7 +124,7 @@ internal fun ConnectionSpeedRow(divider: Boolean) {
     val running = job != null
     val status = when {
         running -> if (live > 0) "Testing… " + SpeedTest.mbps(live) else "Testing…"
-        failed -> "Couldn’t reach the speed test — check the connection"
+        failed -> "Couldn’t reach the speed test. Check the connection"
         Prefs.speedAt > 0 -> SpeedTest.mbps(Prefs.speedBps) + " · ${Prefs.speedPing} ms · " + agoText(Prefs.speedAt, now)
         else -> "Not tested yet"
     }

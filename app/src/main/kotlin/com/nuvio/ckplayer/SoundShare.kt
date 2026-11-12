@@ -192,7 +192,7 @@ object SoundShare {
     private fun publish(ctx: Context) {
         if (socket == null) return
         val hosts = lanHosts()
-        if (!Cloud.linked(ctx)) { status = "Sign in here and on the TV — that is how the TV finds this phone"; return }
+        if (!Cloud.linked(ctx)) { status = "Sign in here and on the TV. That is how the TV finds this phone"; return }
         if (hosts.isEmpty()) { status = "Join the same Wi-Fi as your TV"; return }
         scope.launch {
             status = try {

@@ -87,7 +87,7 @@ class PickLineTest {
         assertEquals("Subtitles moved 0.4 s later.", PickLines.movedText(400))
         assertEquals("The subtitles were already in time.", PickLines.movedText(0))
         assertEquals("The subtitles were already in time.", PickLines.movedText(-49))
-        assertEquals("Paused here. Pick the line that was just said — the subtitles move to match it.", PickLines.note(true))
-        assertEquals("Pick the line that was just said — the subtitles move to match it.", PickLines.note(false))
+        assertEquals("Paused here. Pick the line that was just said. The subtitles move to match it.", PickLines.note(true))
+        assertEquals("Pick the line that was just said. The subtitles move to match it.", PickLines.note(false))
     }
 }

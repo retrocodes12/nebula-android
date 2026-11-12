@@ -97,7 +97,7 @@ object ProfilePin {
     /** What "Forgot PIN?" says when the password check fails (the HTTP code, null = no answer). */
     internal fun forgotError(code: Int?): String = when (code) {
         403 -> "Wrong password."
-        429 -> "Too many tries — wait a minute."
+        429 -> "Too many tries. Wait a minute."
         else -> "Could not reach Nebula. Try again."
     }
 
@@ -143,7 +143,7 @@ internal fun PinScreen(ask: PinAsk, onAsk: (PinAsk) -> Unit, onPassed: () -> Uni
     var digits by remember(ask) { mutableStateOf("") }
     var until by remember(ask) { mutableLongStateOf(ProfilePin.triesOf(ask.id).until) }
     var msg by remember(ask) {
-        mutableStateOf(if (ProfilePin.cooling(ProfilePin.triesOf(ask.id), System.currentTimeMillis())) "Too many tries — wait 30 seconds." else ask.note)
+        mutableStateOf(if (ProfilePin.cooling(ProfilePin.triesOf(ask.id), System.currentTimeMillis())) "Too many tries. Wait 30 seconds." else ask.note)
     }
     var forgot by remember(ask) { mutableStateOf(false) }
     val one = remember { FocusRequester() }
@@ -158,7 +158,7 @@ internal fun PinScreen(ask: PinAsk, onAsk: (PinAsk) -> Unit, onPassed: () -> Uni
                     val t = ProfilePin.noteWrong(ask.id, System.currentTimeMillis())
                     digits = ""
                     until = t.until
-                    msg = if (t.until > 0L) "Too many tries — wait 30 seconds." else "Wrong PIN."
+                    msg = if (t.until > 0L) "Too many tries. Wait 30 seconds." else "Wrong PIN."
                 }
             }
             PinMode.CHOOSE -> onAsk(ask.copy(mode = PinMode.CONFIRM, first = pin, note = ""))
@@ -167,7 +167,7 @@ internal fun PinScreen(ask: PinAsk, onAsk: (PinAsk) -> Unit, onPassed: () -> Uni
                     Viewers.setPin(ctx, ask.id, pin)
                     Toasts.show("PIN set for $name.")
                     onPassed()
-                } else onAsk(ask.copy(mode = PinMode.CHOOSE, first = "", note = "The PINs didn't match — try again."))
+                } else onAsk(ask.copy(mode = PinMode.CHOOSE, first = "", note = "The PINs didn't match. Try again."))
         }
     }
     fun type(d: Char) {
@@ -237,7 +237,7 @@ internal fun PinScreen(ask: PinAsk, onAsk: (PinAsk) -> Unit, onPassed: () -> Uni
             modifier = Modifier.widthIn(max = 420.dp).heightIn(min = 20.dp).padding(top = 14.dp),
         )
         if (forgot) PinForgot(ask.id, onRemoved = {
-            Toasts.show("PIN removed — add a new one from Manage Profiles.")
+            Toasts.show("PIN removed. Add a new one from Manage Profiles.")
             onPassed()
         })
         else Column(Modifier.padding(top = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -285,7 +285,7 @@ private fun PinForgot(id: String, onRemoved: () -> Unit) {
     val scope = rememberCoroutineScope()
     if (Cloud.state(ctx) != "in") {
         Text(
-            "Sign in to your Nebula account on this device first — its password resets the PIN.",
+            "Sign in to your Nebula account on this device first. Its password resets the PIN.",
             color = MutedC, fontSize = 15.sp, fontFamily = Sans, textAlign = TextAlign.Center,
             modifier = Modifier.widthIn(max = 380.dp).padding(top = 18.dp),
         )

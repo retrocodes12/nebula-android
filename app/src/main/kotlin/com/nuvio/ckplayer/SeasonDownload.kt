@@ -53,7 +53,7 @@ internal object SeasonDownload {
             }
         } finally { progress = null }
         return if (missing.isEmpty()) "Season ${plan.season}: all $queued episodes downloading · Library › Downloads"
-        else "$queued of $total downloading · no matching source for ${missing.size} (${missing.take(2).joinToString(", ")}${if (missing.size > 2) "…" else ""}) — use their own download arrow"
+        else "$queued of $total downloading · no matching source for ${missing.size} (${missing.take(2).joinToString(", ")}${if (missing.size > 2) "…" else ""}). Use their own download arrow"
     }
 
     /** The same release for this episode: a twin of the picked row, else a row of the same quality from the same add-on. */

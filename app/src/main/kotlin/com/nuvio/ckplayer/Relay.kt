@@ -146,10 +146,10 @@ internal object Relay {
         val d = doc
         status = when {
             !Account.isTv(ctx) -> ""
-            Prefs.relay == "off" -> "Off — the TV fetches video itself"
+            Prefs.relay == "off" -> "Off: the TV fetches video itself"
             l != null -> "${l.name} is sharing · ${l.base.removePrefix("http://")}"
             usable(d) -> "${d!!.optString("name").ifEmpty { "Your PC" }} was sharing but does not answer right now · Check it is on, and on the same network"
-            !Cloud.linked(ctx) -> "Sign in here and on the computer — that is how the TV finds it"
+            !Cloud.linked(ctx) -> "Sign in here and on the computer. That is how the TV finds it"
             else -> "No computer is sharing right now · Turn it on in Nebula for Windows or Linux › Settings › Playback"
         }
     }

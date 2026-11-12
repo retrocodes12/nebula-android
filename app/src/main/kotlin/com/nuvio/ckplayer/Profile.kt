@@ -143,7 +143,7 @@ internal fun ProfileScreen(onBack: () -> Unit) {
             when {
                 profile != null -> "@${profile.handle}"
                 state == "legacy" -> "Link code from an earlier version"
-                else -> "No email, no tracking — a profile is optional"
+                else -> "No email, no tracking. A profile is optional"
             },
             onBack,
         )
@@ -170,7 +170,7 @@ private fun SignedOut(
     val scope = rememberCoroutineScope()
     var mode by remember(legacy) { mutableStateOf(if (legacy) "attach" else if (tv) "code" else "signin") }
     Text(
-        if (legacy) "This device syncs with a link code from an earlier version. Give it a profile — everything you’ve synced stays exactly where it is, and every device signs in by handle from now on."
+        if (legacy) "This device syncs with a link code from an earlier version. Give it a profile. Everything you’ve synced stays exactly where it is, and every device signs in by handle from now on."
         else "Your add-ons, progress, My List and ratings follow you to every device you sign in on.",
         color = MutedC, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(bottom = 14.dp),
     )
@@ -214,7 +214,7 @@ private fun SignInForm(legacy: Boolean, say: (String) -> Unit, fail: (String) ->
         scope.launch {
             val err = Account.signIn(ctx, handle, pw)
             busy = false
-            if (err == null) say("Signed in as @${Account.cleanHandle(handle)} — pulling your things…") else fail(err)
+            if (err == null) say("Signed in as @${Account.cleanHandle(handle)}. Pulling your things…") else fail(err)
         }
     }
     PanelLabel("Sign in")
@@ -245,13 +245,13 @@ private fun CreateForm(attach: Boolean, say: (String) -> Unit, fail: (String) ->
         }
     }
     PanelLabel(if (attach) "Add a profile to this device’s group" else "Create a profile")
-    PField(handle, { handle = it.take(24) }, "Choose a handle — letters, numbers, _")
-    PField(name, { name = it.take(40) }, "Display name — what friends see", words = true)
-    PField(pw, { pw = it }, "Password — 8 characters or more", password = true, last = true, onDone = { go() })
+    PField(handle, { handle = it.take(24) }, "Choose a handle: letters, numbers, _")
+    PField(name, { name = it.take(40) }, "Display name: what friends see", words = true)
+    PField(pw, { pw = it }, "Password: 8 characters or more", password = true, last = true, onDone = { go() })
     Row(Modifier.padding(top = 4.dp)) {
         PButton(if (busy) (if (attach) "Adding…" else "Creating…") else if (attach) "Add profile" else "Create profile", busy) { go() }
     }
-    Hint("No email. You’ll get a recovery key once — it’s the only way back in if you forget the password.")
+    Hint("No email. You’ll get a recovery key once. It’s the only way back in if you forget the password.")
 }
 
 @Composable
@@ -268,13 +268,13 @@ private fun RecoverForm(say: (String) -> Unit, fail: (String) -> Unit, onRecover
         scope.launch {
             val (fresh, err) = Account.recover(ctx, handle, key, pw)
             busy = false
-            if (fresh != null) { say("Password reset — you’re signed in."); onRecovery(fresh) } else fail(err ?: "Something went wrong.")
+            if (fresh != null) { say("Password reset. You’re signed in."); onRecovery(fresh) } else fail(err ?: "Something went wrong.")
         }
     }
     PanelLabel("Reset your password")
     PField(handle, { handle = it.take(24) }, "@handle")
     PField(key, { key = it.take(24) }, "Recovery key", caps = true)
-    PField(pw, { pw = it }, "New password — 8 characters or more", password = true, last = true, onDone = { go() })
+    PField(pw, { pw = it }, "New password: 8 characters or more", password = true, last = true, onDone = { go() })
     Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         PButton(if (busy) "Resetting…" else "Reset password", busy) { go() }
         TextAction("Back to sign in", onClick = onBackToSignIn)
@@ -311,7 +311,7 @@ private fun CodeForm(fail: (String) -> Unit) {
         modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp).background(Surface2, RoundedCornerShape(14.dp)).padding(vertical = 18.dp),
     )
     Text(
-        if (expired) "That code has expired — get a new one."
+        if (expired) "That code has expired. Get a new one."
         else "On a phone or computer where you’re signed in, open Settings › Profile › Link a TV and type this code.",
         color = MutedC, fontSize = 14.sp, lineHeight = 21.sp,
     )
@@ -326,7 +326,7 @@ private fun RecoveryPanel(me: Profile?, key: String, onDone: () -> Unit) {
     Panel {
         PanelLabel("Your recovery key")
         Text(
-            "Write it down or keep it somewhere safe. It is shown once, and it is the only way to reset your password — there is no email to send one to.",
+            "Write it down or keep it somewhere safe. It is shown once, and it is the only way to reset your password. There is no email to send one to.",
             color = MutedC, fontSize = 14.sp, lineHeight = 21.sp,
         )
         Text(
@@ -495,7 +495,7 @@ private fun PasswordPanel(say: (String) -> Unit, fail: (String) -> Unit) {
         scope.launch {
             val err = Account.changePassword(ctx, cur, next)
             busy = false
-            if (err == null) { open = false; cur = ""; next = ""; say("Password changed — every other device is signed out.") } else fail(err)
+            if (err == null) { open = false; cur = ""; next = ""; say("Password changed. Every other device is signed out.") } else fail(err)
         }
     }
     Panel {
@@ -503,7 +503,7 @@ private fun PasswordPanel(say: (String) -> Unit, fail: (String) -> Unit) {
         if (!open) Row { GhostButton("Change password") { open = true } }
         else {
             PField(cur, { cur = it }, "Current password", password = true)
-            PField(next, { next = it }, "New password — 8 characters or more", password = true, last = true, onDone = { go() })
+            PField(next, { next = it }, "New password: 8 characters or more", password = true, last = true, onDone = { go() })
             Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 PButton(if (busy) "Saving…" else "Save password", busy) { go() }
                 TextAction("Cancel") { open = false; cur = ""; next = "" }
@@ -523,7 +523,7 @@ private fun ThisDevicePanel(me: Profile, say: (String) -> Unit, fail: (String) -
     Panel {
         PanelLabel("This device")
         Text(
-            "Signing out leaves everything on this device in place — it just stops following your profile.",
+            "Signing out leaves everything on this device in place. It just stops following your profile.",
             color = MutedC, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(bottom = 10.dp),
         )
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {

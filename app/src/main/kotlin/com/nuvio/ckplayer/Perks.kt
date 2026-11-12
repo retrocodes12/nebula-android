@@ -86,9 +86,9 @@ internal fun PlanRow(me: Profile) {
         key = "perk/plan", icon = Icons.Outlined.CreditCard, chevron = true,
     ) {
         val u = me.subManage
-        if (u.isEmpty()) { Toasts.show("Getting your plan's page — try again in a moment."); return@SupportRow }
+        if (u.isEmpty()) { Toasts.show("Getting your plan's page. Try again in a moment."); return@SupportRow }
         runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-            .onFailure { Toasts.show("No web browser on this device — manage it from Nebula on your phone.") }
+            .onFailure { Toasts.show("No web browser on this device. Manage it from Nebula on your phone.") }
     }
 }
 

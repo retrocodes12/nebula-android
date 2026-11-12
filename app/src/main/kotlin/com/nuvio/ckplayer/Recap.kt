@@ -80,7 +80,7 @@ internal fun RecapCard() {
             }
         }
         Text(
-            "Counted on this device while something plays — never uploaded, never synced.",
+            "Counted on this device while something plays. Never uploaded, never synced.",
             color = FaintC, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 14.dp),
         )
     }

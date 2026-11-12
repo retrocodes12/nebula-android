@@ -1210,14 +1210,14 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                         partyUi.status = "Playing your own copy from ${from.name}"
                     } else if (st.url.isNotEmpty()) {
                         partyUi.choosing = false
-                        partyUi.status = "None of your add-ons has this file — playing the host's link"
+                        partyUi.status = "None of your add-ons has this file. Playing the host's link"
                         playHost(st)
                     } else {
                         val origin = activeAddons(ctx).firstOrNull()
-                        if (origin == null) { partyUi.status = "Add an add-on first — the host keeps their stream to themselves"; return@launch }
+                        if (origin == null) { partyUi.status = "Add an add-on first. The host keeps their stream to themselves"; return@launch }
                         cancelHop(); seriesChain.clear()
                         stack = listOf(Screen.Home, Screen.Streams(origin, MetaItem(ident, ty, st.name ?: st.title, st.poster)))
-                        partyUi.status = "Pick a source — the party is watching ${st.file ?: st.name ?: st.title}"
+                        partyUi.status = "Pick a source. The party is watching ${st.file ?: st.name ?: st.title}"
                     }
                 }
             }
@@ -1229,7 +1229,7 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                         partyUi.members = listOf(PartyMember(ev.id, partyDisplayName(ctx), true, "ready", partyUi.key, null, 2))
                         partyUi.resumedAt = System.currentTimeMillis()
                         partyUi.panelOpen = true
-                        partyUi.status = "Party started — code ${ev.code}. Friends: Settings › Watch party, or the invite link."
+                        partyUi.status = "Party started, code ${ev.code}. Friends: Settings › Watch party, or the invite link."
                     }
                     is PartyEvent.Joined -> {
                         partyUi.code = ev.code; partyUi.isHost = ev.host; partyUi.count = ev.count
@@ -1278,8 +1278,8 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                             ms.firstOrNull { it.id == partyUi.id }?.let { if (it.host) partyUi.isHost = true }
                         } else if (old.isNotEmpty() && ev.names.isNotEmpty()) {
                             val gone = old.toMutableList()
-                            ev.names.forEach { n -> if (!gone.remove(n)) partyUi.status = "$n joined — ${ev.count} watching" }
-                            gone.forEach { n -> partyUi.status = "$n left — ${ev.count} watching" }
+                            ev.names.forEach { n -> if (!gone.remove(n)) partyUi.status = "$n joined · ${ev.count} watching" }
+                            gone.forEach { n -> partyUi.status = "$n left · ${ev.count} watching" }
                         }
                     }
                     is PartyEvent.React -> partyUi.react(ev.emoji, ev.name)
@@ -2950,13 +2950,13 @@ private fun RecommendSheet(type: String, item: MetaItem, scope: CoroutineScope, 
             SheetAction(Icons.Filled.Refresh, if (trying) "Trying again…" else "Try again", keepOpen = true, id = "retry") {
                 if (!trying) tries++
             },
-            SheetAction(Icons.Filled.CloudOff, "Could not reach Friends — check the connection") {},
+            SheetAction(Icons.Filled.CloudOff, "Could not reach Friends. Check the connection") {},
         ) else if (list.isEmpty()) listOf(
             // the server said Friends is off (a 400: turned off on another device — Social.friends turns it off here
             // too and answers empty), which is not "no friends yet"
             SheetAction(
                 Icons.Filled.Groups,
-                if (!Social.on) "Friends is off — turn it on in Friends" else "No friends yet — add one in Friends",
+                if (!Social.on) "Friends is off. Turn it on in Friends" else "No friends yet. Add one in Friends",
             ) {},
         ) else list.take(8).map { f ->
             val fName = Social.friendLabel(f)
@@ -3095,7 +3095,7 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                     Text(
                         "Rate what you watch, see what your friends are watching, and trade " +
                             "recommendations. Turning it on shares your ratings, recent watches and " +
-                            "My List with your friends — people you add by @handle who add you back — and no one else.",
+                            "My List with your friends (people you add by @handle who add you back) and no one else.",
                         color = MutedC, fontSize = 14.sp, lineHeight = 21.sp,
                         modifier = Modifier.padding(top = 8.dp, bottom = 14.dp),
                     )
@@ -3244,7 +3244,7 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
             else -> if (friendsFailed) {
                 item(key = "frfail") {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Could not reach Friends — check the connection.",
+                        Text("Could not reach Friends. Check the connection.",
                             color = MutedC, fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.weight(1f))
                         // the row stays while it asks (the list is no longer blanked), so it says it is asking
                         Text(if (fetching) "Trying again…" else "Try again", color = TextC, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
@@ -3255,7 +3255,7 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                 }
             } else if (fl.isEmpty()) {
                 item(key = "frempty") {
-                    Text("No friends yet — add one by @handle and their watching shows up here.",
+                    Text("No friends yet. Add one by @handle and their watching shows up here.",
                         color = MutedC, fontSize = 14.sp, lineHeight = 20.sp)
                 }
             } else {
@@ -3296,7 +3296,7 @@ private fun FriendsScreen(onBack: () -> Unit, onProfile: () -> Unit, onOpen: (Me
                             Text(if (openCode == fCode) "Hide" else "View", color = MutedC, fontSize = 13.sp)
                         }
                         if (openCode == fCode && Social.friendPending(f)) {
-                            Text("They have not added you back yet — once they do, you see each other’s watching here.",
+                            Text("They have not added you back yet. Once they do, you see each other’s watching here.",
                                 color = MutedC, fontSize = 13.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 10.dp))
                         } else if (openCode == fCode) {
                             FriendRow("Watched recently", profItems(prof.optJSONArray("recent")).map { r ->
@@ -3760,8 +3760,8 @@ private fun UpdateCard(version: String, notes: String, apkUrl: String = Updates.
             Text(
                 message ?: when (phase) {
                     "downloading" -> "Downloading… $progress%"
-                    "ready" -> "Ready — tap Install."
-                    "failed" -> "Download failed — tap Retry"
+                    "ready" -> "Ready. Tap Install."
+                    "failed" -> "Download failed. Tap Retry"
                     else -> firstLine.ifEmpty { "A new version is available." }
                 },
                 color = MutedC, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
@@ -4487,7 +4487,7 @@ private fun SearchScreen(st: SearchUiState, onOpen: (Addon, MetaItem) -> Unit, o
             }
             // offline, or every add-on down: say so, with the way to ask again (a remote can reach it: a chip)
             st.submitted.isNotBlank() && st.sections.isEmpty() && st.unreachable -> Column(Modifier.padding(top = 8.dp)) {
-                Text("Couldn’t reach your add-ons to search — check the connection.", color = MutedC, fontSize = 14.sp,
+                Text("Couldn’t reach your add-ons to search. Check the connection.", color = MutedC, fontSize = 14.sp,
                     modifier = Modifier.padding(bottom = 10.dp))
                 Chip("Retry", false) { st.retry++ }
             }
@@ -4680,7 +4680,7 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
             }
         }
         if (addons.isEmpty()) {
-            item { Text("No add-ons yet — paste a manifest URL above.", color = MutedC, fontSize = 14.sp) }
+            item { Text("No add-ons yet. Paste a manifest URL above.", color = MutedC, fontSize = 14.sp) }
         } else {
             itemsIndexed(addons, key = { _, a -> a.manifestUrl }) { i, a ->
                 val dragging = i == dragIndex
@@ -4913,7 +4913,7 @@ private fun SettingsScreen(
     val version = remember {
         runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "?"
     }
-    var updSub by remember { mutableStateOf("You're on v$version — tap to check now") }
+    var updSub by remember { mutableStateOf("You're on v$version · tap to check now") }
     var checking by remember { mutableStateOf(false) }
     // "3 add-ons · 2 on · 1 off" — the list is read on every entry to this screen
     val addonsSub = remember {
@@ -4964,7 +4964,7 @@ private fun SettingsScreen(
             )
             SettingsRow(Icons.Filled.Extension, "Add-ons", addonsSub, true, onAddons)
             SettingsRow(Icons.Filled.Groups, "Watch party", "Watch in sync with friends using a code", true, onParty)
-            SettingsRow(Icons.Filled.Favorite, "Friends", "Rate, share and recommend — experimental", true, onFriends)
+            SettingsRow(Icons.Filled.Favorite, "Friends", "Rate, share and recommend · experimental", true, onFriends)
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -5006,11 +5006,11 @@ private fun SettingsScreen(
         }
         // Hidden until the server has somewhere to send people (or this profile is already a supporter)
         if (Support.visible) {
-            SettingsHeader("SUPPORT", "Free, no ads — chip in if you like")
+            SettingsHeader("SUPPORT", "Free, no ads. Chip in if you like")
             SettingsGroup {
                 SettingsRow(
                     Icons.Filled.VolunteerActivism, "Support Nebula",
-                    "Chip in if you like — a mark by your name, three more accents, the wall",
+                    "Chip in if you like: a mark by your name, three more accents, the wall",
                     false, onSupport,
                 )
             }
@@ -5023,19 +5023,19 @@ private fun SettingsScreen(
                     scope.launch {
                         val r = runCatching { Updates.latest(early = Perks.early()) }.getOrNull()
                         updSub = when {
-                            r == null -> "Could not reach the release feed — try again later"
+                            r == null -> "Could not reach the release feed. Try again later"
                             Updates.isNewer(r.version, version) ->
-                                "v${r.version}${if (r.beta) " (an early build)" else ""} is available — the update card is waiting on Home"
+                                "v${r.version}${if (r.beta) " (an early build)" else ""} is available. The update card is waiting on Home"
                             else -> "You're up to date (v$version)"
                         }
                         checking = false
                     }
                 }
             }
-            SettingsRow(Icons.Filled.Shield, "Privacy Policy", "No email, no tracking — how Nebula handles data", true) {
+            SettingsRow(Icons.Filled.Shield, "Privacy Policy", "No email, no tracking. How Nebula handles data", true) {
                 // many TVs have no browser: say where to read it rather than do nothing
                 runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.rifflehq.in/privacy.html"))) }
-                    .onFailure { Toasts.show("No web browser on this device — read it at play.rifflehq.in/privacy.html") }
+                    .onFailure { Toasts.show("No web browser on this device. Read it at play.rifflehq.in/privacy.html") }
             }
             SettingsRow(Icons.Filled.Info, "Nebula for Android", "v$version · plays every add-on format, on-device", false, null)
         }
@@ -5387,7 +5387,7 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
                 LaunchedEffect(Prefs.relay) { Relay.refresh(ctx) }
                 SettingsChips(
                     "Play through your PC",
-                    Relay.status.ifEmpty { "A computer on your network that is sharing fetches and holds the video for this TV — far more than the TV's own memory can" },
+                    Relay.status.ifEmpty { "A computer on your network that is sharing fetches and holds the video for this TV, far more than the TV's own memory can" },
                     listOf("auto" to "Auto", "off" to "Off"), Prefs.relay,
                     divider = false,
                 ) { Prefs.setRelay(ctx, it) }
@@ -5428,7 +5428,7 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
             ) { Prefs.setSkipIntro(ctx, it) }
             SettingsChips(
                 "Content advisory",
-                "What a film or show contains — violence, language, frightening scenes, nudity, drink and drugs — shown for a few seconds as it starts · From public viewer ratings, looked up by title",
+                "What a film or show contains (violence, language, frightening scenes, nudity, drink and drugs), shown for a few seconds as it starts · From public viewer ratings, looked up by title",
                 listOf("show" to "Show", "off" to "Off"),
                 if (Prefs.advisory) "show" else "off",
                 divider = all,
@@ -5475,7 +5475,7 @@ private fun SettingsPartyScreen(onBack: () -> Unit, onJoin: (String) -> Unit) {
         PartyPanel(onJoin)
         val c = LocalContext.current
         PartyPrefRow("Share my stream", "When you host, friends play your link. Off: each plays the same file from their own add-ons, and your link (with any debrid key in it) stays here.", Prefs.partyShare) { Prefs.setPartyShare(c, it) }
-        PartyPrefRow("Use my own add-ons", "When you join, look for the host's file in your add-ons first — the host's link if none has it.", Prefs.partyOwn) { Prefs.setPartyOwn(c, it) }
+        PartyPrefRow("Use my own add-ons", "When you join, look for the host's file in your add-ons first, the host's link if none has it.", Prefs.partyOwn) { Prefs.setPartyOwn(c, it) }
     }
 }
 
@@ -6253,7 +6253,7 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
                     st.fetched = it.size
                     // stop paging on an empty page, or when the catalog never advertised `skip`
                     st.pageDone = it.isEmpty() || !c.skip
-                    status = if (it.isEmpty()) "No items." else "${it.size} items" + (if (st.pageDone) "" else " — scroll for more")
+                    status = if (it.isEmpty()) "No items." else "${it.size} items" + (if (st.pageDone) "" else " · scroll for more")
                     loading = false; st.loadedFor = want
                 }
                 .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; status = addonTrouble(it); loading = false; st.loadedFor = null; st.pageDone = true }
@@ -6293,12 +6293,12 @@ private fun CatalogScreen(addon: Addon, initial: CatalogRef?, st: CatalogUiState
                             val fresh = page.filter { seen.add(it.type + ":" + it.id) }
                             if (fresh.isNotEmpty()) items = items + fresh
                             st.pageDone = page.isEmpty() || fresh.isEmpty()
-                            status = "${items.size} items" + (if (st.pageDone) "" else " — scroll for more")
+                            status = "${items.size} items" + (if (st.pageDone) "" else " · scroll for more")
                         }
                         .onFailure {
                             if (it is kotlinx.coroutines.CancellationException) throw it
                             st.pageDone = true
-                            status = "${items.size} items — could not load more"   // not the "scroll for more" it no longer does
+                            status = "${items.size} items · could not load more"   // not the "scroll for more" it no longer does
                         }
                     } finally { st.paging = false }
                     withFrameNanos {}; withFrameNanos {}
@@ -6914,7 +6914,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             if (saving) item(key = "saving") {
                 Text(
                     if (answered && !loading && shown.isEmpty() && sections.isNotEmpty()) "None of these streams can be downloaded. Live, protected and P2P streams stay online."
-                    else if (SeasonDownload.pending?.firstId == item.id) "Choose a source for Season ${SeasonDownload.pending?.season} — the other episodes get the same one"
+                    else if (SeasonDownload.pending?.firstId == item.id) "Choose a source for Season ${SeasonDownload.pending?.season}. The other episodes get the same one"
                     else "Choose a source to download",
                     color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 16.dp).padding(top = 6.dp),
                 )
@@ -6968,7 +6968,7 @@ private fun StreamWaitRow(name: String, slow: Boolean) {
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(name, color = TextC, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(if (slow) "Still looking — some add-ons take up to a minute" else "Looking for streams…",
+            Text(if (slow) "Still looking. Some add-ons take up to a minute" else "Looking for streams…",
                 color = MutedC, fontSize = 12.5.sp, modifier = Modifier.padding(top = 2.dp))
         }
     }
@@ -6985,7 +6985,7 @@ private fun StreamsWaitLine(waiting: List<String>, slow: Boolean) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         CircularProgressIndicator(Modifier.size(13.dp), color = MutedC, strokeWidth = 1.5.dp, trackColor = Color(0x1FFFFFFF))
         Spacer(Modifier.width(9.dp))
-        Text("Still asking $who" + if (slow) " — some add-ons take up to a minute" else "",
+        Text("Still asking $who" + if (slow) " · some add-ons take up to a minute" else "",
             color = MutedC, fontSize = 12.5.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
@@ -7053,7 +7053,7 @@ internal fun addonTrouble(t: Throwable): String {
     return when {
         code != null -> "The add-on answered with an error (HTTP $code)."
         t is org.json.JSONException -> "The add-on’s answer could not be read."
-        t is java.io.IOException -> "Couldn’t reach the add-on — check the connection."
+        t is java.io.IOException -> "Couldn’t reach the add-on. Check the connection."
         else -> "Something went wrong asking the add-on."
     }
 }
@@ -7769,9 +7769,9 @@ private fun PlayerScreen(
             stallWatch.busy = false; stallWatch.offered = true
             if (c != null) { swapOffer = c; swapShownAt = System.currentTimeMillis() }
             else Toasts.show(when (why) {
-                "Keeps stalling" -> "This source keeps stalling — another stream from the list may do better."
-                "Decoding too slowly" -> "This device cannot decode this source smoothly — another stream from the list may."
-                else -> "This device cannot decode this source — another stream from the list may."
+                "Keeps stalling" -> "This source keeps stalling. Another stream from the list may do better."
+                "Decoding too slowly" -> "This device cannot decode this source smoothly. Another stream from the list may."
+                else -> "This device cannot decode this source. Another stream from the list may."
             })
         }
     }
@@ -7847,7 +7847,7 @@ private fun PlayerScreen(
             val s = if (act == null) null else runCatching { DeviceEmbed.open(act, url) }
                 .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
             if (s == null) {
-                error = "This stream's page did not hand over a stream — it may be over, or not available here. Try another stream."
+                error = "This stream's page did not hand over a stream. It may be over, or not available here. Try another stream."
                 offerSwap("Won't play")
                 return@LaunchedEffect
             }
@@ -8076,7 +8076,7 @@ private fun PlayerScreen(
                 if (briefFor[0] == u || !clipNow()) return
                 briefFor[0] = u
                 if (autoNow && autoNext("brief")) return
-                error = "This source sent a short message instead of the film — its service could not hand the file over. Try another stream."
+                error = "This source sent a short message instead of the film. Its service could not hand the file over. Try another stream."
             }
 
             /**
@@ -8100,7 +8100,7 @@ private fun PlayerScreen(
                     if (exo.currentMediaItem?.localConfiguration?.uri?.toString() != cur) return@askFresh   // moved on meanwhile
                     if (fresh == null) { afterFreshLink(e); return@askFresh }
                     ioRetry[0] = 0
-                    Toasts.show("The link stopped working — picked up again on a fresh one")
+                    Toasts.show("The link stopped working. Picked up again on a fresh one")
                     val next = item.buildUpon().setUri(fresh).build()
                     if (pos > 0) exo.setMediaItem(next, pos) else exo.setMediaItem(next)
                     exo.prepare(); exo.playWhenReady = wanted
@@ -8115,7 +8115,7 @@ private fun PlayerScreen(
                 if (!exo.isCurrentMediaItemLive && durNow != C.TIME_UNSET && durNow > 120_000 &&
                     durNow - exo.currentPosition <= 60_000 && exo.currentMediaItem != null) {
                     error = null
-                    Toasts.show("The stream stopped in its last minute — counted as watched")
+                    Toasts.show("The stream stopped in its last minute. Counted as watched")
                     reachedEnd()
                     return
                 }
@@ -8160,7 +8160,7 @@ private fun PlayerScreen(
                     val pos = exo.currentPosition
                     if (!exo.isCurrentMediaItemLive && pos > 0) exo.setMediaItem(item, pos) else exo.setMediaItem(item)
                     exo.prepare()
-                    Toasts.show("Your PC stopped answering — playing direct")
+                    Toasts.show("Your PC stopped answering. Playing direct")
                     return
                 }
                 // A reading failure (Media3's 2xxx after its own quick retries: the host dropped the connection mid-film, a
@@ -8177,7 +8177,7 @@ private fun PlayerScreen(
                         val pos = exo.currentPosition
                         val live = exo.isCurrentMediaItemLive
                         val wanted = exo.playWhenReady
-                        if (n == 0) Toasts.show("The connection dropped — picking up where it was")
+                        if (n == 0) Toasts.show("The connection dropped. Picking up where it was")
                         scope.launch {
                             delay(longArrayOf(2_000, 5_000, 10_000)[n])
                             if (exo.currentMediaItem?.localConfiguration?.uri != item.localConfiguration?.uri) return@launch
@@ -8206,7 +8206,7 @@ private fun PlayerScreen(
                     runCatching { decoders.selectVideoDecoder(DecoderMode.FFMPEG) }
                     if (!exo.isCurrentMediaItemLive && pos > 0) exo.setMediaItem(item, pos) else exo.setMediaItem(item)
                     exo.prepare(); exo.play()
-                    Toasts.show("This device's video chip could not decode this picture — decoding on the processor instead")
+                    Toasts.show("This device's video chip could not decode this picture. Decoding on the processor instead")
                     // whether the processor keeps up is the dropped-frame watch's to say (LaunchedEffect(url) above)
                     return
                 }
@@ -8241,7 +8241,7 @@ private fun PlayerScreen(
                     val av1 = tracks.groups.any { g -> g.type == C.TRACK_TYPE_VIDEO && g.isSelected &&
                         (0 until g.length).any { g.isTrackSelected(it) && g.getTrackFormat(it).sampleMimeType == MimeTypes.VIDEO_AV1 } }
                     if (av1) {
-                        softDecode = true; softWhy = "AV1 — this device has no AV1 chip, so the fast software decoder"
+                        softDecode = true; softWhy = "AV1: this device has no AV1 chip, so the fast software decoder"
                         runCatching { decoders.selectVideoDecoder(DecoderMode.FFMPEG) }
                     }
                 }
@@ -8461,7 +8461,7 @@ private fun PlayerScreen(
                 soundLine = NightMode.soundLine(Prefs.night, night.active),
                 decoderLine = when {
                     softDecode -> "on the processor ($softWhy)"
-                    isSoftwareDecoderName(videoDecoderName) -> "on the processor (${videoDecoderName}) — this device's chip cannot"
+                    isSoftwareDecoderName(videoDecoderName) -> "on the processor (${videoDecoderName}): this device's chip cannot"
                     else -> null
                 },
                 stalls = stallWatch.total,
@@ -8548,7 +8548,7 @@ private fun PlayerScreen(
         val all = overlayCues
         if (all == null) {
             val streamText = exo.currentTracks.groups.any { it.type == C.TRACK_TYPE_TEXT && it.isSelected }
-            Toasts.show(if (streamText) "These subtitles come inside the video — move them with the nudges." else "Turn subtitles on first, then pick a line.")
+            Toasts.show(if (streamText) "These subtitles come inside the video. Move them with the nudges." else "Turn subtitles on first, then pick a line.")
             return
         }
         val lines = PickLines.lines(all.map { c -> PickSeg(c.startUs / 1000L, c.endUs / 1000L, c.cues.map { it.text?.toString() ?: "" }) })
@@ -8754,7 +8754,7 @@ private fun PlayerScreen(
                         android.content.DialogInterface.BUTTON_NEUTRAL, if (Prefs.night) "Night mode · On" else "Night mode · Off",
                     ) { _, _ ->
                         Prefs.setNight(context, !Prefs.night)
-                        Toasts.show(if (Prefs.night) "Night mode on — loud moments quieter, quiet voices lifted." else "Night mode off.")
+                        Toasts.show(if (Prefs.night) "Night mode on: loud moments quieter, quiet voices lifted." else "Night mode off.")
                     }
                 }
                 .show()
@@ -9109,7 +9109,7 @@ private fun PlayerScreen(
             onNext = { nextEpisode?.let { upnextCounting = false; autoRun = 0; onPlayNext(it) } },
             onParty = {
                 if (partyUi.active()) { partyUi.panelOpen = !partyUi.panelOpen; if (partyUi.panelOpen) { partyUi.unread = 0; partyUi.feed.clear() } }
-                else if (P2p.isLocal(url)) Toasts.show("A P2P stream plays only on this device — a party cannot follow it.")
+                else if (P2p.isLocal(url)) Toasts.show("A P2P stream plays only on this device. A party cannot follow it.")
                 else onPartyStart(partyDesc())
                 chromeTouchedAt = System.currentTimeMillis()
             },
@@ -9117,7 +9117,7 @@ private fun PlayerScreen(
                 partyUi.code?.let { c ->
                     val send = Intent(Intent.ACTION_SEND).apply {
                         setType("text/plain")
-                        putExtra(Intent.EXTRA_TEXT, "Watch with me on Nebula — join party $c: https://play.rifflehq.in/?party=$c")
+                        putExtra(Intent.EXTRA_TEXT, "Watch with me on Nebula. Join party $c: https://play.rifflehq.in/?party=$c")
                     }
                     runCatching { context.startActivity(Intent.createChooser(send, "Invite to watch party")) }
                 }
@@ -9199,7 +9199,7 @@ private fun PlayerScreen(
                         partyUi.code?.let { c ->
                             val send = Intent(Intent.ACTION_SEND).apply {
                                 setType("text/plain")
-                                putExtra(Intent.EXTRA_TEXT, "Watch with me on Nebula — join party $c: https://play.rifflehq.in/?party=$c")
+                                putExtra(Intent.EXTRA_TEXT, "Watch with me on Nebula. Join party $c: https://play.rifflehq.in/?party=$c")
                             }
                             runCatching { context.startActivity(Intent.createChooser(send, "Invite to watch party")) }
                         }
@@ -9214,7 +9214,7 @@ private fun PlayerScreen(
                     onLeave = { onPartyLeave() },
                     onEnd = { partyUi.ending = true; partyUi.session?.endAll() },
                     onAskYes = { partyUi.ask?.let { partySwitch(it); Toasts.show("The party is watching this with you now") } },
-                    onAskNo = { partyUi.ask = null; Toasts.show("The party keeps watching its title — play it again to rejoin them") },
+                    onAskNo = { partyUi.ask = null; Toasts.show("The party keeps watching its title. Play it again to rejoin them") },
                     onReact = { e -> partyUi.session?.sendReact(e); partyUi.react(e, "") },
                     modifier = Modifier.align(Alignment.CenterEnd).padding(end = 20.dp, top = 70.dp, bottom = 20.dp),
                 )

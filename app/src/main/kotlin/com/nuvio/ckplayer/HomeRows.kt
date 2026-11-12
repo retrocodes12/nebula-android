@@ -237,7 +237,7 @@ internal fun SettingsHomeRowsScreen(onBack: () -> Unit) {
         }
         val list = items
         when {
-            addons.isEmpty() -> item { Text("Add an add-on first — its catalogs become rows here.", color = MutedC, fontSize = 14.sp) }
+            addons.isEmpty() -> item { Text("Add an add-on first. Its catalogs become rows here.", color = MutedC, fontSize = 14.sp) }
             list == null -> item { Text("Loading your add-ons…", color = MutedC, fontSize = 14.sp) }
             failed -> item {
                 Column(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -245,7 +245,7 @@ internal fun SettingsHomeRowsScreen(onBack: () -> Unit) {
                     Chip("Retry", false) { items = null; attempt++ }
                 }
             }
-            list.isEmpty() -> item { Text("Nothing to arrange yet — your add-ons have no catalogs.", color = MutedC, fontSize = 14.sp) }
+            list.isEmpty() -> item { Text("Nothing to arrange yet. Your add-ons have no catalogs.", color = MutedC, fontSize = 14.sp) }
             else -> itemsIndexed(list, key = { _, r -> r.key }) { i, row ->
                 // read from composition, so a toggle repaints this row
                 val on = HomeRows.version.let { _ -> HomeRows.visible(ctx, row.key, row.nat) }

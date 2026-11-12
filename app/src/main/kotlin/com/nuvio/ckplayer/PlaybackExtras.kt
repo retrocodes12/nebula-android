@@ -57,7 +57,7 @@ internal fun PlaybackExtrasGroup() {
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         refused = !ok
         if (ok) Prefs.setNewEpisodes(ctx, true)
-        else Toasts.show("Nebula may not post notifications — allow them in the phone's settings to get new-episode alerts.")
+        else Toasts.show("Nebula may not post notifications. Allow them in the phone's settings to get new-episode alerts.")
     }
     val blocked = refused || (Prefs.newEpisodes && !NewEpisodes.canNotify(ctx))
     SettingsHeader("NEW EPISODES", "Word when a show you follow has more")

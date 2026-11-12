@@ -82,7 +82,7 @@ object StreamCards {
         Design("compact", "Compact", "Marks and sources, no file name", Spec(dense = true, service = false, file = false)),
         Design("line", "One line", "Quality, title, size and the add-on",
             Spec(layout = "row", dense = true, seeds = false, marks = false, langs = false, service = false, file = false)),
-        Design("minimal", "Minimal", "Quality, title and size — nothing else",
+        Design("minimal", "Minimal", "Quality, title and size, nothing else",
             Spec(layout = "row", dense = true, tags = false, seeds = false, marks = false, langs = false, addon = false,
                 service = false, play = false, file = false)),
         Design("classic", "Classic", "The quality plate in front", null),

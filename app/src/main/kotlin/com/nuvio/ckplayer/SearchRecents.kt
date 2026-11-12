@@ -81,7 +81,7 @@ internal fun SearchIdle(ctx: Context, addons: List<Addon>, onRecent: (String) ->
             color = MutedC, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.6.sp,
         )
         Text(
-            if (addons.isEmpty()) "Add an add-on first — then one search covers everything it has."
+            if (addons.isEmpty()) "Add an add-on first, then one search covers everything it has."
             else "Titles, series and episodes from every add-on you have added, in one place.",
             color = MutedC, fontSize = 15.sp, lineHeight = 22.sp, modifier = Modifier.padding(top = 8.dp, bottom = 16.dp),
         )

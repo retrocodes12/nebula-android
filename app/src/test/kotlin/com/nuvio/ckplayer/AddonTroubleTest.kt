@@ -13,8 +13,8 @@ class AddonTroubleTest {
 
     @Test fun networkAndParseFailuresAreSentences() {
         val offline = addonTrouble(java.net.UnknownHostException("Unable to resolve host \"v3-cinemeta.strem.io\": No address associated with hostname"))
-        assertEquals("Couldn’t reach the add-on — check the connection.", offline)
-        assertEquals("Couldn’t reach the add-on — check the connection.", addonTrouble(java.net.SocketTimeoutException("timeout")))
+        assertEquals("Couldn’t reach the add-on. Check the connection.", offline)
+        assertEquals("Couldn’t reach the add-on. Check the connection.", addonTrouble(java.net.SocketTimeoutException("timeout")))
         val page = addonTrouble(org.json.JSONException("Value <!DOCTYPE of type java.lang.String cannot be converted to JSONObject"))
         assertEquals("The add-on’s answer could not be read.", page)
         assertFalse(page.contains("DOCTYPE"))

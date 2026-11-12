@@ -168,7 +168,7 @@ object P2p {
                 ?: return@withContext fail("There is no video inside that torrent.")
             val size = files.fileSize(index)
             val free = runCatching { StatFs(dir.absolutePath).availableBytes }.getOrDefault(Long.MAX_VALUE)
-            if (size > free - FREE_MARGIN) return@withContext fail("Not enough free space — that file is ${fmtSize(size)}.")
+            if (size > free - FREE_MARGIN) return@withContext fail("Not enough free space. That file is ${fmtSize(size)}.")
             stage = "Starting the download"
             val priorities = Priority.array(Priority.IGNORE, files.numFiles())
             priorities[index] = Priority.TOP_PRIORITY

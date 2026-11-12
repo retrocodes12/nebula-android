@@ -41,7 +41,7 @@ object Account {
     /** User-facing text for a failed call — the server's error strings, translated once, here. */
     fun errorText(e: Throwable?, fallback: String = "Could not reach the server."): String {
         val f = e as? Cloud.HttpFail ?: return fallback
-        if (f.code == 429) return "Too many tries — give it a minute."
+        if (f.code == 429) return "Too many tries. Give it a minute."
         return when (f.error) {
             "handle taken" -> "That handle is taken."
             "bad handle" -> "Handles are 3–20 letters, numbers or underscores."
@@ -49,15 +49,15 @@ object Account {
             "wrong handle or password" -> "Wrong handle or password."
             "wrong handle or key" -> "That handle and recovery key don’t match."
             "wrong password" -> "Wrong password."
-            "already has a profile" -> "This device already belongs to a profile — it will show up in a moment."
-            "code not found or expired" -> "That code was not found — it may have expired."
-            "code not found" -> "That code was not found — check it against the thank-you note."
+            "already has a profile" -> "This device already belongs to a profile. It will show up in a moment."
+            "code not found or expired" -> "That code was not found. It may have expired."
+            "code not found" -> "That code was not found. Check it against the thank-you note."
             "already a supporter" -> "You're already a supporter."
             "not a supporter" -> "Only supporters have a wall entry."
-            "no profile" -> "Sign in first — the supporter mark lives on your profile."
+            "no profile" -> "Sign in first. The supporter mark lives on your profile."
             "vote needs plus" -> "The vote is for Supporter Plus, Founders and Monthly supporters."
             "no vote open" -> "This vote has closed."
-            "unknown option" -> "That choice is no longer on the ballot — the vote was updated."
+            "unknown option" -> "That choice is no longer on the ballot. The vote was updated."
             "unauthorized" -> "This device was signed out. Sign in again."
             else -> "Something went wrong (${f.code})."
         }

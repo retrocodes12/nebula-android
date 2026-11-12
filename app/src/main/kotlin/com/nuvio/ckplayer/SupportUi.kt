@@ -117,7 +117,7 @@ internal fun SettingsSupportScreen(onBack: () -> Unit, onProfile: () -> Unit) {
                         busy = false
                         if (err == null) {
                             code = ""; status = ""
-                            Toasts.show("You're a ${Support.tierName()} — thank you. " +
+                            Toasts.show("You're a ${Support.tierName()}. Thank you. " +
                                 (if (Support.rank() >= 2) "Any colour is yours in Appearance." else "Three more accents are yours in Appearance."))
                         } else {
                             status = err
@@ -217,7 +217,7 @@ private fun SupporterPass(me: Profile, rank: Int) {
             if (plan.isNotEmpty()) PassFact("Plan", plan)
         }
         Text(
-            "Thank you — this is what keeps Nebula going.", color = MutedC, fontSize = 14.sp, lineHeight = 20.sp,
+            "Thank you. This is what keeps Nebula going.", color = MutedC, fontSize = 14.sp, lineHeight = 20.sp,
             modifier = Modifier.padding(top = 18.dp),
         )
     }
@@ -320,7 +320,7 @@ private fun TvSupportAddress() {
             .padding(horizontal = 16.dp, vertical = 16.dp),
     )
     Text(
-        "Open it on your phone — it takes a minute." +
+        "Open it on your phone. It takes a minute." +
             (if (Cloud.profile != null) " Sign in there with the same profile, or type the code it gives you here." else ""),
         color = MutedC, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 10.dp),
     )
@@ -374,7 +374,7 @@ private fun SupportCodePanel(
         if (open) Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 16.dp)) {
             if (signedIn) {
                 Text(
-                    "One code, typed once on any signed-in device — the mark follows your profile.",
+                    "One code, typed once on any signed-in device. The mark follows your profile.",
                     color = MutedC, fontSize = 13.sp, lineHeight = 19.sp, modifier = Modifier.padding(bottom = 12.dp),
                 )
                 PField(code, onCode, "NEB-XXXX-XXXX", caps = true, last = true, onDone = onRedeem)
@@ -382,7 +382,7 @@ private fun SupportCodePanel(
                 SupportCta(if (busy) "Checking…" else "Redeem", enabled = !busy, onClick = onRedeem)
             } else {
                 Text(
-                    "Sign in first — the supporter mark lives on your profile, so it follows you to every device.",
+                    "Sign in first. The supporter mark lives on your profile, so it follows you to every device.",
                     color = MutedC, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(bottom = 12.dp),
                 )
                 SupportCta("Sign in", onClick = onProfile)

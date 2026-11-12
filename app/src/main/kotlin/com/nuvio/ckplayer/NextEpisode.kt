@@ -284,7 +284,7 @@ object NextEp {
                 val same = pf == null || StreamTwin.isTwin(pick, pf, r.addon)
                 (if (same) "" else "Closest match · ") + StreamTwin.label(StreamTwin.sig(pick, r.addon)) + (if (same) " · Ready" else "")
             }
-            r.failed -> "No stream found yet — Play opens the list"
+            r.failed -> "No stream found yet. Play opens the list"
             else -> "Finding a stream…"
         }
     }

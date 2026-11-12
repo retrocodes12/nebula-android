@@ -241,7 +241,7 @@ internal fun SettingsStreamsScreen(onBack: () -> Unit) {
         run {
             SettingsHeader("AUTOPLAY THE BEST STREAM", "Play starts the film, not the list")
             SettingsGroup {
-                SettingsToggle("Autoplay the best stream", "Play on a film or episode starts its best stream — no list", Prefs.bestPlay,
+                SettingsToggle("Autoplay the best stream", "Play on a film or episode starts its best stream, no list", Prefs.bestPlay,
                     divider = Prefs.bestPlay) { Prefs.setBestPlay(ctx, it) }
                 if (Prefs.bestPlay) {
                     SettingsChips("Aim for", "The best quality worth starting · higher ones come after it",
@@ -299,7 +299,7 @@ internal fun SettingsAdvancedScreen(onBack: () -> Unit, onClearCache: () -> Unit
                 Prefs.welcome, divider = false,
             ) { Prefs.setWelcome(ctx, it) }
         }
-        SettingsHeader("RESET", "Settings and caches only — nothing you added or watched")
+        SettingsHeader("RESET", "Settings and caches only, nothing you added or watched")
         SettingsGroup {
             SettingsRow(Icons.Filled.RestartAlt, "Reset all settings", "Every choice in Settings, back to how it came · asks first", true) { confirm = true }
             SettingsRow(Icons.Filled.DeleteSweep, "Clear cached artwork and add-on lists", "Pictures and add-on catalog lists are fetched fresh", false) {

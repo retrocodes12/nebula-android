@@ -70,7 +70,7 @@ object Social {
 
     /** Turns Friends on. A profile IS the identity friends look for, so one is required. */
     suspend fun enable(ctx: Context): String? {
-        val p = Cloud.profile ?: return "Friends find each other by @handle — sign in or create a profile first."
+        val p = Cloud.profile ?: return "Friends find each other by @handle. Sign in or create a profile first."
         return runCatching {
             val r = Cloud.api(ctx, "POST", "/v1/social/enable", JSONObject().put("name", displayName(ctx)))
             on = true; code = jstr(r, "code"); handle = jstr(r, "handle").ifEmpty { p.handle }; store(ctx)

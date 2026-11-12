@@ -61,7 +61,7 @@ object Support {
     internal fun subStatusText(status: String): String = when (status) {
         "trialing" -> "Free week"
         "active" -> "Active"
-        "past_due" -> "Payment failed — update your card"
+        "past_due" -> "Payment failed. Update your card"
         "paused" -> "Paused"
         else -> ""
     }
@@ -109,7 +109,7 @@ object Support {
 
     /** Redeem a supporter code on this profile. Null on success, else a line to show. */
     suspend fun redeem(ctx: Context, codeRaw: String): String? {
-        if (Cloud.profile == null) return "Sign in first — the supporter mark lives on your profile."
+        if (Cloud.profile == null) return "Sign in first. The supporter mark lives on your profile."
         val code = normCode(codeRaw)
         if (code.isEmpty()) return "A code looks like NEB-XXXX-XXXX."
         return runCatching {

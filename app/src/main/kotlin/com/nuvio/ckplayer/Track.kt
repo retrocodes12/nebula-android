@@ -250,7 +250,7 @@ internal object Track {
                         true to TrackWire.cleanName(o?.optString("username").orEmpty().ifEmpty { o?.optString("name").orEmpty() })
                     }
                     r.code == 401 || r.code == 403 -> false to "MDBList does not know that key"
-                    r.code == 429 -> false to "Too many tries — wait a minute"
+                    r.code == 429 -> false to "Too many tries. Wait a minute"
                     else -> false to "Could not reach MDBList"
                 }
             }
@@ -298,7 +298,7 @@ internal object Track {
     private suspend fun dropped(ctx: Context, svc: String, gone: TrackAuth) {
         withContext(Dispatchers.Main) {
             put(ctx, if (svc == "trakt") doc.copy(trakt = gone) else doc.copy(simkl = gone))
-            Toasts.show((if (svc == "trakt") "Trakt" else "Simkl") + " asks you to connect again — Settings › Playback")
+            Toasts.show((if (svc == "trakt") "Trakt" else "Simkl") + " asks you to connect again: Settings › Playback")
         }
     }
 
@@ -370,7 +370,7 @@ internal object Track {
         val (code, _) = post("$MDBL/scrobble/$event".toHttpUrl().newBuilder().addQueryParameter("apikey", key).build(), body.toString().toRequestBody(JSON_MT))
         if ((code == 401 || code == 403) && !warnedMdbl) {
             warnedMdbl = true
-            withContext(Dispatchers.Main) { Toasts.show("MDBList refused your key — check it in Settings › Playback") }
+            withContext(Dispatchers.Main) { Toasts.show("MDBList refused your key. Check it in Settings › Playback") }
         }
     }
 }

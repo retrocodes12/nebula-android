@@ -345,6 +345,6 @@ object Updates {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         return if (runCatching { context.startActivity(intent) }.isSuccess) null
-        else "No installer opened — get the update with Downloader (code 7664693) instead"
+        else "No installer opened. Get the update with Downloader (code 7664693) instead"
     }
 }

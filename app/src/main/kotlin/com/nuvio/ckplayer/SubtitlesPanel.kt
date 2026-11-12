@@ -371,7 +371,7 @@ private fun StyleColumn(
             Row(Modifier.padding(top = 8.dp)) {
                 GlassPill("Pick the line you just heard", modifier = Modifier.focusRequester(pickFocus), onClick = onPickLine)
             }
-            if (canShift) Note("Words early or late? Pick the line you just heard and the subtitles move to match it — then nudge if needed.", top = 6.dp)
+            if (canShift) Note("Words early or late? Pick the line you just heard and the subtitles move to match it, then nudge if needed.", top = 6.dp)
             else Note("Timing can be nudged for add-on subtitles; the stream's own tracks cannot be shifted.", top = 6.dp)
             Eyebrow("Appearance", Modifier.padding(top = 14.dp), Label2)
             SubStyleRows(ctx, style, Modifier.padding(top = 4.dp), arrows = false)

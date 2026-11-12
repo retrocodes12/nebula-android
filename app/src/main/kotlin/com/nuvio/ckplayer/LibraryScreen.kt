@@ -293,7 +293,7 @@ private fun UpcomingTab(items: List<LibItem>, up: List<Library.UpRow>?, onPlayEp
                                 val notOut = row.time > System.currentTimeMillis()
                                 Text(
                                     tag + (if (row.ep.name.isNotEmpty()) "  ${row.ep.name}" else "") +
-                                        (if (notOut) " — not out yet" else ""),
+                                        (if (notOut) " · not out yet" else ""),
                                     color = MutedC, fontSize = 12.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                                     fontFamily = Mono, modifier = Modifier.padding(top = 3.dp),
                                 )

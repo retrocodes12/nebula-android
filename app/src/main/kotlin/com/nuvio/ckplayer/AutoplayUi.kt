@@ -166,8 +166,8 @@ internal fun autoplayMenu(cur: String, cfg: Autoplay.Cfg, rows: List<Pair<Stream
         if (labels.count { it == labels[i] } > 1) runCatching { java.net.URI(s.url).host?.removePrefix("www.") }.getOrNull()
             ?.takeIf { it.isNotEmpty() }?.let { label += " · $it" }
         label += when {
-            s.url != cur && s.url in AutoplayRun.failed -> " — did not play"
-            Autoplay.debrid(s) == Autoplay.Debrid.WAIT -> " — not ready yet"
+            s.url != cur && s.url in AutoplayRun.failed -> " · did not play"
+            Autoplay.debrid(s) == Autoplay.Debrid.WAIT -> " · not ready yet"
             else -> ""
         }
         label to s.url

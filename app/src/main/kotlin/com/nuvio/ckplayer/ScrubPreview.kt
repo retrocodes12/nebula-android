@@ -101,7 +101,7 @@ internal class ScrubPreview(private val url: String, ctx: Context) {
         private const val NEIGHBOUR_MS = 5 * 60_000L // how far around a moving finger the plan is pulled forward
         const val WAITING = "Waiting"
         const val READY = "Ready"
-        const val UNAVAILABLE = "Unavailable — "
+        const val UNAVAILABLE = "Unavailable: "
 
         /** A plain http(s) file — not a manifest (which also rules out ClearKey: keys ride on .mpd here). */
         fun eligible(url: String): Boolean {

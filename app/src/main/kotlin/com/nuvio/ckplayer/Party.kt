@@ -264,7 +264,7 @@ class PartySession(
                     if (!established && !closed && System.currentTimeMillis() < retryUntil) {
                         if (!wakeToastShown) {
                             wakeToastShown = true
-                            scope.launch { onEvent(PartyEvent.Error("Waking the party server — hang on…")) }
+                            scope.launch { onEvent(PartyEvent.Error("Waking the party server. Hang on…")) }
                         }
                         scope.launch { delay(5000); attempt() }
                     } else gone()

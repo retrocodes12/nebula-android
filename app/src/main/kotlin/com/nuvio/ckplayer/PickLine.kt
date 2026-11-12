@@ -123,5 +123,5 @@ internal object PickLines {
 
     /** The note over the list. */
     fun note(paused: Boolean): String =
-        (if (paused) "Paused here. " else "") + "Pick the line that was just said — the subtitles move to match it."
+        (if (paused) "Paused here. " else "") + "Pick the line that was just said. The subtitles move to match it."
 }

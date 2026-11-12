@@ -154,7 +154,7 @@ internal fun AppIconSection() {
                                 if (on) return@clickable
                                 if (AppIcons.choose(ctx, ic.key)) {
                                     cur = ic.key
-                                    Toasts.show("${ic.label} it is — your home screen shows it once you leave Nebula.")
+                                    Toasts.show("${ic.label} it is. Your home screen shows it once you leave Nebula.")
                                 } else Toasts.show("This phone would not change the icon.")
                             }.padding(vertical = 6.dp),
                     ) {
@@ -168,7 +168,7 @@ internal fun AppIconSection() {
                 }
             }
             Text(
-                "The new icon takes over when you leave Nebula. Some launchers move it off the home screen — it stays in your app list.",
+                "The new icon takes over when you leave Nebula. Some launchers move it off the home screen. It stays in your app list.",
                 color = FaintC, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 12.dp),
             )
         }

@@ -62,7 +62,7 @@ internal fun SeekrSettings() {
             }
         }
     }
-    SettingsHeader("SEEKR PREVIEWS", "Your own free key from seekr.tv — instant pictures while you scrub films and episodes")
+    SettingsHeader("SEEKR PREVIEWS", "Your own free key from seekr.tv: instant pictures while you scrub films and episodes")
     SettingsGroup {
         Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
             if (Seekr.key.isNotEmpty()) {
