@@ -182,12 +182,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.113.0.apk
+          cp "$APK" Nebula-1.113.1.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.113.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.113.0 Nebula-1.113.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.113.0" \
-            --notes "New: the bar at the bottom is glass, and it moves. On a phone with Android 12 or later the bar lets the page show through, frosted. The lit tab is one shape: tap a tab and it lifts out of the bar, travels there and settles; drag along the bar and it goes with your finger. Lists give a little at their ends and spring back. Settings › Appearance › Bottom bar turns the glass off; Motion: Reduced keeps everything still."
+          gh release delete v1.113.1 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.113.1 Nebula-1.113.1.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.113.1" \
+            --notes "Fixes: a stream that opens through its own page no longer closes the app if that page runs out of memory, a watch party's reactions float smoothly, and small clean-ups under the hood."
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
