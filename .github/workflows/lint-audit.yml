@@ -34,11 +34,11 @@ jobs:
               where = ''
               if loc is not None:
                   where = (loc.get('file','').split('/')[-1] + ':' + (loc.get('line') or '?'))
-              buckets[sev].append((it.get('id'), where, (it.get('message') or '')[:150]))
+              buckets[sev].append((it.get('id'), where, (it.get('message') or '')[:230]))
           for sev in ('Fatal','Error','Warning'):
               rows = buckets.get(sev, [])
               print('\n===== %s (%d) =====' % (sev, len(rows)))
-              for i, (iid, where, msg) in enumerate(rows[:40]):
+              for i, (iid, where, msg) in enumerate(rows[:400]):
                   print(' %-26s %-34s %s' % (iid, where, msg))
-              if len(rows) > 40: print('  ... %d more' % (len(rows)-40))
+              if len(rows) > 400: print('  ... %d more' % (len(rows)-400))
           PY
