@@ -94,6 +94,8 @@ object Prefs {
     val focusScale: Float get() = when (focusZoom) { "subtle" -> 1.04f; "bold" -> 1.14f; else -> 1.09f }
     var motion by mutableStateOf("full"); private set             // full / reduced
     val reducedMotion: Boolean get() = motion == "reduced"
+    var navBar by mutableStateOf("glass"); private set            // glass / solid (a phone's bottom bar, Android 12+)
+    val glassBar: Boolean get() = navBar == "glass"
     var posterScale by mutableStateOf(1.0f); private set          // 0.85 / 1.0 / 1.18 — the card size
     var cardCorners by mutableStateOf("rounded"); private set     // square / rounded / round
     var posterLabels by mutableStateOf("both"); private set       // both (title and year) / title / none
@@ -196,6 +198,7 @@ object Prefs {
         font = p.getString("pref_font", "geist") ?: "geist"
         focusZoom = p.getString("pref_zoom", "standard") ?: "standard"
         motion = p.getString("pref_motion", "full") ?: "full"
+        navBar = p.getString("pref_navbar", "glass") ?: "glass"
         posterScale = p.getFloat("pref_poster", 1.0f)
         cardCorners = p.getString("pref_corners", "rounded") ?: "rounded"
         posterLabels = p.getString("pref_labels", "both") ?: "both"
@@ -294,6 +297,7 @@ object Prefs {
     fun setFont(ctx: Context, v: String) { font = v; edit(ctx).putString("pref_font", v).apply() }
     fun setFocusZoom(ctx: Context, v: String) { focusZoom = v; edit(ctx).putString("pref_zoom", v).apply() }
     fun setMotion(ctx: Context, v: String) { motion = v; edit(ctx).putString("pref_motion", v).apply() }
+    fun setNavBar(ctx: Context, v: String) { navBar = v; edit(ctx).putString("pref_navbar", v).apply() }
     fun setPosterScale(ctx: Context, v: Float) { posterScale = v; edit(ctx).putFloat("pref_poster", v).apply() }
     fun setCardCorners(ctx: Context, v: String) { cardCorners = v; edit(ctx).putString("pref_corners", v).apply() }
     fun setPosterLabels(ctx: Context, v: String) { posterLabels = v; edit(ctx).putString("pref_labels", v).apply() }

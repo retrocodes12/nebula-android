@@ -1065,7 +1065,12 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
     // Text size (Settings › Appearance) scales every sp in the app on top of the device's own setting
     val baseDensity = LocalDensity.current
     val density = Density(baseDensity.density, baseDensity.fontScale * Prefs.textScale)
-    CompositionLocalProvider(LocalDensity provides density) {
+    // A phone's lists give at their ends and spring back (Rubber.kt) — every list, sheet and row under here. A TV
+    // (a remote does not pull) and Motion: Reduced keep the platform's own edge.
+    val rootCtx = LocalContext.current
+    val edges = if (remember(rootCtx) { Account.isTv(rootCtx) } || Prefs.reducedMotion)
+        androidx.compose.foundation.LocalOverscrollFactory.current else RubberOverscrollFactory
+    CompositionLocalProvider(LocalDensity provides density, androidx.compose.foundation.LocalOverscrollFactory provides edges) {
     MaterialTheme(colorScheme = DarkColors, typography = NebulaTypography) {
         Surface(Modifier.fillMaxSize(), color = Bg) {
             var stack by remember { mutableStateOf(listOf<Screen>(Screen.Home)) }
@@ -1692,12 +1697,14 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                 val navFold = rememberNavFold()
                 // another tab, or a screen come back to, starts with the pill whole
                 LaunchedEffect(current) { navFold.open() }
+                // the page as drawn, kept for the nav's glass to frost (LiquidNav.kt): a phone on Android 12 or later
+                val pageBackdrop = rememberPageBackdrop(on = !isTv && Prefs.glassBar)
                 Row(Modifier.fillMaxSize()) {
                     if (rail) SideRail(current, onTab = { setTab(it) })
                     Box(Modifier.weight(1f).fillMaxHeight().then(if (isTv) Modifier else Modifier.nestedScroll(navFold.connection))) {
                         AnimatedContent(
                             targetState = current,
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier.fillMaxSize().pageBackdrop(pageBackdrop, on = onNav),
                             // the in-place episode hop (Play → Play) keeps the same player composition, so it is not a
                             // change here
                             contentKey = { s -> if (s is Screen.Play) "play" else s },
@@ -2042,10 +2049,13 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                                     }
                                     .drawBehind {
                                         if (size.height <= 0f) return@drawBehind
+                                        // under glass the page stays in sight round the bar and only dims towards
+                                        // the edge — the frost is what keeps a title from running under the names
+                                        val glass = pageBackdrop != null
                                         drawRect(Brush.verticalGradient(
                                             0f to Color.Transparent,
-                                            fadePx / size.height to Bg.copy(alpha = 0.86f),
-                                            1f to Bg,
+                                            fadePx / size.height to Bg.copy(alpha = if (glass) 0.34f else 0.86f),
+                                            1f to Bg.copy(alpha = if (glass) 0.62f else 1f),
                                         ))
                                     }
                             )
@@ -2054,7 +2064,8 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                                 modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged { navH = it.height },
                                 folded = navFold.folded && pillMoves,
                                 // focus walked into a folded pill (a keyboard, a switch): the names come back
-                                onFocus = { navFold.open() })
+                                onFocus = { navFold.open() },
+                                backdrop = pageBackdrop)
                         } }
                     }
                 }
@@ -3438,32 +3449,51 @@ internal fun RowHeader(title: String, sub: String?, seeAll: (() -> Unit)?) {
 @Composable
 private fun BottomBar(
     current: Screen, onTab: (Screen) -> Unit, modifier: Modifier = Modifier,
-    folded: Boolean = false, onFocus: () -> Unit = {},
+    folded: Boolean = false, onFocus: () -> Unit = {}, backdrop: PageBackdrop? = null,
 ) {
     val fold = animateFloatAsState(if (folded) 1f else 0f, Motion.Fold, label = "navFold")
     val at = remember(fold) { { fold.value } }
-    Row(
-        modifier
-            .padding(bottom = 14.dp)
-            .clip(RoundedCornerShape(34.dp))
-            .background(Color(0xF0141419))
-            .border(1.dp, Color(0x1FFFFFFF), RoundedCornerShape(34.dp))
-            .onFocusChanged { if (it.hasFocus) onFocus() }
-            .padding(horizontal = 8.dp, vertical = 7.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        TabItem("Home", Icons.Filled.Home, current == Screen.Home, fold = at) { onTab(Screen.Home) }
-        TabItem("Search", Icons.Filled.Search, current == Screen.Search, fold = at) { onTab(Screen.Search) }
-        TabItem("Library", Icons.Filled.Bookmark, current == Screen.Library, fold = at) { onTab(Screen.Library) }
-        TabItem("Settings", Icons.Filled.Settings, current == Screen.Settings, fold = at) { onTab(Screen.Settings) }
-        ProfileTab(current == Screen.Profile, fold = at) { onTab(Screen.Profile) }
+    // The lit tab is one shape that belongs to the bar (LiquidNav.kt): a tap lifts it out as a glass bead and
+    // carries it to its tab, a finger along the bar carries it by hand. Motion: Reduced keeps it a cut.
+    val ctx = LocalContext.current
+    val moves = remember(ctx) { Motion.on(ctx) } && !Prefs.reducedMotion
+    val index = NavTabs.indexOf(current)
+    val pill = remember { LiquidPill(NavTabs.size, index) }
+    LaunchedEffect(index, moves) { pill.show(index, moves) }
+    val density = LocalDensity.current.density
+    val view = LocalView.current
+    LaunchedEffect(pill, density) {
+        pill.run(density) { view.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK) }
+    }
+    val settle by rememberUpdatedState<(Int) -> Unit> { i -> NavTabs.getOrNull(i)?.let { if (it != current) onTab(it) } }
+    Box(modifier.padding(bottom = 14.dp)) {
+        // the bar's body: the page behind it, frosted (Android 12 and later), or the solid plate it always was
+        GlassPlate(backdrop, NavCorner, Modifier.matchParentSize())
+        Row(
+            Modifier
+                .onFocusChanged { if (it.hasFocus) onFocus() }
+                .padding(horizontal = NavPadH, vertical = NavPadV)
+                .liquidDrag(pill, moves) { settle(it) }
+                .liquidPill(pill),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            TabItem("Home", Icons.Filled.Home, current == Screen.Home, Modifier.liquidTab(pill, 0), fold = at, lit = { pill.lit(0) }) { onTab(Screen.Home) }
+            TabItem("Search", Icons.Filled.Search, current == Screen.Search, Modifier.liquidTab(pill, 1), fold = at, lit = { pill.lit(1) }) { onTab(Screen.Search) }
+            TabItem("Library", Icons.Filled.Bookmark, current == Screen.Library, Modifier.liquidTab(pill, 2), fold = at, lit = { pill.lit(2) }) { onTab(Screen.Library) }
+            TabItem("Settings", Icons.Filled.Settings, current == Screen.Settings, Modifier.liquidTab(pill, 3), fold = at, lit = { pill.lit(3) }) { onTab(Screen.Settings) }
+            ProfileTab(current == Screen.Profile, Modifier.liquidTab(pill, 4), fold = at, lit = { pill.lit(4) }) { onTab(Screen.Profile) }
+        }
     }
 }
 
-/** The pill as a test stages it (NavFoldDeviceTest): Home lit, nothing behind a tap. */
+/** The pill's tabs, in the order they sit in it. */
+private val NavTabs = listOf(Screen.Home, Screen.Search, Screen.Library, Screen.Settings, Screen.Profile)
+
+/** The pill as a test stages it (NavFoldDeviceTest, LiquidNavDeviceTest): nothing behind a tap but the tab it names. */
 @Composable
-internal fun NavPillForTest(folded: Boolean, modifier: Modifier = Modifier) =
-    BottomBar(Screen.Home, onTab = {}, modifier = modifier, folded = folded)
+internal fun NavPillForTest(
+    folded: Boolean, modifier: Modifier = Modifier, tab: Int = 0, backdrop: PageBackdrop? = null, onTab: (Int) -> Unit = {},
+) = BottomBar(NavTabs[tab], onTab = { onTab(NavTabs.indexOf(it)) }, modifier = modifier, folded = folded, backdrop = backdrop)
 
 /** The fold at rest: the pill as it always was, and what the TV's rail keeps. */
 private val Unfolded: () -> Float = { 0f }
@@ -3498,6 +3528,13 @@ private fun Modifier.foldLabel(fold: () -> Float): Modifier = this
         transformOrigin = TransformOrigin(0.5f, 1f)
         alpha = ((k - 0.4f) / 0.6f).coerceIn(0f, 1f)
     }
+
+/**
+ * A tab in the phone's pill: dim (the secondary label's weight) away from the selection pill and full white under
+ * it, following the pill as it travels. Nothing on the TV's rail ([lit] null).
+ */
+private fun Modifier.tabGlow(lit: (() -> Float)?, focused: Boolean): Modifier =
+    if (lit == null) this else graphicsLayer { alpha = if (focused) 1f else 0.6f + 0.4f * lit().coerceIn(0f, 1f) }
 
 /**
  * The television's nav.
@@ -3562,22 +3599,26 @@ private fun SideRail(current: Screen, onTab: (Screen) -> Unit) {
 
 /** The nav's last item: the signed-in profile's initial on the accent, a person glyph when nobody is. */
 @Composable
-private fun ProfileTab(on: Boolean, modifier: Modifier = Modifier, fold: () -> Float = Unfolded, onClick: () -> Unit) {
+private fun ProfileTab(
+    on: Boolean, modifier: Modifier = Modifier, fold: () -> Float = Unfolded, lit: (() -> Float)? = null, onClick: () -> Unit,
+) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val p = Cloud.profile
-    val tint = if (on || focused) Color.White else MutedC
+    val tint = if (lit != null || on || focused) Color.White else MutedC
     Column(
         modifier
             .clip(RoundedCornerShape(26.dp))
             .border(1.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(26.dp))
             .clickable(interactionSource = interaction, indication = null) { onClick() }
-            .foldPad(fold),
+            .foldPad(fold)
+            .tabGlow(lit, focused),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
             Modifier.size(32.dp)
-                .border(1.5.dp, if (on) Color.White else Color.Transparent, CircleShape)
+                // the pill's own shape says which tab is lit; the rail has no pill, so there the ring does
+                .border(1.5.dp, if (on && lit == null) Color.White else Color.Transparent, CircleShape)
                 .padding(3.dp)
                 .background(if (p != null) Red else Surface2, CircleShape),
             contentAlignment = Alignment.Center,
@@ -3597,29 +3638,26 @@ private fun ProfileTab(on: Boolean, modifier: Modifier = Modifier, fold: () -> F
 @Composable
 private fun TabItem(
     label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, on: Boolean, modifier: Modifier = Modifier,
-    fold: () -> Float = Unfolded, onClick: () -> Unit,
+    fold: () -> Float = Unfolded, lit: (() -> Float)? = null, onClick: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
-    val tint = if (on || focused) Color.White else MutedC
+    // in the phone's pill ([lit] given) a tab brightens as the pill comes over it, read while drawing; the TV's
+    // rail has no pill and lights the tab that is on
+    val tint = if (lit != null || on || focused) Color.White else MutedC
     Column(
         modifier
             .clip(RoundedCornerShape(26.dp))
             .border(1.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(26.dp))
             .clickable(interactionSource = interaction, indication = null) { onClick() }
-            .foldPad(fold),
+            .foldPad(fold)
+            .tabGlow(lit, focused),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // the lit tab's disc grows into place and the last one's shrinks away (a cut on a TV / Motion: Reduced)
-        val ctx = LocalContext.current
-        val moves = remember(ctx) { Motion.on(ctx) }
-        val lit by animateFloatAsState(if (on) 1f else 0f,
-            if (moves) spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessMediumLow) else tween(0), label = "tab")
+        // the rail's lit tab has a disc behind its icon (a cut on a TV); the pill's lit tab has the pill itself
         val press = pressScale(interaction)
         Box(Modifier.size(32.dp).graphicsLayer { scaleX = press.value; scaleY = press.value }, contentAlignment = Alignment.Center) {
-            if (lit > 0.01f) Box(Modifier.matchParentSize().graphicsLayer {
-                val k = 0.55f + 0.45f * lit; scaleX = k; scaleY = k; alpha = lit.coerceIn(0f, 1f)
-            }.background(Surface2, CircleShape))
+            if (on && lit == null) Box(Modifier.matchParentSize().background(Surface2, CircleShape))
             Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp))
         }
         // one line whatever the font scale (the pill and the TV rail both use this): squeezed, it wrapped a letter at a time
@@ -5232,6 +5270,11 @@ private fun SettingsLayoutScreen(onBack: () -> Unit, onSupport: () -> Unit) {
                     "Focus zoom", "How much a card grows under a remote's focus",
                     listOf("subtle" to "Subtle", "standard" to "Standard", "bold" to "Bold"), Prefs.focusZoom,
                 ) { Prefs.setFocusZoom(ctx, it) }
+                // the glass exists on a phone from Android 12 (LiquidNav.kt); elsewhere there is nothing to choose
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S && !Account.isTv(ctx)) SettingsChips(
+                    "Bottom bar", "Glass lets the page show through · Solid is a plain plate",
+                    listOf("glass" to "Glass", "solid" to "Solid"), Prefs.navBar,
+                ) { Prefs.setNavBar(ctx, it) }
                 SettingsChips(
                     "Motion", "Fades and card growth · Reduced cuts and keeps still",
                     listOf("full" to "Full", "reduced" to "Reduced"), Prefs.motion, divider = false,
