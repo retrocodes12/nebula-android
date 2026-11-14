@@ -51,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -558,17 +559,23 @@ internal fun WhoPicker() {
                 "Who's watching?", color = TextC, fontSize = 32.sp, fontFamily = Sans, fontWeight = FontWeight.Bold,
                 letterSpacing = (-0.8).sp, modifier = Modifier.padding(top = 22.dp),
             )
-            // a phone: two to a row, the Add circle wrapping under them while managing (as the reference); a TV: one
-            // line, the circles smaller once there are more than four
+            // a phone: two to a row, the Add circle wrapping under them while managing (as the reference), and three
+            // smaller ones to a row once there are more than four, so six and the button under them fit one screen;
+            // a TV: one line, the circles smaller past four
             val tiles: List<String> = l.map { it.id } + (if (managing && l.size < Viewers.MAX) listOf("+") else emptyList())
             val many = tiles.size > 4
-            val size = if (tv) (if (many) 100.dp else 132.dp) else 150.dp
+            val wide = LocalConfiguration.current.screenWidthDp.dp
+            val size = when {
+                tv -> if (many) 100.dp else 132.dp
+                many -> ((wide - 48.dp) / 3 - 30.dp).coerceIn(64.dp, 110.dp)
+                else -> 150.dp
+            }
             Column(
-                Modifier.padding(top = if (tv) 40.dp else 64.dp), verticalArrangement = Arrangement.spacedBy(if (tv) 36.dp else 30.dp),
+                Modifier.padding(top = if (tv) 40.dp else if (many) 44.dp else 64.dp), verticalArrangement = Arrangement.spacedBy(if (tv) 36.dp else 30.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                tiles.chunked(if (tv) 7 else 2).forEach { pair ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(if (tv) (if (many) 24.dp else 56.dp) else 28.dp)) {
+                tiles.chunked(if (tv) 7 else if (many) 3 else 2).forEach { pair ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(if (tv) (if (many) 24.dp else 56.dp) else if (many) 8.dp else 28.dp)) {
                         pair.forEach { id ->
                             val v = l.firstOrNull { it.id == id }
                             WhoTile(
