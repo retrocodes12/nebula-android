@@ -1054,7 +1054,7 @@ internal fun saveAddonsRaw(ctx: Context, list: List<Addon>) {
 private fun saveAddons(ctx: Context, list: List<Addon>) {
     val prev = loadAddons(ctx)
     saveAddonsRaw(ctx, list)
-    if (Viewers.current == "b") Viewers.seedDrop(ctx)   // a change by hand: the list is this profile's own now, not a stand-in
+    if (Viewers.current != "a") Viewers.seedDrop(ctx)   // a change by hand: the list is this profile's own now, not a stand-in
     Cloud.noteAddonsDiff(ctx, prev, list)
     Cloud.noteChanged(ctx, "addons")
 }
@@ -4949,7 +4949,7 @@ private fun SettingsScreen(
             )
         }
         ProfileCard(onProfile)
-        WhoSettings()                        // two profiles on the account (Viewers.kt)
+        WhoSettings()                        // up to six profiles on the account (Viewers.kt)
         SettingsHeader("GENERAL", "How Nebula looks, plays and connects")
         SettingsGroup {
             SettingsRow(Icons.Filled.Palette, "Appearance", "Accent, surface, text, font and cards", true, onLayout)

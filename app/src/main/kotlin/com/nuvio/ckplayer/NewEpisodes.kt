@@ -63,7 +63,7 @@ object NewEpisodes {
         if (Cloud.profile == null) runCatching { Cloud.load(ctx) }   // a cold start for the worker: the first profile's name
         val p = prefs(ctx)
         val profiles = Viewers.list(ctx)
-        val two = profiles.size == 2
+        val two = profiles.size >= 2
         val now = System.currentTimeMillis()
         val last = readMap(p.getString("newep_v1", null))
         data class Work(val show: NewEpisodesPlan.Show, val addons: List<Triple<String, String, Boolean>>, val watched: Set<String>)
@@ -71,7 +71,7 @@ object NewEpisodes {
         for (v in profiles) {
             val progress = json(p.getString(Viewers.local("progress", v.id), null))
             val library = json(p.getString(Viewers.local("library", v.id), null))
-            val addons = NewEpisodesPlan.addons(p.getString(Viewers.local("addons", v.id), null)).filter { it.third }
+            val addons = NewEpisodesPlan.addons(p.getString(Viewers.local("addons", v.id, v.share), null)).filter { it.third }
             val watched = NewEpisodesPlan.watched(progress)
             NewEpisodesPlan.shows(v.id, progress, library).forEach { jobs += Work(it, addons, watched) }
         }

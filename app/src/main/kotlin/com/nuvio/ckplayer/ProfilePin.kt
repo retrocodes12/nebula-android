@@ -116,10 +116,12 @@ internal object PinKeys {
     @Volatile var handler: ((KeyEvent) -> Boolean)? = null
 }
 
-/** The editor's name and colour while a PIN step covers it (null = not touched yet: the saved ones). */
+/** The editor's name, colour, picture and add-ons choice while a PIN step covers it (null = not touched yet: the saved ones). */
 internal class WhoDraft {
     var name by mutableStateOf<String?>(null)
     var av by mutableStateOf<String?>(null)
+    var pic by mutableStateOf<String?>(null)
+    var share by mutableStateOf<Boolean?>(null)
 }
 
 internal enum class PinMode { CHECK, CHOOSE, CONFIRM }
@@ -220,7 +222,7 @@ internal fun PinScreen(ask: PinAsk, onAsk: (PinAsk) -> Unit, onPassed: () -> Uni
             .padding(top = if (tv) 36.dp else 64.dp, bottom = 40.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        WhoMonogram(Viewers.avatar(v), name, if (tv) 84.dp else 96.dp)
+        WhoMonogram(Viewers.avatar(v), name, if (tv) 84.dp else 96.dp, v.pic)
         Text(
             title, color = TextC, fontSize = 24.sp, fontFamily = Sans, fontWeight = FontWeight.Bold, letterSpacing = (-0.4).sp,
             textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 420.dp).padding(top = 22.dp),

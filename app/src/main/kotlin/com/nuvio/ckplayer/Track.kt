@@ -60,13 +60,13 @@ internal object Track {
     @Volatile private var warnedMdbl = false
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-    private fun prefKey() = if (Viewers.current == "b") "track_v1_b" else "track_v1"
+    private fun prefKey() = if (Viewers.current == "a") "track_v1" else "track_v1_" + Viewers.current
 
     /** The profile this device is on changed: its own connection is read at the next use. */
     fun reset() { loadedFor = null }
 
-    /** The second profile is gone from this device (another account signed in): so is its connection. */
-    fun forgetSecond(ctx: Context) { prefs(ctx).edit().remove("track_v1_b").apply(); if (Viewers.current == "b") reset() }
+    /** A profile is gone from this device (removed, or another account signed in): so is its connection. */
+    fun forget(ctx: Context, id: String) { if (id == "a") return; prefs(ctx).edit().remove("track_v1_$id").apply(); if (Viewers.current == id) reset() }
 
     fun load(ctx: Context) {
         val k = prefKey()

@@ -45,7 +45,9 @@ object Cloud {
     private const val PREFS = "ckplayer"
     // the list of profiles first: a second profile removed elsewhere moves this device to the first before the per-profile
     // names of the pull are worked out (else the first's docs waited for the next pull)
-    private val SYNC_KEYS = listOf("viewers", "addons", "progress", "library", "sub_style", "ratings", "seekr", "track")
+    // the two lists of profiles first: a profile removed or replaced elsewhere is cleared here before anything of a
+    // profile is read or sent (Viewers.kt)
+    private val SYNC_KEYS = listOf("viewers", "people", "addons", "progress", "library", "sub_style", "ratings", "seekr", "track")
     private val JSON_MT = "application/json".toMediaType()
 
     private val http = OkHttpClient.Builder()
@@ -314,8 +316,8 @@ object Cloud {
         val app = ctx.applicationContext
         val d = jsonPref(ctx, "cloud_dirty")
         for (wk in d.keys()) {
-            val k = wk.removeSuffix("_b")
-            if (Viewers.local(k) != wk) continue          // the other profile's: it goes up when that profile is on
+            val k = Viewers.baseKey(wk)
+            if (Viewers.local(k) != wk) continue          // another profile's: it goes up when that profile is on
             pushJobs[k]?.cancel()
             scope.launch { pushKey(app, k) }
         }
@@ -327,7 +329,7 @@ object Cloud {
         val app = ctx.applicationContext
         val d = jsonPref(ctx, "cloud_dirty")
         for (wk in d.keys().asSequence().toList()) {
-            val k = wk.removeSuffix("_b")
+            val k = Viewers.baseKey(wk)
             if (Viewers.local(k) == wk) { pushJobs[k]?.cancel(); pushKey(app, k) }
         }
     }
@@ -370,7 +372,33 @@ object Cloud {
         "seekr" -> Seekr.at(ctx) > 0          // a disconnect ("" key) is content too: it must reach the others
         "track" -> Track.stamped(ctx)         // (the same: a disconnected service is a record)
         "viewers" -> Viewers.doc(ctx).optLong("at") > 0
+        "people" -> Viewers.people(ctx).optLong("at") > 0
         else -> false
+    }
+
+    /** A removed profile's documents off the account (Viewers.remove, Viewers.add). True when every one is gone, or
+        nobody is signed in. */
+    internal suspend fun dropProfile(ctx: Context, id: String): Boolean {
+        if (!linked(ctx)) return true
+        var ok = true
+        for (k in Viewers.WIRE_KEYS) {
+            val gone = runCatching { api(ctx, "DELETE", "/v1/kv/${k}_$id", null, timeoutMs = 8_000); true }
+                .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+                .getOrDefault(false)
+            if (!gone) ok = false
+        }
+        return ok
+    }
+
+    /** A profile is gone from this device: nothing of it waits to be sent, and nothing this device saw of it counts. */
+    internal fun forgetProfile(ctx: Context, id: String) {
+        val d = jsonPref(ctx, "cloud_dirty"); val r = jsonPref(ctx, "cloud_revs")
+        var touched = false
+        for (k in Viewers.WIRE_KEYS) {
+            if (d.has("${k}_$id")) { d.remove("${k}_$id"); touched = true }
+            if (r.has("${k}_$id")) { r.remove("${k}_$id"); touched = true }
+        }
+        if (touched) prefs(ctx).edit().putString("cloud_dirty", d.toString()).putString("cloud_revs", r.toString()).apply()
     }
 
     /** The doc names the cloud holds for this account (GET /v1/kv), or null: signed out, or no answer. */
@@ -400,6 +428,7 @@ object Cloud {
             val keys = api(ctx, "GET", "/v1/kv", null).optJSONObject("keys") ?: JSONObject()
             val revs = jsonPref(ctx, "cloud_revs")
             for (key in SYNC_KEYS) {
+                if (key == "addons") Viewers.dropFlush(ctx)  // (both lists are in: removals made offline go up now)
                 val wk = Viewers.local(key)                 // this profile's copy of a per-profile key
                 val meta = keys.optJSONObject(wk)
                 if (meta == null) {
@@ -441,6 +470,7 @@ object Cloud {
         "seekr" -> Seekr.merge(ctx, remote)
         "track" -> Track.merge(ctx, remote)
         "viewers" -> Viewers.merge(ctx, remote)
+        "people" -> Viewers.mergePeople(ctx, remote)
         else -> false to false
     }
 
@@ -494,6 +524,7 @@ object Cloud {
         "seekr" -> Seekr.doc(ctx)
         "track" -> Track.docJson(ctx)
         "viewers" -> Viewers.doc(ctx).toString()
+        "people" -> Viewers.people(ctx).toString()
         else -> null
     }
 
