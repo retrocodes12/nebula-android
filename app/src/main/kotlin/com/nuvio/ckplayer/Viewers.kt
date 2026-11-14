@@ -674,7 +674,7 @@ internal fun WhoMonogram(hex: String, name: String, size: Dp, pic: String = "") 
 /** A pencil pressed: the profile's name, picture and colour, whose add-ons it uses, its PIN; any but the first can be
     removed, and everything of it goes with it (asked twice). */
 @Composable
-private fun WhoEditor(id: String, held: WhoDraft, onPin: () -> Unit, onDone: () -> Unit) {
+internal fun WhoEditor(id: String, held: WhoDraft, onPin: () -> Unit, onDone: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val all = remember(Viewers.version) { Viewers.list(ctx) }
