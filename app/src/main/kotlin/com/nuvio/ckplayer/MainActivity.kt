@@ -651,6 +651,8 @@ private sealed interface Screen {
     data object SettingsParty : Screen
     data object SettingsSupport : Screen
     data class Detail(val addon: Addon, val item: MetaItem) : Screen
+    /** A cast member's, director's or writer's films and series (People.kt), opened from a name on a title page. */
+    data class Person(val addon: Addon, val name: String, val tt: String?) : Screen
     data class Catalog(val addon: Addon, val initial: CatalogRef? = null) : Screen
     data class Episodes(val addon: Addon, val item: MetaItem) : Screen
     // decided: the viewer already chose Resume or Start over (a sheet), so "When you come back · Ask" asks nothing more
@@ -1886,6 +1888,8 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                                     onBack = { pop() },
                                     // a Universe card: that title's own page on top of this one, so Back comes here
                                     onOpenMeta = { m -> openMeta(s.addon, m) },
+                                    // a name pressed: that person's films and series, found through this title
+                                    onPerson = { name -> push(Screen.Person(s.addon, name, Universe.idOf(s.item.id))) },
                                     onEpisodes = { push(Screen.Episodes(s.addon, s.item)) },
                                     onPlayMovie = {
                                         seriesChain.clear()
@@ -1923,6 +1927,7 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                                             decided = intent != PlayIntent.TAP))
                                     },
                                 )
+                                is Screen.Person -> PersonScreen(s.name, s.tt, onBack = { pop() }, onOpen = { openMeta(s.addon, it) })
                                 is Screen.Catalog -> CatalogScreen(
                                     s.addon, s.initial,
                                     catalogStates.getOrPut(s.addon.manifestUrl) { CatalogUiState() },
@@ -5558,6 +5563,7 @@ private fun DetailScreen(
     onResumeEpisode: (ProgressRec) -> Unit,
     onPlayEpisode: (Episode, PlayIntent) -> Unit = { _, _ -> },
     onOpenMeta: (MetaItem) -> Unit = {},
+    onPerson: (String) -> Unit = {},
     onDownloadMovie: () -> Unit = {},
     onDownloadSeason: (List<Episode>) -> Unit = {},
     onDownloadEpisode: (Episode) -> Unit = {},
@@ -5852,9 +5858,20 @@ private fun DetailScreen(
             if (pool.size >= 2 || Social.on) RoundAction(Icons.Filled.MoreVert, "More") { moreOpen = true }
         }
         // the cast comes AFTER the actions: above them it pushed Play under the floating nav pill on a 360 dp phone
+        // every name is pressed: it opens that person's films and series (People.kt)
         full?.cast?.takeIf { it.isNotEmpty() && Prefs.detailCast }?.let { cast ->
             Eyebrow("Cast", Modifier.padding(top = 4.dp, bottom = 8.dp))
-            NamePills(cast.take(8), MutedC, LineC, detailTv, Modifier.padding(bottom = 16.dp))
+            NamePills(cast.take(8), MutedC, LineC, detailTv, Modifier.padding(bottom = 16.dp), onPick = onPerson, keyed = "cast")
+        }
+        if (Prefs.detailCast) {
+            full?.director?.takeIf { it.isNotEmpty() }?.let { d ->
+                Eyebrow(if (d.size > 1) "Directors" else "Director", Modifier.padding(bottom = 8.dp))
+                NamePills(d.take(3), MutedC, LineC, detailTv, Modifier.padding(bottom = 16.dp), onPick = onPerson, keyed = "director")
+            }
+            full?.writer?.takeIf { it.isNotEmpty() }?.let { w ->
+                Eyebrow(if (w.size > 1) "Writers" else "Writer", Modifier.padding(bottom = 8.dp))
+                NamePills(w.take(3), MutedC, LineC, detailTv, Modifier.padding(bottom = 16.dp), onPick = onPerson, keyed = "writer")
+            }
         }
         if (moreOpen) {
             val pool = if (item.type == "series") surprisePool(episodes) else emptyList()
@@ -6024,11 +6041,17 @@ private fun DetailScreen(
     row can never be scrolled to by a remote, so the names past the edge were out of reach there. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun NamePills(names: List<String>, ink: Color, line: Color, wrap: Boolean, modifier: Modifier = Modifier, weight: FontWeight? = null) {
+private fun NamePills(
+    names: List<String>, ink: Color, line: Color, wrap: Boolean, modifier: Modifier = Modifier, weight: FontWeight? = null,
+    onPick: ((String) -> Unit)? = null,      // names that are pressed (cast and crew): a finger's ripple, the remote's ring
+    keyed: String = "",
+) {
+    val round = RoundedCornerShape(50)
     val pill: @Composable (String) -> Unit = { n ->
         Text(
             n, color = ink, fontSize = 13.sp, fontWeight = weight,
-            modifier = Modifier.border(1.dp, line, RoundedCornerShape(50)).padding(horizontal = 14.dp, vertical = 7.dp),
+            modifier = (if (onPick != null) Modifier.returnTo("who/$keyed/$n").clip(round).focusRing(round, landing = false).clickable { onPick(n) } else Modifier)
+                .border(1.dp, line, round).padding(horizontal = 14.dp, vertical = 7.dp),
         )
     }
     if (wrap) FlowRow(
