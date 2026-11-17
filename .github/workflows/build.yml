@@ -182,12 +182,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.115.0.apk
+          cp "$APK" Nebula-1.116.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.115.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.115.0 Nebula-1.115.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.115.0" \
-            --notes "On a title page the cast, the director and the writers can be pressed now. Pressing a name opens that person's films and series, best known first, with Films, Series, Directed and Written filters when they would change something. Any card opens that title, and Back comes back to the person."
+          gh release delete v1.116.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.116.0 Nebula-1.116.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.116.0" \
+            --notes "When an add-on answers with a link instead of a stream, the Streams page shows it. A locked Nebula Sports channel lists its two cards: watch an ad to unlock Live TV for 12 hours, or donate. On a phone a card opens the page in your browser, and the channel's streams are asked for again when you come back. On a TV a card shows a code to scan with your phone, with Check again."
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
