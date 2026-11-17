@@ -729,7 +729,10 @@ private suspend fun licenceUrlFor(mpd: String): String? {
 }
 
 /** A streams page's answers, kept for Back (StreamsScreen). */
-private class StreamsMemo(val at: Long, val sections: List<Pair<Addon, List<StreamItem>>>, val status: String, val usual: String?)
+private class StreamsMemo(
+    val at: Long, val sections: List<Pair<Addon, List<StreamItem>>>, val status: String, val usual: String?,
+    val links: List<Pair<Addon, List<StreamLink>>> = emptyList(),
+)
 private val streamsMemo = HashMap<String, StreamsMemo>()
 /** A streams page's speed-test answers per row address (1.88.0), kept for Back like [streamsMemo]. */
 private class SpeedMemo(val at: Long, val rows: Map<String, RowSpeed>)
@@ -6520,6 +6523,9 @@ private fun EpisodesScreen(
 @Composable
 private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fresh: Boolean = false, decided: Boolean = false, saving: Boolean = false, onSave: (StreamItem, Addon) -> Unit = { _, _ -> }, onAddons: () -> Unit, onPlay: (StreamItem, Addon, Boolean, Boolean) -> Unit) {
     var sections by remember { mutableStateOf<List<Pair<Addon, List<StreamItem>>>>(emptyList()) }
+    // rows that only open a web page (StreamLinks.kt), per add-on in the same order: under that add-on's rows, or on their
+    // own when it has none (a locked channel's unlock and donation cards)
+    var links by remember { mutableStateOf<List<Pair<Addon, List<StreamLink>>>>(emptyList()) }
     var status by remember { mutableStateOf("Loading streams…") }
     var loading by remember { mutableStateOf(true) }
     var filter by remember { mutableStateOf<String?>(null) }
@@ -6635,6 +6641,26 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             onDismiss = { holdFor = null },
         )
     }
+    // a link row: a phone opens the page and asks the add-ons again when the viewer is back (an unlock there changes what
+    // they answer); a TV, or a phone with no browser, shows the address as a code with Check again
+    val linkTv = remember(ctx) { Account.isTv(ctx) }
+    var linkSheet by remember { mutableStateOf<StreamLink?>(null) }
+    var linkOut by remember { mutableStateOf(false) }
+    fun openLink(l: StreamLink) {
+        stopSpeeds()
+        if (!linkTv && StreamLinks.open(ctx, l.url)) linkOut = true else linkSheet = l
+    }
+    linkSheet?.let { l ->
+        StreamLinkSheet(l, onAgain = { linkSheet = null; filter = null; reload++ }, onClose = { linkSheet = null })
+    }
+    val linkOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(linkOwner) {
+        val obs = LifecycleEventObserver { _, e ->
+            if (e == Lifecycle.Event.ON_RESUME && linkOut) { linkOut = false; filter = null; reload++ }
+        }
+        linkOwner.lifecycle.addObserver(obs)
+        onDispose { linkOwner.lifecycle.removeObserver(obs) }
+    }
     LaunchedEffect(item, reload) {
         loading = true
         usualUrl = null
@@ -6645,6 +6671,8 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             .filter { it.enabled }.distinctBy { it.manifestUrl }
         // one slot per add-on, in that order, filled as each answers — the list never reorders under the remote
         val slots = arrayOfNulls<List<StreamItem>>(order.size)
+        val linkSlots = arrayOfNulls<List<StreamLink>>(order.size)
+        fun linksNow() = if (saving) emptyList() else order.indices.mapNotNull { k -> linkSlots[k]?.let { order[k] to it } }
         // Play through your PC (a TV): find the sharing computer while the add-ons answer, so the play that follows
         // does not wait up to 2.6 s for it (Relay.resolve takes one lookup at a time; the player reads this one)
         if (Relay.wanted(ctx)) launch {
@@ -6696,7 +6724,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
             Prefs.minRes, Prefs.streamSort, Prefs.slowMark, Prefs.p2p.toString()).joinToString("\n")
         val memo = if (reload == 0 && backHere) streamsMemo[memoKey]?.takeIf { System.currentTimeMillis() - it.at < 600_000 } else null
         if (memo != null) {
-            sections = memo.sections; status = memo.status; usualUrl = memo.usual
+            sections = memo.sections; status = memo.status; usualUrl = memo.usual; links = memo.links
             loading = false; answered = true; noStreamer = false
             return@LaunchedEffect
         }
@@ -6753,8 +6781,12 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                     val asking = if (!origin || known == null || known.canStream(item.type, item.id)) a.name else null
                     if (asking != null) waiting = waiting + asking
                     if (ap && asking != null) apChips[asking] = null
-                    val raw = try { Stremio.loadStreams(a.base, item.type, item.id) }
+                    val page = try { Stremio.loadStreamPage(a.base, item.type, item.id) }
                         finally { if (asking != null) waiting = waiting.toMutableList().also { it.remove(asking) } }
+                    val raw = page.streams
+                    // its links replace what the last visit showed as soon as it answers (an unlock takes them away)
+                    linkSlots[i] = page.links.takeIf { it.isNotEmpty() }
+                    links = linksNow()
                     val streams = arrangeStreams(raw, item.runtime)
                     if (ap && asking != null) apChips[asking] = streams.size
                     if (raw.isNotEmpty() && streams.isEmpty()) floored = true
@@ -6792,8 +6824,10 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
         slowTimer.cancel()
         allIn = true
         decide()
+        links = linksNow()
         if (sections.isEmpty()) {
-            val why = streamsEmptyStatus(order.isEmpty(), streamers, unread, failures, order.size, floored)
+            val why = if (links.isNotEmpty()) StreamsEmpty.LINKS
+                else streamsEmptyStatus(order.isEmpty(), streamers, unread, failures, order.size, floored)
             status = why.line
             emptyWhy = why
         }
@@ -6802,7 +6836,7 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
         noStreamer = sections.isEmpty() && (emptyWhy == StreamsEmpty.NONE || emptyWhy == StreamsEmpty.OFF)
         answered = true
         if (sections.isNotEmpty()) {
-            streamsMemo[memoKey] = StreamsMemo(System.currentTimeMillis(), sections, status, usualUrl)
+            streamsMemo[memoKey] = StreamsMemo(System.currentTimeMillis(), sections, status, usualUrl, links)
             while (streamsMemo.size > 24) streamsMemo.remove(streamsMemo.minByOrNull { it.value.at }!!.key)
         }
         loading = false
@@ -6831,11 +6865,14 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
     // an empty answer has no row to land on: a remote lands on the page's way out (Add-ons when nothing streams this,
     // else ↻) instead of on nothing
     val chipLand = remember { FocusRequester() }
-    LaunchedEffect(answered, sections.isEmpty(), noStreamer) {
+    // …or on the first link row, when the add-ons answered with nothing but links (a locked channel)
+    val linkLand = remember { FocusRequester() }
+    LaunchedEffect(answered, sections.isEmpty(), noStreamer, links.isEmpty()) {
         if (!remote || !answered || sections.isNotEmpty() || KeyWatch.lastDownAt > openedAt) return@LaunchedEffect
+        val target = if (links.isNotEmpty()) linkLand else chipLand
         repeat(10) {
             withFrameNanos {}
-            if (runCatching { chipLand.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+            if (runCatching { target.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
         }
     }
     Column(Modifier.fillMaxSize()) {
@@ -6972,6 +7009,36 @@ private fun StreamsScreen(addon: Addon, item: MetaItem, onBack: () -> Unit, fres
                     )
                 }
             }
+                // this add-on's link rows, after the rows that play
+                links.firstOrNull { it.first.manifestUrl == from.manifestUrl }?.second?.let { ls ->
+                    items(ls.size, key = { "link/${from.manifestUrl}/$it" }) { i ->
+                        Box(Modifier.padding(horizontal = 16.dp)) {
+                            StreamLinkRow(ls[i], Modifier.returnTo("link/" + from.manifestUrl + "/" + i)) { openLink(ls[i]) }
+                        }
+                    }
+                }
+            }
+            // add-ons that answered with links only: their own block, named when the page holds more than one add-on
+            val linkOnly = if (saving) emptyList() else links.filter { (a, _) ->
+                (filter == null || a.name == filter) && sections.none { it.first.manifestUrl == a.manifestUrl }
+            }
+            val named = sections.size + linkOnly.size > 1
+            linkOnly.forEachIndexed { blockIndex, (from, ls) ->
+                if (named) item(key = "linkhead/${from.manifestUrl}") {
+                    Text(
+                        from.name, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold,
+                        modifier = Modifier.padding(horizontal = 16.dp).padding(top = 6.dp),
+                    )
+                }
+                items(ls.size, key = { "link/${from.manifestUrl}/$it" }) { i ->
+                    Box(Modifier.padding(horizontal = 16.dp)) {
+                        StreamLinkRow(
+                            ls[i],
+                            Modifier.returnTo("link/" + from.manifestUrl + "/" + i)
+                                .then(if (blockIndex == 0 && i == 0) Modifier.focusRequester(linkLand) else Modifier),
+                        ) { openLink(ls[i]) }
+                    }
+                }
             }
             // …and where their rows will land, below the ones that came first
             if (sections.isNotEmpty() && filter == null) items(waiting.size, key = { "waitrow/$it" }) { i -> StreamWaitRow(waiting[i], waitSlow) }
@@ -7020,6 +7087,7 @@ internal enum class StreamsEmpty(val line: String) {
     FAILED("Failed to load streams."),
     FLOORED("Every stream is below your minimum quality."),
     NOTHING("No playable streams right now."),
+    LINKS("Nothing plays here yet. See below."),       // only rows that open a web page (StreamLinks.kt)
 }
 
 /**

@@ -79,6 +79,8 @@ data class StreamItem(
 ) {
     val isTorrent: Boolean get() = infoHash.isNotEmpty()
 }
+/** One add-on's answer for the Streams page: what plays, and what only opens a web page. */
+data class StreamPage(val streams: List<StreamItem>, val links: List<StreamLink>)
 /** One episode of a series (a Stremio meta `videos` entry). */
 data class Episode(
     val id: String, val season: Int, val episode: Int?,
@@ -432,11 +434,16 @@ object Stremio {
     }
 
     /** Parsed off the main thread: a torrent add-on can answer with hundreds of rows, and every add-on now answers at once. */
-    suspend fun loadStreams(base: String, type: String, id: String): List<StreamItem> = withContext(Dispatchers.IO) {
+    suspend fun loadStreams(base: String, type: String, id: String): List<StreamItem> = loadStreamPage(base, type, id).streams
+
+    /** One add-on's answer: the rows that play, and the rows that only link to a web page ([StreamLink], the Streams page
+        alone shows those). Everything else that reads streams (next episode, downloads, the stall watch) takes [loadStreams]. */
+    suspend fun loadStreamPage(base: String, type: String, id: String): StreamPage = withContext(Dispatchers.IO) {
         val u = "$base/stream/${enc(type)}/${enc(id)}.json"
         val j = JSONObject(streamListText(u))
-        val arr = j.optJSONArray("streams") ?: return@withContext emptyList()
+        val arr = j.optJSONArray("streams") ?: return@withContext StreamPage(emptyList(), emptyList())
         val out = mutableListOf<StreamItem>()
+        val links = mutableListOf<StreamLink>()
         for (i in 0 until arr.length()) {
             val s = arr.getJSONObject(i)
             // an add-on's address is played through a data source that also opens file: and content: — web addresses only
@@ -446,6 +453,7 @@ object Stremio {
             // address the engine resolves at play time; with it off they are still not playable.
             val hash = s.optString("infoHash").trim().lowercase(Locale.US)
             val torrent = url.isEmpty() && Regex("^[0-9a-f]{40}$").matches(hash)
+            if (url.isEmpty() && !torrent) { StreamLinks.of(s)?.let(links::add); continue }
             if (url.isEmpty() && !(torrent && Prefs.p2p)) continue
             val fileIdx = if (s.has("fileIdx")) s.optInt("fileIdx", -1) else -1
             val sources = mutableListOf<String>()
@@ -473,7 +481,7 @@ object Stremio {
                 fileName = bh?.optString("filename").orEmpty(),
             ))
         }
-        out
+        StreamPage(out, links)
     }
 
     /** Extract a ClearKey license URL (dashif:laurl / clearkey:Laurl) from a DASH manifest. */
