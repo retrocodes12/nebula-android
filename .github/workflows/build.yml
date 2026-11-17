@@ -182,12 +182,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$APK" Nebula-1.116.0.apk
+          cp "$APK" Nebula-1.117.0.apk
           cp "$APK" Nebula.apk
-          gh release delete v1.116.0 -y --cleanup-tag 2>/dev/null || true
-          gh release create v1.116.0 Nebula-1.116.0.apk Nebula.apk \
-            --title "Nebula (Android phone + TV) v1.116.0" \
-            --notes "When an add-on answers with a link instead of a stream, the Streams page shows it. A locked Nebula Sports channel lists its two cards: watch an ad to unlock Live TV for 12 hours, or donate. On a phone a card opens the page in your browser, and the channel's streams are asked for again when you come back. On a TV a card shows a code to scan with your phone, with Check again."
+          gh release delete v1.117.0 -y --cleanup-tag 2>/dev/null || true
+          gh release create v1.117.0 Nebula-1.117.0.apk Nebula.apk \
+            --title "Nebula (Android phone + TV) v1.117.0" \
+            --notes "Settings opens on a search and five groups: You (your account, who's watching, watch party, friends), Look (appearance, home), Watch (playback, streams, add-ons), Services (tracking, support) and System (show every option, advanced, updates, privacy). Each row has a coloured icon and one line on what it holds. Tracking has a page of its own, and your party name is on the Watch party page."
 
       # the early build (see the top of this file): a pre-release of its own, only its versioned APK, never Nebula.apk
       - name: Publish early build (pre-release)
