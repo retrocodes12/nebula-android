@@ -650,6 +650,7 @@ private sealed interface Screen {
     data object Profile : Screen
     data object SettingsParty : Screen
     data object SettingsSupport : Screen
+    data object SettingsTracking : Screen       // Trakt, Simkl, MDBList (SettingsRoot.kt)
     data class Detail(val addon: Addon, val item: MetaItem) : Screen
     /** A cast member's, director's or writer's films and series (People.kt), opened from a name on a title page. */
     data class Person(val addon: Addon, val name: String, val tt: String?) : Screen
@@ -1825,7 +1826,9 @@ fun AppRoot(playReq: LinkReq? = null, onConsumed: () -> Unit = {}) {
                                     onParty = { push(Screen.SettingsParty) },
                                     onFriends = { push(Screen.Friends) },
                                     onAdvanced = { push(Screen.SettingsAdvanced) },
+                                    onTracking = { push(Screen.SettingsTracking) },
                                 )
+                                is Screen.SettingsTracking -> SettingsTrackingScreen(onBack = { pop() })
                                 is Screen.SettingsLayout -> SettingsLayoutScreen(
                                     onBack = { pop() },
                                     onSupport = { push(Screen.SettingsSupport) },
@@ -4854,8 +4857,8 @@ private fun AddonsScreen(version: Int, onBack: () -> Unit, onOpen: (Addon) -> Un
 @Composable
 internal fun SettingsHeader(text: String, sub: String? = null) {
     Column(Modifier.padding(top = 20.dp, bottom = 8.dp, start = 4.dp)) {
-        Text(text, color = MutedC, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.6.sp)
-        if (sub != null) Text(sub, color = FaintC, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 3.dp))
+        Text(text, color = MutedC, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.2.sp)
+        if (sub != null) Text(sub, color = FaintC, fontSize = 12.5.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 3.dp))
     }
 }
 
@@ -4886,170 +4889,21 @@ internal fun SettingsRow(
                 .then(if (onClick != null) Modifier.returnTo("row/$title").landingSlot() else Modifier)
                 .then(if (onClick != null) Modifier.clickable(interactionSource = interaction, indication = null) { onClick() } else Modifier)
                 .then(rowLit(focused))
-                .padding(horizontal = 14.dp, vertical = 13.dp),
+                .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            // the accent, quietly: a tinted tile with the icon in the accent (2026-11-17 settings pass)
             Box(
-                Modifier.size(44.dp).background(Surface2, RoundedCornerShape(14.dp)),
+                Modifier.size(40.dp).background(Red.copy(alpha = 0.16f), RoundedCornerShape(12.dp)),
                 contentAlignment = Alignment.Center,
-            ) { Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(21.dp)) }
+            ) { Icon(icon, contentDescription = null, tint = Red, modifier = Modifier.size(21.dp)) }
             Column(Modifier.weight(1f)) {
-                Text(title, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(title, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Medium)
                 Text(sub, color = MutedC, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 2.dp))
             }
         }
-        if (divider) Box(Modifier.padding(start = 72.dp).fillMaxWidth().height(1.dp).background(LineC))
-    }
-}
-
-@Composable
-private fun SettingsScreen(
-    onAddons: () -> Unit,
-    onLayout: () -> Unit,
-    onSupport: () -> Unit,
-    onHome: () -> Unit,
-    onPlayback: () -> Unit,
-    onStreams: () -> Unit,
-    onProfile: () -> Unit,
-    onParty: () -> Unit,
-    onFriends: () -> Unit,
-    onAdvanced: () -> Unit,
-) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val version = remember {
-        runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "?"
-    }
-    var updSub by remember { mutableStateOf("You're on v$version · tap to check now") }
-    var checking by remember { mutableStateOf(false) }
-    // "3 add-ons · 2 on · 1 off" — the list is read on every entry to this screen
-    val addonsSub = remember {
-        val all = loadAddons(ctx)
-        val off = all.count { !it.enabled }
-        when {
-            all.isEmpty() -> "Add, rank and manage your add-ons"
-            off == 0 -> "${all.size} add-on${if (all.size > 1) "s" else ""}, all on · Add, rank and manage"
-            else -> "${all.size} add-on${if (all.size > 1) "s" else ""} · ${all.size - off} on · $off off"
-        }
-    }
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp)
-            // this screen already answered a remote — the requester only makes the first press
-            // land somewhere chosen rather than wherever the default traversal decides
-            .focusRequester(tvFirstFocus())
-            .focusGroup(),
-    ) {
-        Text(
-            "Settings", color = TextC, fontSize = 34.sp, fontFamily = Sans, fontWeight = FontWeight.Bold,
-            letterSpacing = (-1).sp, modifier = Modifier.padding(top = 24.dp),
-        )
-        // Essential · Everything: the same pages either way; the pages hide their rarer rows in Essential
-        Column(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 16.dp)) {
-            Segmented {
-                Chip("Essential", !Prefs.everything, inSeg = true) { Prefs.setSetMode(ctx, "essential") }
-                Chip("Everything", Prefs.everything, inSeg = true) { Prefs.setSetMode(ctx, "all") }
-            }
-            Text(
-                "Essential keeps the common choices. Everything shows every option.",
-                color = MutedC, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 8.dp, start = 4.dp),
-            )
-        }
-        ProfileCard(onProfile)
-        WhoSettings()                        // up to six profiles on the account (Viewers.kt)
-        SettingsHeader("GENERAL", "How Nebula looks, plays and connects")
-        SettingsGroup {
-            SettingsRow(Icons.Filled.Palette, "Appearance", "Accent, surface, text, font and cards", true, onLayout)
-            SettingsRow(Icons.Filled.Home, "Home", "Featured, Continue Watching, rows and title pages", true, onHome)
-            SettingsRow(Icons.Filled.PlayArrow, "Playback", "Player, next episode, languages and subtitles", true, onPlayback)
-            // listed in Essential too: the Streams page holds Essential rows (P2P, PICKING, AUTOPLAY THE BEST STREAM) and
-            // shows its Everything rows (THE LIST, the quality floor, the pick wait) only under Prefs.everything itself
-            SettingsRow(
-                Icons.Filled.FilterList, "Streams",
-                if (Prefs.everything) "Order, quality floor, details and picking by itself" else "Picking by itself and autoplaying the best one",
-                true, onStreams,
-            )
-            SettingsRow(Icons.Filled.Extension, "Add-ons", addonsSub, true, onAddons)
-            SettingsRow(Icons.Filled.Groups, "Watch party", "Watch in sync with friends using a code", true, onParty)
-            SettingsRow(Icons.Filled.Favorite, "Friends", "Rate, share and recommend · experimental", true, onFriends)
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("Party name", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                    Text("How you appear to friends in a party", color = MutedC, fontSize = 13.sp)
-                }
-                val ctx2 = LocalContext.current
-                var pname by remember {
-                    mutableStateOf(ctx2.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("party_name", "") ?: "")
-                }
-                val pnameTyping = tvTyping()
-                OutlinedTextField(
-                    value = pname,
-                    onValueChange = { v ->
-                        pname = v.take(40)
-                        ctx2.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("party_name", pname.trim()).apply()
-                    },
-                    placeholder = { Text(Cloud.profile?.name?.takeIf { it.isNotBlank() } ?: android.os.Build.MODEL.take(24), color = MutedC) },
-                    singleLine = true,
-                    // walking past this row on the way to Advanced threw the keyboard up on a TV (tvTyping)
-                    readOnly = pnameTyping.readOnly,
-                    modifier = pnameTyping.modifier.width(150.dp).returnTo("party-name"),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color.White, unfocusedBorderColor = Line2, cursorColor = Red,
-                        focusedTextColor = TextC, unfocusedTextColor = TextC,
-                    ),
-                )
-            }
-        }
-        if (Prefs.everything) {
-            SettingsHeader("ADVANCED", "The welcome message, a full reset, caches")
-            SettingsGroup {
-                SettingsRow(Icons.Filled.Tune, "Advanced", "Welcome message, reset all settings, clear caches", false, onAdvanced)
-            }
-        }
-        // Hidden until the server has somewhere to send people (or this profile is already a supporter)
-        if (Support.visible) {
-            SettingsHeader("SUPPORT", "Free, no ads. Chip in if you like")
-            SettingsGroup {
-                SettingsRow(
-                    Icons.Filled.VolunteerActivism, "Support Nebula",
-                    "Chip in if you like: a mark by your name, three more accents, the wall",
-                    false, onSupport,
-                )
-            }
-        }
-        SettingsHeader("ABOUT", "Version, updates and privacy")
-        SettingsGroup {
-            SettingsRow(Icons.Filled.Download, "Check for updates", updSub, true) {
-                if (!checking) {
-                    checking = true; updSub = "Checking…"
-                    scope.launch {
-                        val r = runCatching { Updates.latest(early = Perks.early()) }.getOrNull()
-                        updSub = when {
-                            r == null -> "Could not reach the release feed. Try again later"
-                            Updates.isNewer(r.version, version) ->
-                                "v${r.version}${if (r.beta) " (an early build)" else ""} is available. The update card is waiting on Home"
-                            else -> "You're up to date (v$version)"
-                        }
-                        checking = false
-                    }
-                }
-            }
-            SettingsRow(Icons.Filled.Shield, "Privacy Policy", "No email, no tracking. How Nebula handles data", true) {
-                // many TVs have no browser: say where to read it rather than do nothing
-                runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.rifflehq.in/privacy.html"))) }
-                    .onFailure { Toasts.show("No web browser on this device. Read it at play.rifflehq.in/privacy.html") }
-            }
-            SettingsRow(Icons.Filled.Info, "Nebula for Android", "v$version · plays every add-on format, on-device", false, null)
-        }
-        // the names on the supporters' wall, Founders first — for everyone (Perks.kt); nothing while the wall is empty
-        SupportersThanks()
-        Spacer(Modifier.height(110.dp))
+        if (divider) Box(Modifier.padding(start = 70.dp).fillMaxWidth().height(1.dp).background(LineC))
     }
 }
 
@@ -5075,12 +4929,12 @@ internal fun SettingsToggle(title: String, sub: String, checked: Boolean, divide
             // a finger keeps its ripple; the remote's lit state is rowLit's
             .clickable(interactionSource = interaction, indication = LocalIndication.current) { onChange(!checked) }
             .then(rowLit(focused))
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Text(title, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Medium)
             Text(sub, color = MutedC, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(top = 2.dp))
         }
         Switch(
@@ -5098,8 +4952,8 @@ internal fun SettingsToggle(title: String, sub: String, checked: Boolean, divide
 /** A titled segmented control: the choices sit inside one hairline pill. */
 @Composable
 internal fun SettingsChips(title: String, sub: String?, options: List<Pair<String, String>>, selected: String, divider: Boolean = true, onPick: (String) -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
-        Text(title, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp)) {
+        Text(title, color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Medium)
         if (sub != null) Text(sub, color = MutedC, fontSize = 13.sp, modifier = Modifier.padding(top = 2.dp))
         // return and landing sit on the CHOSEN chip (on the strip they reached only its leftmost, through the
         // scroller's own focus search)
@@ -5405,8 +5259,7 @@ private fun SettingsPlaybackScreen(onBack: () -> Unit, onSubtitles: () -> Unit) 
         PlaybackExtrasGroup()
         // the viewer's own Seekr key: ready-made pictures for the scrub preview above (Seekr.kt)
         SeekrSettings()
-        // the viewer's own Trakt / Simkl / MDBList account: what plays is added to its history (Track.kt)
-        TrackSettings()
+        // the viewer's own Trakt / Simkl / MDBList account moved to Settings › Tracking (SettingsRoot.kt, 11-17)
         SettingsHeader("NEXT EPISODE", "Rolling on, skipping ahead and coming back")
         SettingsGroup {
             SettingsToggle(
@@ -5481,6 +5334,7 @@ private fun SettingsPartyScreen(onBack: () -> Unit, onJoin: (String) -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
         BackBar("Watch party", null, onBack)
         PartyPanel(onJoin)
+        PartyNameRow()
         val c = LocalContext.current
         PartyPrefRow("Share my stream", "When you host, friends play your link. Off: each plays the same file from their own add-ons, and your link (with any debrid key in it) stays here.", Prefs.partyShare) { Prefs.setPartyShare(c, it) }
         PartyPrefRow("Use my own add-ons", "When you join, look for the host's file in your add-ons first, the host's link if none has it.", Prefs.partyOwn) { Prefs.setPartyOwn(c, it) }
