@@ -53,7 +53,8 @@ fi
 NDK=${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}
 [ -n "$NDK" ] && [ -d "$NDK" ] || { echo "no NDK (set ANDROID_NDK_HOME)"; exit 1; }
 TC=$NDK/toolchains/llvm/prebuilt/linux-x86_64
-API=26
+# the app's floor (minSdk 25, Android 7.1 / Fire OS 6): a binary linked for a newer Android may not start on an older one
+API=25
 for ABI in arm64-v8a armeabi-v7a; do
   case $ABI in
     arm64-v8a)   ARCH=aarch64; CPU=armv8-a; CC=aarch64-linux-android$API-clang ;;

@@ -10,7 +10,9 @@ android {
 
     defaultConfig {
         applicationId = "com.nuvio.ckplayer"
-        minSdk = 26
+        // 25 = Android 7.1, Fire OS 6 (the 2018 Fire TV Stick 4K, the first Fire TV Cube). Below it Fire OS 5 (Android 5.1)
+        // would also need the old JAR signature and much more; on 25 the newer Java date classes come from desugaring
+        minSdk = 25
         targetSdk = 34
         versionCode = 143
         versionName = "1.117.0"
@@ -64,6 +66,8 @@ android {
     }
 
     compileOptions {
+        // java.time (air dates, the guide, new-episode times) is Android 8.0+; desugaring carries it onto 7.1
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -88,6 +92,7 @@ android {
 }
 
 dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     implementation(platform("androidx.compose:compose-bom:2025.06.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")

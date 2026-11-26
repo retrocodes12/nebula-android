@@ -489,8 +489,9 @@ class MainActivity : ComponentActivity() {
     }
 
     // ---------- picture-in-picture ----------
+    // the window's settings (PictureInPictureParams) are Android 8.0+: on 7.1 (Fire OS 6) there is no PiP button
     fun pipSupported(): Boolean =
-        packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+        Build.VERSION.SDK_INT >= 26 && packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
 
     private fun pipAspect(): Rational {
         val vs = activePipPlayer.value?.videoSize
@@ -507,7 +508,7 @@ class MainActivity : ComponentActivity() {
     }
 
     fun enterPip(): Boolean {
-        if (!pipSupported() || activePipPlayer.value == null) return false
+        if (Build.VERSION.SDK_INT < 26 || !pipSupported() || activePipPlayer.value == null) return false
         return runCatching {
             enterPictureInPictureMode(
                 PictureInPictureParams.Builder().setAspectRatio(pipAspect()).build()
@@ -517,7 +518,7 @@ class MainActivity : ComponentActivity() {
 
     /** Keep the OS-level PiP params current: real aspect ratio + (API 31+) auto-enter on Home while playing. */
     fun refreshPipParams() {
-        if (!pipSupported()) return
+        if (Build.VERSION.SDK_INT < 26 || !pipSupported()) return
         runCatching {
             val b = PictureInPictureParams.Builder().setAspectRatio(pipAspect())
             if (Build.VERSION.SDK_INT >= 31) {

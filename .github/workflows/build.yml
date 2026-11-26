@@ -100,6 +100,21 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: python3 scripts/launch-gate.py ${{ runner.temp }}/gate.apk
 
+      # and on Android 7.1, the floor (minSdk 25): Fire OS 6, the 2018 Fire TV Stick 4K and the first Fire TV Cube
+      - name: Launch gate on Android 7.1
+        timeout-minutes: 25
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 25
+          target: google_apis
+          arch: x86_64
+          profile: pixel
+          disable-animations: true
+          ram-size: 3072M
+          heap-size: 512M
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: python3 scripts/launch-gate.py ${{ runner.temp }}/gate.apk
+
   release:
     needs: gate
     runs-on: ubuntu-latest

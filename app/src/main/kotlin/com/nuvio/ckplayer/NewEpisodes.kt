@@ -115,11 +115,12 @@ object NewEpisodes {
 
     private fun post(ctx: Context, hits: List<Pair<NewEpisodesPlan.Show, List<Episode>>>, names: Map<String, String>?) {
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (nm.getNotificationChannel(CHANNEL) == null)
+        // channels are Android 8.0+; on 7.1 (Fire OS 6) a notification needs none
+        if (Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel(CHANNEL) == null)
             nm.createNotificationChannel(NotificationChannel(CHANNEL, "New episodes", NotificationManager.IMPORTANCE_DEFAULT).apply {
                 description = "A show in My List or Continue watching has a new episode"
             })
-        fun builder() = Notification.Builder(ctx, CHANNEL)
+        fun builder() = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(ctx, CHANNEL) else @Suppress("DEPRECATION") Notification.Builder(ctx)
         val lines = ArrayList<String>()
         for ((show, eps) in hits) {
             val (title, text) = NewEpisodesPlan.lines(show.name, eps, names?.get(show.profile))
