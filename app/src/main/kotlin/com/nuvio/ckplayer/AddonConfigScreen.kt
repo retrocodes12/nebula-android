@@ -60,8 +60,9 @@ internal fun AddonConfigScreen(addon: Addon, onBack: () -> Unit, onSave: (Manife
     val scope = rememberCoroutineScope()
     val remote = remoteMode()
     val page = remember(addon) { AddonConfig.pageUrl(addon.manifestUrl) }
-    // a TV box may carry no web view at all, and building one there throws
-    val usable = remember { runCatching { WebView.getCurrentWebViewPackage() != null }.getOrDefault(false) }
+    // a TV box may carry no web view at all, and building one there throws (the compat call also answers on 7.1)
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val usable = remember { runCatching { androidx.webkit.WebViewCompat.getCurrentWebViewPackage(ctx) != null }.getOrDefault(false) }
     var web by remember { mutableStateOf<WebView?>(null) }
     var attempt by remember { mutableStateOf(0) }
     var failed by remember { mutableStateOf(page == null || !usable) }

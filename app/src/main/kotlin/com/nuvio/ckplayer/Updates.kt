@@ -329,7 +329,9 @@ object Updates {
      * (its Settings screen is opened when this device has one — some TVs hide it), or no installer answered.
      */
     fun installApk(context: Context, apk: File): String? {
-        if (!context.packageManager.canRequestPackageInstalls()) {
+        // the per-app permission is Android 8.0+; on 7.1 (Fire OS 6) the device-wide unknown-sources switch decides,
+        // and the installer itself says so when it is off
+        if (android.os.Build.VERSION.SDK_INT >= 26 && !context.packageManager.canRequestPackageInstalls()) {
             val opened = runCatching {
                 context.startActivity(
                     Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
