@@ -13,7 +13,7 @@ add-on, browse its catalogs, press play. Encrypted streams are decrypted on the 
   `da.gd/nebulaapk`). The app appears in the TV launcher.
 - **Updates:** the app checks the latest release and shows a card when a newer one exists.
 
-Android 8.0 (API 26) or newer.
+Android 7.1 (API 25) or newer, which includes Fire TV devices on Fire OS 6, 7 and 8.
 
 ## What it does
 
@@ -72,7 +72,7 @@ app/src/main/kotlin/com/nuvio/ckplayer/
 .github/workflows/     build.yml releases on every push to main; ci.yml builds branches
 ```
 
-Kotlin, Jetpack Compose, Media3 ExoPlayer. `compileSdk 36`, `targetSdk 34`, `minSdk 26`.
+Kotlin, Jetpack Compose, Media3 ExoPlayer. `compileSdk 36`, `targetSdk 34`, `minSdk 25`.
 
 ## Building
 
